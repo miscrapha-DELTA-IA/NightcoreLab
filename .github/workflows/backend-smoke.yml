@@ -1,0 +1,96 @@
+name: Backend Smoke Test
+
+# Testa o servidor de produção de ponta a ponta, num runner Linux
+# (custa 1 minuto da cota por minuto, contra 10 do macOS).
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-smoke.yml'
+
+concurrency:
+  group: backend-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      BASE_URL: https://nightcorelab.onrender.com
+      # Vídeo de teste oficial do projeto youtube-dl/yt-dlp (10 s)
+      TEST_VIDEO: https://www.youtube.com/watch?v=BaW_jenozKc
+
+    steps:
+      - name: Esperar o Render publicar este commit
+        # Num push, o Render faz um deploy novo; só testa quando a versão nova estiver no ar.
+        if: github.event_name == 'push'
+        run: |
+          expected="${GITHUB_SHA::7}"
+          for i in $(seq 1 60); do
+            body=$(curl -s --max-time 90 "$BASE_URL/" || true)
+            commit=$(echo "$body" | jq -r '.commit // empty' 2>/dev/null || true)
+            echo "Tentativa $i: commit no ar = ${commit:-?} (esperado: $expected)"
+            if [ "$commit" = "$expected" ]; then
+              echo "$body" | jq .
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::O Render não publicou o commit $expected em 15 minutos. Veja o deploy no painel do Render."
+          exit 1
+
+      - name: Health check
+        run: |
+          body=$(curl -sf --max-time 90 "$BASE_URL/")
+          echo "$body" | jq .
+          test "$(echo "$body" | jq -r .status)" = "ok"
+          [ "$(echo "$body" | jq -r .ffmpeg)" = "true" ] || echo "::warning::Servidor sem FFmpeg: só áudio m4a nativo será aceito."
+          [ "$(echo "$body" | jq -r .deno)" = "true" ]   || echo "::warning::Deno ausente: o YouTube pode limitar os formatos."
+          [ "$(echo "$body" | jq -r .ejs)" = "true" ]    || echo "::warning::yt-dlp-ejs ausente: o YouTube pode limitar os formatos."
+
+      - name: Rejeita links que não são do YouTube (400)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/download" \
+            -H 'Content-Type: application/json' -d '{"url":"https://example.com/video"}')
+          echo "HTTP $code"
+          test "$code" = "400"
+
+      - name: Rejeita URL inválida (422)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/download" \
+            -H 'Content-Type: application/json' -d '{"url":"isso nao e um link"}')
+          echo "HTTP $code"
+          test "$code" = "422"
+
+      - name: Download de ponta a ponta (.m4a)
+        run: |
+          code=$(curl -s -X POST "$BASE_URL/download" \
+            -H 'Content-Type: application/json' \
+            -d "{\"url\":\"$TEST_VIDEO\"}" \
+            -D headers.txt -o audio.bin -w '%{http_code}' --max-time 300)
+          echo "HTTP $code"
+          cat headers.txt
+
+          if [ "$code" != "200" ]; then
+            echo "Resposta do servidor:"
+            cat audio.bin; echo
+            echo "::error::/download respondeu HTTP $code (veja a mensagem acima e os logs do Render)."
+            exit 1
+          fi
+
+          grep -qi '^content-type: audio/mp4' headers.txt \
+            || { echo "::error::Content-Type inesperado"; exit 1; }
+
+          size=$(stat -c %s audio.bin)
+          echo "Tamanho: $size bytes"
+          test "$size" -gt 20000 || { echo "::error::Arquivo pequeno demais para ser um áudio"; exit 1; }
+
+          # Arquivos MP4/M4A têm a assinatura "ftyp" nos bytes 4–8.
+          head -c 12 audio.bin | tail -c 8 | grep -qa 'ftyp' \
+            || { echo "::error::A resposta não é um contêiner MP4/M4A"; exit 1; }
+
+          echo "✅ .m4a válido recebido do servidor"

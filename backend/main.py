@@ -12,6 +12,9 @@ No Render (Root Directory = backend):
     Build:  pip install -r requirements.txt
     Start:  uvicorn main:app --host 0.0.0.0 --port $PORT
 
+YouTube exige um runtime de JavaScript desde o yt-dlp 2025.11.12: o requirements.txt
+instala "yt-dlp[default]" (traz o yt-dlp-ejs) e o pacote "deno" (binário oficial do Deno).
+
 Variáveis de ambiente opcionais:
     MAX_DURATION_SECONDS      duração máxima por faixa (padrão 1200 = 20 min)
     MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 2; protege os 512 MB do tier gratuito)
@@ -22,6 +25,8 @@ Variáveis de ambiente opcionais:
 
 from __future__ import annotations
 
+import importlib.util
+import logging
 import os
 import re
 import shutil
@@ -39,6 +44,12 @@ from pydantic import BaseModel, HttpUrl
 MAX_DURATION_SECONDS = int(os.getenv("MAX_DURATION_SECONDS", "1200"))
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
 COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
+
+# Commit publicado (o Render define RENDER_GIT_COMMIT em cada deploy).
+DEPLOYED_COMMIT = os.getenv("RENDER_GIT_COMMIT", "")[:7]
+
+# Reaproveita o logger do uvicorn: as mensagens aparecem nos logs do Render.
+log = logging.getLogger("uvicorn.error")
 
 WORK_DIR_PREFIX = "nightcore_"
 # Pastas mais velhas que isso são restos de envios interrompidos (cliente desconectou
@@ -59,7 +70,7 @@ _download_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
 app = FastAPI(
     title="Nightcore Lab Bridge",
     description="Extrai o áudio de um link do YouTube em .m4a e o envia direto, sem armazenar.",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 
@@ -72,8 +83,13 @@ def health():
     """Health check. Aceita HEAD para monitores de uptime; também 'acorda' o Render."""
     return {
         "status": "ok",
+        "version": app.version,
+        "commit": DEPLOYED_COMMIT,
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "yt_dlp": yt_dlp.version.__version__,
+        # Runtime de JavaScript + componente EJS: necessários para o YouTube.
+        "deno": shutil.which("deno") is not None,
+        "ejs": importlib.util.find_spec("yt_dlp_ejs") is not None,
         "cookies": bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE),
     }
 
@@ -93,6 +109,7 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=429, detail="Servidor ocupado com outros downloads. Tente em alguns segundos.")
 
     work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
+    started = time.monotonic()
 
     def cleanup() -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -104,14 +121,20 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         raise
     except yt_dlp.utils.DownloadError as error:
         cleanup()
+        # Mensagem completa só no log do servidor; o app recebe a versão amigável.
+        log.warning("download falhou (%s): %s", url, str(error)[:600])
         raise HTTPException(status_code=422, detail=_friendly_error(str(error)))
     except Exception:
         cleanup()
+        log.exception("erro inesperado no download (%s)", url)
         raise HTTPException(status_code=500, detail="Erro inesperado ao processar o áudio.")
     finally:
         # A vaga é liberada assim que a extração (parte pesada) termina;
         # o envio do arquivo em si é leve e não precisa segurar a vaga.
         _download_slots.release()
+
+    log.info("download ok: %s · %.1f MB · %.1f s",
+             audio_path.name, audio_path.stat().st_size / 1_048_576, time.monotonic() - started)
 
     # Auto-limpeza: roda só depois que o FileResponse terminou de enviar o arquivo.
     # Apaga a pasta inteira (inclui .part e restos do yt-dlp), não só o .m4a.
