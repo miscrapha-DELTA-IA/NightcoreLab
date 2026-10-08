@@ -79,12 +79,13 @@ struct ContentView: View {
             components.password == nil,
             components.port == nil else { return }
 
-            // queryItems decodifica automaticamente o valor percent-encoded.
-            guard let rawLink = components.queryItems?
-                .first(where: { $0.name == "link" })?.value,
-                  let sourceURL = validatedYouTubeURL(rawLink) else {
-                downloader.errorMessage =
-                    "Link inválido. Use nightcore://download?link= com um vídeo do YouTube."
+            guard let rawLink = components.queryItems?.first(where: { $0.name == "link" })?.value else {
+                downloader.errorMessage = "Faltou parâmetro 'link' em: \(incomingURL.absoluteString)"
+                return
+            }
+
+            guard let sourceURL = validatedYouTubeURL(rawLink) else {
+                downloader.errorMessage = "O Swift rejeitou este link exato: \(rawLink)"
                 return
             }
 
