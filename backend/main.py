@@ -91,7 +91,18 @@ def health():
         "deno": shutil.which("deno") is not None,
         "ejs": importlib.util.find_spec("yt_dlp_ejs") is not None,
         "cookies": bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE),
+        # Diagnóstico (só nomes, nunca o conteúdo): ajuda a achar o que falta na configuração.
+        "cookies_env": COOKIES_FILE or None,
+        "secret_files": _secret_file_names(),
     }
+
+
+def _secret_file_names() -> list[str]:
+    """Nomes dos Secret Files do Render (pasta /etc/secrets), sem ler o conteúdo."""
+    try:
+        return sorted(os.listdir("/etc/secrets"))
+    except OSError:
+        return []
 
 
 @app.post("/download")
