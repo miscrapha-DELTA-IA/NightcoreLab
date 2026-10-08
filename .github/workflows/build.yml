@@ -4,6 +4,8 @@ name: iOS Build
 # (Em repositório privado, cada minuto de macOS conta como 10 da cota gratuita.)
 on:
   pull_request:
+    paths-ignore:
+      - 'backend/**'
   workflow_dispatch:
 
 jobs:

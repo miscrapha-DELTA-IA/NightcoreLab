@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
+    # Mudanças só no servidor Python não recompilam o app iOS
+    paths-ignore:
+      - 'backend/**'
 
 jobs:
   build:

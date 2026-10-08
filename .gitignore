@@ -30,3 +30,9 @@ vendor/bundle/
 
 # macOS
 .DS_Store
+
+# Python (backend/)
+__pycache__/
+*.pyc
+.venv/
+venv/

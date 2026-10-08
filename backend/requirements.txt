@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# Sem versão fixa de propósito: o YouTube muda com frequência e só versões
+# recentes do yt-dlp continuam funcionando. Faça redeploy para atualizar.
+yt-dlp
