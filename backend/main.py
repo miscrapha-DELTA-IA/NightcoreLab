@@ -166,7 +166,7 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         shutil.rmtree(work_dir, ignore_errors=True)
 
     try:
-        audio_path, title = _extract_m4a(url, work_dir)
+        audio_path, title, thumbnail = _extract_m4a(url, work_dir)
     except HTTPException:
         cleanup()
         raise
@@ -191,11 +191,15 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     # Apaga a pasta inteira (inclui .part e restos do yt-dlp), não só o .m4a.
     background_tasks.add_task(cleanup)
 
+    headers = {"Cache-Control": "no-store"}
+    if thumbnail:
+        headers["X-Cover-Url"] = thumbnail
+
     return FileResponse(
         path=audio_path,
         media_type="audio/mp4",           # MIME correto para .m4a (AAC em contêiner MP4)
         filename=f"{_safe_filename(title)}.m4a",
-        headers={"Cache-Control": "no-store"},
+        headers=headers,
         background=background_tasks,
     )
 
@@ -242,8 +246,8 @@ _RETRYABLE = (
 )
 
 
-def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
-    """Baixa só o áudio em .m4a para work_dir e devolve (caminho, título)."""
+def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
+    """Baixa só o áudio em .m4a para work_dir e devolve (caminho, título, URL da capa)."""
     has_cookies = bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE)
     if has_cookies:
         summary = _cookies_summary()
@@ -275,7 +279,7 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
 
 
 def _extract_with(url: str, work_dir: str, label: str,
-                  use_cookies: bool, clients: list[str] | None) -> tuple[Path, str]:
+                  use_cookies: bool, clients: list[str] | None) -> tuple[Path, str, str | None]:
     has_ffmpeg = shutil.which("ffmpeg") is not None
 
     ydl_opts = {
@@ -321,7 +325,8 @@ def _extract_with(url: str, work_dir: str, label: str,
     files = sorted(Path(work_dir).glob("*.m4a"))
     if not files:
         raise HTTPException(status_code=422, detail="Não foi possível obter o áudio em formato .m4a.")
-    return files[0], info.get("title") or info.get("id") or "audio"
+    thumbnail = info.get("thumbnail")
+    return files[0], info.get("title") or info.get("id") or "audio", thumbnail
 
 
 def _prepare_cookies(work_dir: str) -> str | None:
