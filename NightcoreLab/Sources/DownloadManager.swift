@@ -1,5 +1,13 @@
 import Foundation
 
+struct RelatedVideo: Identifiable, Codable {
+    let title: String
+    let thumbnail: URL?
+    let url: URL
+
+    var id: String { url.absoluteString }
+}
+
 /// Consome o microserviço FastAPI: POST /download {"url": ...} → .m4a em streaming.
 @MainActor
 final class DownloadManager: ObservableObject {
@@ -31,6 +39,7 @@ final class DownloadManager: ObservableObject {
 
     @Published private(set) var isDownloading = false
     @Published var errorMessage: String?
+    @Published private(set) var relatedErrorMessage: String?
     /// 0 enquanto o servidor ainda extrai o áudio; de 0 a 1 durante a transferência.
     @Published private(set) var downloadProgress: Double = 0
     /// true durante a nova tentativa automática (servidor acordando).
@@ -71,6 +80,43 @@ final class DownloadManager: ObservableObject {
 
     func cancel() {
         task?.cancel()
+    }
+
+    func fetchRelatedVideos(for url: String) async -> [RelatedVideo] {
+        relatedErrorMessage = nil
+        guard let source = Self.youtubeVideoURL(from: url),
+              var components = URLComponents(string: Self.apiBaseURL) else {
+            relatedErrorMessage = "Não foi possível consultar sugestões para este link."
+            return []
+        }
+        components.path += "/related"
+        components.queryItems = [URLQueryItem(name: "url", value: source.absoluteString)]
+        guard let endpoint = components.url else { return [] }
+        var request = URLRequest(url: endpoint, timeoutInterval: 25)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try Task.checkCancellation()
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                relatedErrorMessage = "Sugestões indisponíveis agora. Tente novamente."
+                return []
+            }
+            let videos = try JSONDecoder().decode([RelatedVideo].self, from: data)
+            var seen = Set([source.absoluteString])
+            return Array(videos.compactMap { video -> RelatedVideo? in
+                guard let canonical = Self.youtubeVideoURL(from: video.url.absoluteString),
+                      !video.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      seen.insert(canonical.absoluteString).inserted else { return nil }
+                let thumbnail = video.thumbnail?.scheme?.lowercased() == "https" ? video.thumbnail : nil
+                return RelatedVideo(title: video.title, thumbnail: thumbnail, url: canonical)
+            }.prefix(10))
+        } catch {
+            if !Task.isCancelled {
+                relatedErrorMessage = "Não foi possível carregar as sugestões."
+            }
+            return []
+        }
     }
 
     /// Acorda o servidor do Render em segundo plano (GET /), no máximo uma vez por minuto.
@@ -243,10 +289,42 @@ final class DownloadManager: ObservableObject {
     }
 
     nonisolated static func looksLikeYouTube(_ link: String) -> Bool {
-        guard let host = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else {
-            return false
+        youtubeVideoURL(from: link) != nil
+    }
+
+    nonisolated static func youtubeVideoURL(from raw: String) -> URL? {
+        guard let parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = parts.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = parts.host?.lowercased(),
+              ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"].contains(host),
+              parts.user == nil, parts.password == nil,
+              parts.port == nil || parts.port == 80 || parts.port == 443 else { return nil }
+        let path = parts.path.split(separator: "/").map(String.init)
+        let videoID: String?
+        if host == "youtu.be", path.count == 1 {
+            videoID = path[0]
+        } else if path == ["watch"] {
+            videoID = parts.queryItems?.first(where: { $0.name == "v" })?.value
+        } else if path.count == 2, ["shorts", "live", "embed"].contains(path[0]) {
+            videoID = path[1]
+        } else {
+            videoID = nil
         }
-        return host == "youtu.be" || host == "youtube.com" || host.hasSuffix(".youtube.com")
+        guard let videoID, videoID.range(of: "^[A-Za-z0-9_-]{11}$", options: .regularExpression) != nil else {
+            return nil
+        }
+        return URL(string: "https://www.youtube.com/watch?v=\(videoID)")
+    }
+
+    nonisolated static func youtubeURL(fromDeepLink url: URL) -> URL? {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme?.lowercased() == "nightcore",
+              parts.host?.lowercased() == "download",
+              parts.path.isEmpty || parts.path == "/",
+              parts.user == nil, parts.password == nil, parts.port == nil else { return nil }
+        let links = parts.queryItems?.filter { $0.name == "link" } ?? []
+        guard links.count == 1, let link = links.first?.value else { return nil }
+        return youtubeVideoURL(from: link)
     }
 }
 
@@ -271,3 +349,4 @@ private struct HealthResponse: Decodable {
         case ytdlp = "yt_dlp"
     }
 }
+

@@ -24,6 +24,21 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
+	<!-- Entrada via nightcore://download?link=<URL do YouTube codificada> -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.nightcorelab.download</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nightcore</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- SwiftUI App lifecycle, uma janela -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
@@ -73,3 +88,4 @@
 	<false/>
 </dict>
 </plist>
+

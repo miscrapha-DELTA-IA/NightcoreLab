@@ -19,6 +19,11 @@ struct ContentView: View {
     @StateObject private var downloader = DownloadManager()
     @State private var youtubeLink = ""
     @State private var coverURL: URL?
+    @State private var relatedVideos: [RelatedVideo] = []
+    @State private var isLoadingRelated = false
+    @State private var relatedSourceURL: String?
+    @State private var relatedRequestID = UUID()
+    @State private var pendingDeepLink: String?
     @FocusState private var isLinkFieldFocused: Bool
     @State private var showServerSettings = false
 
@@ -50,6 +55,7 @@ struct ContentView: View {
                     header
                     youtubeField
                     trackCard
+                    relatedSection
                     presets
                     controls
                     exportSection
@@ -62,6 +68,14 @@ struct ContentView: View {
         }
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
+        .onOpenURL(perform: handleDeepLink)
+        .task(id: relatedRequestID) { await loadRelatedVideos() }
+        .onChange(of: downloader.isDownloading) { _, downloading in
+            guard !downloading, let link = pendingDeepLink else { return }
+            pendingDeepLink = nil
+            youtubeLink = link
+            startDownload()
+        }
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, value in
             audio.setSpeed(value)
@@ -247,6 +261,12 @@ struct ContentView: View {
                     .foregroundStyle(DS.Ink.error)
                     .padding(.leading, 16)
             }
+            if pendingDeepLink != nil {
+                Text("Link recebido. O próximo download começa ao terminar este.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(currentTheme.accent)
+                    .padding(.leading, 16)
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: downloader.isDownloading)
         .animation(.easeInOut(duration: 0.2), value: isLinkFieldFocused)
@@ -341,6 +361,56 @@ struct ContentView: View {
                       theme: currentTheme, isActive: audio.isPlaying)
         .contentShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
         .onTapGesture { if !hasTrack { showImporter = true } }
+    }
+
+    @ViewBuilder
+    private var relatedSection: some View {
+        if relatedSourceURL != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("PRÓXIMAS FAIXAS")
+                        .font(.caption.weight(.heavy))
+                        .tracking(2)
+                        .foregroundStyle(currentTheme.accent)
+                    Spacer()
+                    if isLoadingRelated {
+                        ProgressView().tint(currentTheme.accent)
+                            .accessibilityLabel("Carregando sugestões")
+                    } else {
+                        Button {
+                            relatedRequestID = UUID()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .accessibilityLabel("Atualizar sugestões")
+                    }
+                }
+
+                if !relatedVideos.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 12) {
+                            ForEach(relatedVideos) { video in
+                                RelatedVideoCard(video: video, theme: currentTheme,
+                                                 isEnabled: !downloader.isDownloading) {
+                                    guard !downloader.isDownloading else { return }
+                                    youtubeLink = video.url.absoluteString
+                                    startDownload()
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                } else if isLoadingRelated {
+                    Text("Buscando músicas para continuar…")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Ink.secondary)
+                } else {
+                    Text(downloader.relatedErrorMessage ?? "Nenhuma sugestão disponível para esta faixa.")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Ink.secondary)
+                }
+            }
+        }
     }
 
     private var durationText: String {
@@ -500,17 +570,60 @@ struct ContentView: View {
 
     /// Ponte rede → DSP: baixa o .m4a e injeta no mesmo motor de áudio que a tela usa.
     private func startDownload() {
+        guard !downloader.isDownloading else { return }
+        let sourceURL = trimmedLink
+        guard DownloadManager.looksLikeYouTube(sourceURL) else {
+            downloader.errorMessage = "Cole o link de um vídeo do YouTube."
+            return
+        }
         isLinkFieldFocused = false
-        downloader.downloadAudio(youtubeURL: youtubeLink) { localURL, downloadedCoverURL in
+        resetRelatedVideos()
+        downloader.downloadAudio(youtubeURL: sourceURL) { localURL, downloadedCoverURL in
             do {
                 try audio.load(url: localURL)
                 coverURL = downloadedCoverURL
                 applyPitch()
                 youtubeLink = ""
+                relatedSourceURL = sourceURL
+                relatedRequestID = UUID()
             } catch {
                 errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme?.lowercased() == "nightcore" else { return }
+        guard let source = DownloadManager.youtubeURL(fromDeepLink: url) else {
+            downloader.errorMessage = "Link inválido. Use nightcore://download?link= com um vídeo do YouTube."
+            return
+        }
+        youtubeLink = source.absoluteString
+        if downloader.isDownloading {
+            // Mantém só o link mais recente, sem interromper a transferência atual.
+            pendingDeepLink = source.absoluteString
+        } else {
+            startDownload()
+        }
+    }
+
+    private func resetRelatedVideos() {
+        relatedSourceURL = nil
+        relatedVideos = []
+        isLoadingRelated = false
+        relatedRequestID = UUID() // Cancela a consulta anterior vinculada à view.
+    }
+
+    @MainActor
+    private func loadRelatedVideos() async {
+        guard let sourceURL = relatedSourceURL else { return }
+        let requestID = relatedRequestID
+        isLoadingRelated = true
+        let videos = await downloader.fetchRelatedVideos(for: sourceURL)
+        guard !Task.isCancelled, requestID == relatedRequestID,
+              sourceURL == relatedSourceURL else { return }
+        relatedVideos = videos
+        isLoadingRelated = false
     }
 
     /// Colar com um toque: se o texto for um link do YouTube, já inicia o download.
@@ -536,6 +649,7 @@ struct ContentView: View {
             try FileManager.default.copyItem(at: url, to: destination)
             try audio.load(url: destination)
             coverURL = nil
+            resetRelatedVideos()
             applyPitch()
         } catch {
             TelemetryManager.shared.log(.importFailed)
@@ -559,6 +673,61 @@ struct ContentView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - Cartão de sugestão
+
+private struct RelatedVideoCard: View {
+    let video: RelatedVideo
+    let theme: AppTheme
+    let isEnabled: Bool
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial)
+                AsyncImage(url: video.thumbnail) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    theme.accent.opacity(0.12)
+                }
+                .frame(width: 152, height: 120)
+                .opacity(0.55)
+
+                LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.85)],
+                               startPoint: .top, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(theme.accent)
+                            .symbolEffect(.pulse, options: .repeating,
+                                          isActive: isEnabled && !reduceMotion)
+                            .shadow(color: theme.accent.opacity(0.65), radius: 8)
+                    }
+                    Spacer(minLength: 0)
+                    Text(video.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(12)
+            }
+            .frame(width: 152, height: 120)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(theme.accent.opacity(0.3), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityLabel("Baixar \(video.title)")
     }
 }
 
@@ -782,3 +951,4 @@ struct ShareSheet: UIViewControllerRepresentable {
 #Preview {
     ContentView()
 }
+

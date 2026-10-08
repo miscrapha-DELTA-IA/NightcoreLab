@@ -37,7 +37,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from itertools import islice
+from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -69,6 +70,9 @@ ALLOWED_HOSTS = {
 }
 
 _download_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
+_related_slots = threading.BoundedSemaphore(1)
+RELATED_LIMIT = 10
+RELATED_SCAN_LIMIT = 20
 
 app = FastAPI(
     title="Nightcore Lab Bridge",
@@ -79,6 +83,99 @@ app = FastAPI(
 
 class DownloadRequest(BaseModel):
     url: HttpUrl
+
+
+class RelatedVideo(BaseModel):
+    title: str
+    thumbnail: HttpUrl
+    url: HttpUrl
+
+
+def _youtube_video_id(url: str) -> str:
+    """Valida o destino e normaliza watch, youtu.be, shorts, live e embed."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or host not in ALLOWED_HOSTS:
+        raise HTTPException(status_code=400, detail="Apenas links do YouTube são aceitos.")
+    if parsed.username or parsed.password or parsed.port not in {None, 80, 443}:
+        raise HTTPException(status_code=400, detail="Link do YouTube inválido.")
+    parts = parsed.path.strip("/").split("/")
+    video_id = ""
+    if host == "youtu.be" and len(parts) == 1:
+        video_id = parts[0]
+    elif parsed.path.rstrip("/") == "/watch":
+        video_id = parse_qs(parsed.query).get("v", [""])[0]
+    elif len(parts) == 2 and parts[0] in {"shorts", "live", "embed"}:
+        video_id = parts[1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(status_code=400, detail="Use o link de um vídeo do YouTube.")
+    return video_id
+
+
+def _related_entries(info: dict, seed_id: str) -> list[RelatedVideo]:
+    seen = {seed_id}
+    videos = []
+    for entry in islice(info.get("entries") or [], RELATED_SCAN_LIMIT):
+        if not isinstance(entry, dict):
+            continue
+        video_id = entry.get("id")
+        title = entry.get("title")
+        if not isinstance(video_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            continue
+        if video_id in seen or not isinstance(title, str) or not title.strip():
+            continue
+        if entry.get("is_live") or entry.get("availability") in {"private", "premium_only", "subscriber_only"}:
+            continue
+        duration = entry.get("duration")
+        if isinstance(duration, (int, float)) and duration > MAX_DURATION_SECONDS:
+            continue
+        seen.add(video_id)
+        thumbnails = [entry.get("thumbnail")]
+        thumbnails.extend(t.get("url") for t in reversed(entry.get("thumbnails") or []) if isinstance(t, dict))
+        thumbnail = next((t for t in thumbnails if isinstance(t, str) and t.startswith("https://")),
+                         f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")
+        videos.append(RelatedVideo(title=title.strip(), thumbnail=thumbnail,
+                                   url=f"https://www.youtube.com/watch?v={video_id}"))
+        if len(videos) == RELATED_LIMIT:
+            break
+    return videos
+
+
+@app.get("/related", response_model=list[RelatedVideo])
+def related(url: HttpUrl):
+    """Sugestões do Mix público do YouTube, sem baixar áudio ou extrair cada vídeo."""
+    video_id = _youtube_video_id(str(url))
+    if not _related_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Sugestões ocupadas. Tente novamente.")
+    try:
+        options = {
+            "extract_flat": True,
+            "skip_download": True,
+            "noplaylist": False,
+            "playlistend": RELATED_SCAN_LIMIT,
+            "lazy_playlist": True,
+            "quiet": True,
+            "logger": _YtdlpLog("related"),
+            "cachedir": False,
+            "socket_timeout": 8,
+            "retries": 0,
+            "extractor_retries": 0,
+        }
+        # A consulta usa o Mix público, não as recomendações pessoais dos cookies.
+        mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(mix_url, download=False)
+            if not isinstance(info, dict):
+                return []
+            return _related_entries(info, video_id)
+    except yt_dlp.utils.DownloadError:
+        log.warning("Mix indisponível para %s", video_id)
+        raise HTTPException(status_code=502, detail="Sugestões temporariamente indisponíveis.")
+    except Exception:
+        log.exception("Erro ao consultar sugestões para %s", video_id)
+        raise HTTPException(status_code=503, detail="Sugestões temporariamente indisponíveis.")
+    finally:
+        _related_slots.release()
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -375,3 +472,4 @@ def _safe_filename(title: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", title)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return (cleaned or "audio")[:120]
+
