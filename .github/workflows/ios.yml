@@ -1,76 +1,54 @@
-name: iOS Release (TestFlight)
+name: Build Unsigned IPA (Free Route)
 
 on:
-  # Manual: aba Actions → "iOS Release (TestFlight)" → Run workflow
   workflow_dispatch:
-  # Automático ao criar uma tag de versão: git tag v1.0.0 && git push --tags
   push:
-    tags: ["v*"]
-
-# Nunca dois envios ao mesmo tempo (build numbers e match brigariam entre si)
-concurrency:
-  group: testflight
-  cancel-in-progress: false
+    branches: [ "main" ]
 
 jobs:
-  testflight:
+  build:
     runs-on: macos-latest
-    timeout-minutes: 60
-
-    env:
-      # App Store Connect API Key
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      # match (certificados)
-      MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-      MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
-      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-      MATCH_READONLY: ${{ vars.MATCH_READONLY || 'false' }}
-      # fastlane silencioso e sem prompts
-      FASTLANE_SKIP_UPDATE_CHECK: "1"
-      FASTLANE_HIDE_CHANGELOG: "1"
-      FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "120"
-      LC_ALL: en_US.UTF-8
-      LANG: en_US.UTF-8
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Selecionar Xcode estável
+      - name: Selecionar Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
 
-      - name: Configurar Ruby + fastlane
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          bundler-cache: true
-
       - name: Instalar XcodeGen
         run: brew install xcodegen
 
-      - name: Gerar NightcoreLab.xcodeproj
+      - name: Gerar Projeto
         run: xcodegen generate
 
-      - name: Build + TestFlight
-        run: bundle exec fastlane beta
+      - name: Compilar App sem Assinatura
+        run: |
+          set -o pipefail
+          xcodebuild clean build \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            SYMROOT="$PWD/build" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
 
-      - name: Guardar IPA
-        if: success()
+      - name: Empacotar em arquivo .ipa
+        run: |
+          test -d build/Release-iphoneos/NightcoreLab.app || { echo "NightcoreLab.app não encontrado"; ls -R build | head -50; exit 1; }
+          mkdir -p Payload
+          mv build/Release-iphoneos/NightcoreLab.app Payload/
+          zip -qry NightcoreLab_Unsigned.ipa Payload
+
+      - name: Disponibilizar Download
         uses: actions/upload-artifact@v4
         with:
-          name: NightcoreLab-ipa
-          path: build/NightcoreLab.ipa
-          retention-days: 14
-
-      - name: Guardar logs do build (em caso de erro)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: ~/Library/Logs/gym
-          if-no-files-found: ignore
+          name: NightcoreLab-App
+          path: NightcoreLab_Unsigned.ipa
+          retention-days: 7

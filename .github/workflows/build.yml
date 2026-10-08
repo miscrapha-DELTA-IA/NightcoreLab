@@ -1,8 +1,8 @@
 name: iOS Build
 
+# Só valida pull requests: pushes na main já são compilados pelo ios.yml.
+# (Em repositório privado, cada minuto de macOS conta como 10 da cota gratuita.)
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
