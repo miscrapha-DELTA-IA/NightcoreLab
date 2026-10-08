@@ -1,0 +1,106 @@
+# Fastfile — Nightcore Lab
+# Uso local ou no CI:  bundle exec fastlane beta
+#
+# Assinatura 100% sem senha:
+#   - Autenticação na Apple via App Store Connect API Key (sem Apple ID / 2FA)
+#   - Certificado e perfil gerenciados pelo `match`, guardados criptografados
+#     num repositório Git privado (criados automaticamente na primeira execução)
+
+default_platform(:ios)
+
+APP_ID  = "com.nightcorelab.app"
+APP_NAME = "Nightcore Lab"
+PROJECT = "NightcoreLab.xcodeproj"
+SCHEME  = "NightcoreLab"
+
+platform :ios do
+  before_all do
+    # No CI cria um keychain temporário para o certificado (evita prompt de senha).
+    setup_ci if ENV["CI"]
+  end
+
+  desc "Build de release e envio para o TestFlight"
+  lane :beta do
+    authenticate
+    ensure_bundle_id
+
+    # 1. Certificado + perfil de distribuição (App Store)
+    match(
+      type: "appstore",
+      app_identifier: APP_ID,
+      team_id: ENV.fetch("APPLE_TEAM_ID"),
+      storage_mode: "git",
+      git_url: ENV.fetch("MATCH_GIT_URL"),
+      git_basic_authorization: ENV.fetch("MATCH_GIT_BASIC_AUTHORIZATION"),
+      # false na primeira execução (cria os certificados); depois pode virar true.
+      readonly: ENV["MATCH_READONLY"] == "true"
+    )
+    profile_name = ENV.fetch("sigh_#{APP_ID}_appstore_profile-name")
+
+    # 2. O .xcodeproj é gerado pelo XcodeGen a cada run, então ajustamos a assinatura aqui.
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: PROJECT,
+      targets: [SCHEME],
+      build_configurations: ["Release"],
+      team_id: ENV.fetch("APPLE_TEAM_ID"),
+      bundle_identifier: APP_ID,
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile_name
+    )
+
+    # 3. Build number único por envio (o TestFlight rejeita números repetidos).
+    build_number = ENV["GITHUB_RUN_NUMBER"] || Time.now.utc.strftime("%Y%m%d%H%M")
+    UI.message("Build number: #{build_number}")
+
+    # 4. Build de release
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Release",
+      clean: true,
+      export_method: "app-store",
+      export_options: {
+        provisioningProfiles: { APP_ID => profile_name }
+      },
+      xcargs: "CURRENT_PROJECT_VERSION=#{build_number}",
+      output_directory: "build",
+      output_name: "NightcoreLab.ipa"
+    )
+
+    # 5. Envio para o TestFlight
+    upload_to_testflight(
+      app_identifier: APP_ID,
+      # Não espera o processamento da Apple (10–30 min): economiza minutos do runner.
+      skip_waiting_for_build_processing: true
+    )
+  end
+
+  # Autentica na App Store Connect API. Todas as actions seguintes (match, pilot)
+  # usam esta chave automaticamente.
+  private_lane :authenticate do
+    app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_KEY_P8_BASE64"),
+      is_key_content_base64: true,
+      duration: 1200,
+      in_house: false
+    )
+  end
+
+  # Registra o bundle ID no Apple Developer se ainda não existir
+  # (o match falha se o identificador não estiver cadastrado).
+  private_lane :ensure_bundle_id do
+    if Spaceship::ConnectAPI::BundleId.find(APP_ID)
+      UI.message("Bundle ID #{APP_ID} já registrado")
+    else
+      UI.important("Registrando bundle ID #{APP_ID}…")
+      Spaceship::ConnectAPI::BundleId.create(
+        name: APP_NAME,
+        identifier: APP_ID,
+        platform: Spaceship::ConnectAPI::BundleIdPlatform::IOS
+      )
+    end
+  end
+end

@@ -1,0 +1,41 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Selecionar Xcode estável
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Instalar XcodeGen
+        run: brew install xcodegen
+
+      - name: Gerar NightcoreLab.xcodeproj
+        run: xcodegen generate
+
+      - name: Resolver pacotes SPM
+        run: xcodebuild -resolvePackageDependencies -project NightcoreLab.xcodeproj -scheme NightcoreLab
+
+      - name: Compilar para o simulador (sem assinatura)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build

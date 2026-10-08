@@ -1,0 +1,90 @@
+# XcodeGen — Nightcore Lab
+# Gere o projeto com:  xcodegen generate
+# O .xcodeproj é descartável (está no .gitignore); este arquivo é a fonte da verdade.
+
+name: NightcoreLab
+
+options:
+  bundleIdPrefix: com.nightcorelab
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  developmentLanguage: pt-BR
+
+# Configurações aplicadas a todos os targets
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Swift 5 com checagem de concorrência mínima: o código já usa @MainActor,
+    # mas o modo estrito do Swift 6 transformaria avisos em erros no CI.
+    SWIFT_STRICT_CONCURRENCY: minimal
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+
+# Swift Package Manager
+# Para adicionar uma dependência, descomente um exemplo abaixo e
+# liste o pacote em targets.NightcoreLab.dependencies.
+packages: {}
+#  TelemetryDeck:
+#    url: https://github.com/TelemetryDeck/SwiftSDK
+#    from: 2.0.0
+#  LocalPackage:
+#    path: Packages/LocalPackage
+
+targets:
+  NightcoreLab:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+
+    sources:
+      # Código Swift: NightcoreLabApp, ContentView, AudioEngineManager, TelemetryManager
+      - path: NightcoreLab/Sources
+      # Catálogo de assets (ícone do app)
+      - path: NightcoreLab/Resources/Assets.xcassets
+      # Manifesto de privacidade, copiado explicitamente como recurso do bundle
+      - path: NightcoreLab/Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      # Info.plist NÃO entra aqui: ele é referenciado por INFOPLIST_FILE abaixo.
+      # Tools/AppIconView.swift fica fora do target de propósito (só gera o PNG do ícone).
+
+    settings:
+      base:
+        PRODUCT_NAME: NightcoreLab
+        PRODUCT_BUNDLE_IDENTIFIER: com.nightcorelab.app
+        INFOPLIST_FILE: NightcoreLab/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"          # iPhone
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""                  # preencha (ou injete no CI) para assinar/arquivar
+
+    dependencies: []
+    #  - package: TelemetryDeck
+    #    product: TelemetryDeck
+
+schemes:
+  NightcoreLab:
+    build:
+      targets:
+        NightcoreLab: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

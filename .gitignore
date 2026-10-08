@@ -1,0 +1,32 @@
+# Gerado pelo XcodeGen (project.yml é a fonte da verdade)
+*.xcodeproj
+*.xcworkspace
+
+# Xcode / build
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+vendor/bundle/
+
+# Nunca versionar credenciais
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+
+# SPM
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
