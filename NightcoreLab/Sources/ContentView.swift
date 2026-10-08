@@ -584,7 +584,7 @@ struct ContentView: View {
                     GlowPulse(shape: Capsule(), color: currentTheme.accent, isActive: audio.isExporting)
                 }
             }
-            .disabled(!hasTrack || audio.isExporting)
+            .disabled(!hasTrack || audio.isExporting || downloader.isDownloading)
             .opacity(hasTrack ? 1 : 0.35)
 
             Toggle(isOn: $telemetryEnabled) {
@@ -683,6 +683,7 @@ struct ContentView: View {
     }
 
     private func export() {
+        guard !downloader.isDownloading, !audio.isExporting else { return }
         let format = exportFormat
         Task {
             let start = ContinuousClock.now

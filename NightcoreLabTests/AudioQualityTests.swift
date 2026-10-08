@@ -76,13 +76,18 @@ final class AudioQualityTests: XCTestCase {
     }
 
     func testNeutralPathAnd24BitWAV() throws {
-        let (file, audio) = try samples(render(source(channels: 1)))
-        XCTAssertEqual(file.processingFormat.channelCount, 2)
-        XCTAssertEqual((file.fileFormat.settings[AVLinearPCMBitDepthKey] as? NSNumber)?.intValue, 24)
-        let middle = audio[11_025..<33_075]
-        let rms = sqrt(middle.reduce(0.0) { $0 + Double($1 * $1) } / Double(middle.count))
-        let expected = 0.2 / sqrt(2.0) * pow(10.0, -1.5 / 20)
-        XCTAssertEqual(rms, expected, accuracy: 0.015)
+        for channels in [AVAudioChannelCount(1), 2] {
+            let (file, audio) = try samples(render(source(channels: channels)))
+            XCTAssertEqual(file.processingFormat.channelCount, 2)
+            XCTAssertEqual((file.fileFormat.settings[AVLinearPCMBitDepthKey] as? NSNumber)?.intValue, 24)
+            let middle = audio[11_025..<33_075]
+            let rms = sqrt(middle.reduce(0.0) { $0 + Double($1 * $1) } / Double(middle.count))
+            // O mixer faz pan central de potência constante: mono perde 3 dB POR CANAL,
+            // enquanto a soma da potência dos dois canais conserva a energia de entrada.
+            let channelGain = channels == 1 ? 1 / sqrt(2.0) : 1
+            let expected = 0.2 / sqrt(2.0) * pow(10.0, -1.5 / 20) * channelGain
+            XCTAssertEqual(rms, expected, accuracy: 0.008, "Canais na fonte: \(channels)")
+        }
     }
 
     func testBassAndReverbProduceFiniteUnclippedSamples() throws {
