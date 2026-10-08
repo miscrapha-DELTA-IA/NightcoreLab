@@ -47,10 +47,10 @@ final class AudioEngineManager {
     static let bassRange: ClosedRange<Float>   = 0...12   // ganho do low shelf em dB
 
     // Pipeline de masterização
-    static let bassFrequency: Float = 120.0                // Hz
+    static let bassFrequency: Float = 200.0                // Hz (corpo da batida, igual à extensão)
     static let bassBandwidth: Float = 1.0                  // oitavas
-    static let defaultReverbPreset: AVAudioUnitReverbPreset = .plate   // placa clássica de estúdio
-    static let limiterThreshold: Float = -0.5              // dB
+    static let defaultReverbPreset: AVAudioUnitReverbPreset = .mediumHall   // decay mais próximo dos 2 s da extensão
+    static let limiterThreshold: Float = 0.0               // dB: teto invisível, só age no limite
     static let limiterHeadroom: Float = 0.1                // dB (joelho duro → limiter)
     static let limiterAttack: Float = 0.001                // s
     static let limiterRelease: Float = 0.05                // s
@@ -71,7 +71,7 @@ final class AudioEngineManager {
     private(set) var bass: Float = 0
 
     // Grafo de áudio (masterização):
-    // player → upmix (estéreo) → timePitch → EQ low shelf → reverb plate → limiter → mainMixer → saída
+    // player → upmix (estéreo) → timePitch → EQ low shelf → reverb medium hall → limiter → mainMixer → saída
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let upmix = AVAudioMixerNode()
@@ -178,8 +178,8 @@ final class AudioEngineManager {
         reverbNode.wetDryMix = reverb
     }
 
-    /// Ganho do low shelf em 120 Hz, de 0 a 12 dB. Só o ganho muda; tipo, frequência
-    /// e largura ficam fixos. Picos acima de -0.5 dBFS são segurados pelo limiter.
+    /// Ganho do low shelf em 200 Hz, de 0 a 12 dB. Só o ganho muda; tipo, frequência
+    /// e largura ficam fixos. Sem redução manual de volume: o limiter é só um teto em 0 dBFS.
     func setBass(_ value: Float) {
         bass = value.clamped(to: Self.bassRange)
         bassEQ.bands[0].gain = bass
@@ -426,7 +426,7 @@ final class AudioEngineManager {
     }
 
     /// Brickwall de proteção usando o AUDynamicsProcessor da Apple:
-    /// threshold -0.5 dB com headroom de 0.1 dB faz o compressor agir como limiter.
+    /// threshold 0 dB com headroom de 0.1 dB: teto invisível, sem compressão abaixo do limite.
     nonisolated private static func makeLimiter() -> AVAudioUnitEffect {
         let description = AudioComponentDescription(
             componentType: kAudioUnitType_Effect,
