@@ -310,16 +310,10 @@ struct ContentView: View {
             Button {
                 audio.togglePlayback()
             } label: {
-                Image(systemName: audio.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(currentTheme.onAccent)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 60, height: 60)
-                    .background(Circle().fill(currentTheme.accent))
-                    .background {
-                        GlowPulse(shape: Circle(), color: currentTheme.accent,
-                                  isActive: audio.isPlaying, blur: 12)
-                    }
+                VinylPlaybackArtwork(coverURL: coverURL,
+                                     isPlaying: audio.isPlaying,
+                                     theme: currentTheme)
+                    .id(coverURL)
             }
             .disabled(!hasTrack)
             .opacity(hasTrack ? 1 : 0.4)
@@ -513,7 +507,6 @@ struct ContentView: View {
                 coverURL = downloadedCoverURL
                 applyPitch()
                 youtubeLink = ""
-                audio.play()   // baixou → já toca, com os ajustes atuais
             } catch {
                 errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
             }
@@ -566,6 +559,68 @@ struct ContentView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - Capa de vinil
+
+private struct VinylPlaybackArtwork: View {
+    let coverURL: URL?
+    let isPlaying: Bool
+    let theme: AppTheme
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spinDegrees: Double = 0
+    @State private var spinStartedAt: Date?
+
+    private var shouldSpin: Bool {
+        isPlaying && coverURL != nil && !reduceMotion
+    }
+
+    var body: some View {
+        TimelineView(.animation(paused: !shouldSpin)) { context in
+            AsyncImage(url: coverURL) { phase in
+                ZStack {
+                    if let image = phase.image {
+                        image.resizable().scaledToFill()
+                            .frame(width: 64, height: 64)
+                            .clipShape(Circle())
+                            .overlay(Circle().fill(.black).frame(width: 12, height: 12))
+                            .rotationEffect(.degrees(angle(at: context.date)))
+                    } else {
+                        // Sem capa, carregando ou com falha: mantém o botão utilizável.
+                        Circle().fill(theme.accent)
+                    }
+
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(phase.image != nil ? Color.white.opacity(0.8) : theme.onAccent)
+                        .shadow(color: .black.opacity(phase.image != nil ? 0.7 : 0),
+                                radius: 4)
+                }
+                .frame(width: 64, height: 64)
+            }
+        }
+        .shadow(color: theme.accent.opacity(isPlaying ? 0.5 : 0.2), radius: 14)
+        .accessibilityHidden(true) // O botão pai fornece o rótulo Tocar/Pausar.
+        .onAppear {
+            if shouldSpin { spinStartedAt = Date() }
+        }
+        .onChange(of: shouldSpin) { _, spinning in
+            let now = Date()
+            spinDegrees = angle(at: now).truncatingRemainder(dividingBy: 360)
+            spinStartedAt = spinning ? now : nil
+        }
+        .onDisappear {
+            spinDegrees = angle(at: Date()).truncatingRemainder(dividingBy: 360)
+            spinStartedAt = nil
+        }
+    }
+
+    private func angle(at date: Date) -> Double {
+        guard let spinStartedAt else { return spinDegrees }
+        // Uma volta a cada 3 segundos; a pausa conserva o ângulo atual.
+        return spinDegrees + max(0, date.timeIntervalSince(spinStartedAt)) * 120
     }
 }
 
