@@ -24,6 +24,7 @@ struct ContentView: View {
     @StateObject private var downloader = DownloadManager()
     @State private var youtubeLink = ""
     @FocusState private var isLinkFieldFocused: Bool
+    @State private var showServerSettings = false
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
     @AppStorage("isAcidTheme") private var isAcidTheme = false
@@ -85,6 +86,15 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { TelemetryManager.shared.flush() }
+            if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
+        }
+        .onChange(of: isLinkFieldFocused) { _, focused in
+            if focused { downloader.warmUp() }            // cold start enquanto o usuário cola o link
+        }
+        .task { downloader.warmUp() }
+        .sheet(isPresented: $showServerSettings) {
+            ServerSettingsView(downloader: downloader, accent: isAcidTheme ? acidGreen : .white)
+                .presentationDetents([.medium])
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio]) { result in
             switch result {
@@ -163,16 +173,24 @@ struct ContentView: View {
             .contentTransition(.symbolEffect(.replace))
     }
 
-    /// Campo de vidro para colar o link do YouTube, com botão de download.
+    /// Campo de vidro para colar o link do YouTube.
+    /// [servidor] [link…] [colar | baixar | cancelar]
     private var youtubeField: some View {
         let accent = isAcidTheme ? acidGreen : Color.white
         let trimmedLink = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Image(systemName: "link")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(accent.opacity(0.7))
+                Button {
+                    showServerSettings = true
+                } label: {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(accent.opacity(0.7))
+                        .frame(width: 28, height: 36)
+                }
+                .disabled(downloader.isDownloading)
+                .accessibilityLabel("Configurar servidor")
 
                 TextField("", text: $youtubeLink,
                           prompt: Text("Cole um link do YouTube").foregroundColor(.white.opacity(0.35)))
@@ -189,8 +207,28 @@ struct ContentView: View {
 
                 Group {
                     if downloader.isDownloading {
-                        ProgressView()
-                            .tint(accent)
+                        // Toque no indicador para cancelar
+                        Button {
+                            downloader.cancel()
+                        } label: {
+                            ZStack {
+                                ProgressView().tint(accent)
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .heavy))
+                                    .foregroundStyle(accent.opacity(0.8))
+                            }
+                        }
+                        .accessibilityLabel("Cancelar download")
+                    } else if trimmedLink.isEmpty {
+                        // Botão de colar do sistema: não dispara o aviso de privacidade da área de transferência
+                        PasteButton(payloadType: String.self) { strings in
+                            guard let text = strings.first else { return }
+                            Task { @MainActor in pasteAndDownload(text) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
+                        .tint(accent.opacity(isAcidTheme ? 1 : 0.9))
                     } else {
                         Button(action: startDownload) {
                             Image(systemName: "arrow.down.circle.fill")
@@ -198,14 +236,12 @@ struct ContentView: View {
                                 .foregroundStyle(accent)
                                 .shadow(color: isAcidTheme ? acidGreen.opacity(0.6) : .clear, radius: 8)
                         }
-                        .disabled(trimmedLink.isEmpty)
-                        .opacity(trimmedLink.isEmpty ? 0.35 : 1)
                         .accessibilityLabel("Baixar áudio do link")
                     }
                 }
                 .frame(width: 36, height: 36)
             }
-            .padding(.leading, 16)
+            .padding(.leading, 10)
             .padding(.trailing, 6)
             .padding(.vertical, 6)
             .background(Capsule().fill(.ultraThinMaterial))
@@ -213,9 +249,7 @@ struct ContentView: View {
             .shadow(color: accent.opacity(isLinkFieldFocused && isAcidTheme ? 0.35 : 0), radius: 14)
 
             if downloader.isDownloading {
-                Text(downloader.downloadProgress > 0
-                     ? "Baixando… \(Int(downloader.downloadProgress * 100))%"
-                     : "Extraindo o áudio no servidor…")
+                Text(downloadStatusText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.leading, 16)
@@ -229,6 +263,16 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: downloader.isDownloading)
         .animation(.easeInOut(duration: 0.2), value: isLinkFieldFocused)
+        .animation(.easeInOut(duration: 0.2), value: trimmedLink.isEmpty)
+    }
+
+    private var downloadStatusText: String {
+        if downloader.downloadProgress > 0 {
+            return "Baixando… \(Int(downloader.downloadProgress * 100))%"
+        }
+        return downloader.isRetrying
+            ? "Servidor acordando, tentando de novo…"
+            : "Extraindo o áudio no servidor…"
     }
 
     /// Mesmo conjunto de sliders nos dois modos. O AnyLayout troca só o arranjo,
@@ -394,9 +438,21 @@ struct ContentView: View {
                 try audio.load(url: localURL)
                 applyPitch()
                 youtubeLink = ""
+                audio.play()   // baixou → já toca, com os ajustes atuais
             } catch {
                 errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
             }
+        }
+    }
+
+    /// Colar com um toque: se o texto for um link do YouTube, já inicia o download.
+    private func pasteAndDownload(_ text: String) {
+        let link = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        youtubeLink = link
+        if DownloadManager.looksLikeYouTube(link) {
+            startDownload()
+        } else {
+            downloader.errorMessage = "O texto colado não é um link do YouTube."
         }
     }
 
