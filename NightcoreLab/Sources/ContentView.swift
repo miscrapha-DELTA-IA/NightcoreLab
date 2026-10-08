@@ -160,7 +160,7 @@ struct ContentView: View {
     private var presets: some View {
         HStack(spacing: 10) {
             presetButton("Redefinir", speed: 1.0, reverb: 0, bass: 0)
-            presetButton("Lentidão", speed: 0.8, reverb: 45, bass: 0)
+            presetButton("Lentidão", speed: 0.8, reverb: 35, bass: 0)
             presetButton("Nightcore", speed: 1.25, reverb: 0, bass: 5)
         }
         .disabled(audio.fileName == nil)

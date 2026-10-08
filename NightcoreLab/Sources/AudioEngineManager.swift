@@ -39,11 +39,11 @@ private struct RenderSettings: Sendable {
 @Observable
 final class AudioEngineManager {
 
-    // Faixas válidas
+    // Faixas válidas (alinhadas aos limites da extensão de PC, para não estourar a mixagem)
     static let speedRange: ClosedRange<Float>  = 0.5...2.0
     static let pitchRange: ClosedRange<Float>  = -1200...1200
-    static let reverbRange: ClosedRange<Float> = 0...100
-    static let bassRange: ClosedRange<Float>   = 0...24
+    static let reverbRange: ClosedRange<Float> = 0...50   // wet/dry em %
+    static let bassRange: ClosedRange<Float>   = 0...12   // ganho do low shelf em dB
     static let bassFrequency: Float = 100.0
     static let defaultReverbPreset: AVAudioUnitReverbPreset = .largeHall
 
