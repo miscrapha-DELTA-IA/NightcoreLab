@@ -73,7 +73,7 @@ _download_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
 app = FastAPI(
     title="Nightcore Lab Bridge",
     description="Extrai o áudio de um link do YouTube em .m4a e o envia direto, sem armazenar.",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 
@@ -200,39 +200,109 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     )
 
 
+class _YtdlpLog:
+    """Leva os avisos do yt-dlp para o log do Render (é neles que o YouTube explica
+    por que um formato sumiu: PO token, desafio JS, cookies vencidos...)."""
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+
+    def debug(self, msg: str) -> None:   # progresso e mensagens informativas: silencia
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        log.warning("yt-dlp [%s]: %s", self.label, msg[:500])
+
+    def error(self, msg: str) -> None:   # o erro final já é registrado em download()
+        pass
+
+
+# Estratégias tentadas em ordem até uma entregar áudio. O YouTube muda com frequência
+# quais clientes exigem PO token num IP de datacenter; ter alternativas evita o app quebrar.
+#   (rótulo, usa cookies?, clientes do player — None = padrão do yt-dlp)
+_STRATEGIES: list[tuple[str, bool, list[str] | None]] = [
+    ("logado/padrão", True, None),                          # web_embedded, tv_downgraded, web
+    ("logado/tv", True, ["tv", "web_embedded", "mweb"]),    # tv e web_embedded dispensam PO token
+    ("anônimo/visionos", False, ["visionos", "android_vr"]),
+    ("anônimo/padrão", False, None),
+]
+
+# Erros em que vale tentar a próxima estratégia (os demais são definitivos: vídeo privado etc.).
+_RETRYABLE = (
+    "requested format is not available",
+    "not a bot",
+    "only images are available",
+    "no video formats found",
+    "po token",
+    "http error 403",
+    "this content isn't available",
+)
+
+
 def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
     """Baixa só o áudio em .m4a para work_dir e devolve (caminho, título)."""
+    has_cookies = bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE)
+    if has_cookies:
+        summary = _cookies_summary()
+        log.info("cookies: %s entradas, youtube=%s, logado=%s (%s)",
+                 summary.get("entries"), summary.get("youtube_domain"),
+                 summary.get("logged_in"), ", ".join(summary.get("login_cookies", [])) or "nenhum")
+    else:
+        log.info("sem cookies (COOKIES_FILE=%r)", COOKIES_FILE)
+
+    strategies = [s for s in _STRATEGIES if has_cookies or not s[1]]
+    last_error: yt_dlp.utils.DownloadError | None = None
+
+    for index, (label, use_cookies, clients) in enumerate(strategies):
+        attempt_dir = os.path.join(work_dir, f"try{index}")
+        os.makedirs(attempt_dir)
+        try:
+            result = _extract_with(url, attempt_dir, label, use_cookies, clients)
+            log.info("estratégia que funcionou: %s", label)
+            return result
+        except yt_dlp.utils.DownloadError as error:
+            last_error = error
+            message = str(error)
+            log.warning("estratégia %s falhou: %s", label, message[:300])
+            if not any(marker in message.lower() for marker in _RETRYABLE):
+                raise
+
+    assert last_error is not None
+    raise last_error
+
+
+def _extract_with(url: str, work_dir: str, label: str,
+                  use_cookies: bool, clients: list[str] | None) -> tuple[Path, str]:
     has_ffmpeg = shutil.which("ffmpeg") is not None
 
     ydl_opts = {
-        # Prefere o stream AAC/m4a nativo do YouTube: não precisa de conversão nem de FFmpeg.
-        "format": "bestaudio[ext=m4a]/bestaudio" if has_ffmpeg else "bestaudio[ext=m4a]",
+        # 1º o AAC/m4a nativo (sem conversão); depois qualquer áudio; por fim qualquer
+        # stream com som (o FFmpeg extrai e converte o áudio para m4a).
+        "format": "bestaudio[ext=m4a]/bestaudio/best[acodec!=none]" if has_ffmpeg else "bestaudio[ext=m4a]",
         "outtmpl": os.path.join(work_dir, "%(id)s.%(ext)s"),
         "noplaylist": True,          # link de música dentro de playlist → só a faixa
         "quiet": True,
-        "no_warnings": True,
+        "no_warnings": False,
+        "logger": _YtdlpLog(label),
         "noprogress": True,
         "cachedir": False,           # nada persistido fora da pasta temporária
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,
     }
+    if clients:
+        ydl_opts["extractor_args"] = {"youtube": {"player_client": clients}}
     if has_ffmpeg:
         # Se o melhor áudio disponível não for m4a, converte para m4a (AAC).
         ydl_opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "m4a",
         }]
-
-    cookie_copy = _prepare_cookies(work_dir)
-    if cookie_copy:
-        ydl_opts["cookiefile"] = cookie_copy
-        summary = _cookies_summary()
-        log.info("usando cookies: %s entradas, youtube=%s, logado=%s (%s)",
-                 summary.get("entries"), summary.get("youtube_domain"),
-                 summary.get("logged_in"), ", ".join(summary.get("login_cookies", [])) or "nenhum")
-    else:
-        log.info("sem cookies (COOKIES_FILE=%r, existe=%s)", COOKIES_FILE, os.path.isfile(COOKIES_FILE) if COOKIES_FILE else False)
+    if use_cookies:
+        ydl_opts["cookiefile"] = _prepare_cookies(work_dir)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -288,6 +358,8 @@ def _friendly_error(message: str) -> str:
         return "Vídeo privado."
     if "confirm you're not a bot" in lowered or "confirm you’re not a bot" in lowered:
         return "O YouTube bloqueou o servidor temporariamente (verificação anti-bot)."
+    if "requested format is not available" in lowered or "only images are available" in lowered:
+        return "O YouTube não liberou o áudio deste vídeo para o servidor. Tente de novo em alguns minutos."
     if "unavailable" in lowered or "not available" in lowered:
         return "Vídeo indisponível ou bloqueado na região do servidor."
     return "O yt-dlp não conseguiu processar este vídeo."
