@@ -75,6 +75,19 @@ targets:
     #  - package: TelemetryDeck
     #    product: TelemetryDeck
 
+  NightcoreLabTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: NightcoreLabTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.nightcorelab.tests
+    dependencies:
+      - target: NightcoreLab
+
 schemes:
   NightcoreLab:
     build:
@@ -82,9 +95,14 @@ schemes:
         NightcoreLab: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - NightcoreLabTests
     profile:
       config: Release
     analyze:
       config: Debug
     archive:
       config: Release
+

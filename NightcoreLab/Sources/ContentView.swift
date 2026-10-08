@@ -23,7 +23,6 @@ struct ContentView: View {
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
-    @State private var pendingDeepLink: String?
     @FocusState private var isLinkFieldFocused: Bool
     @State private var showServerSettings = false
 
@@ -54,6 +53,7 @@ struct ContentView: View {
                 VStack(spacing: DS.Spacing.l) {
                     header
                     youtubeField
+                        .disabled(audio.isExporting)
                     trackCard
                     relatedSection
                     presets
@@ -79,36 +79,24 @@ struct ContentView: View {
             components.password == nil,
             components.port == nil else { return }
 
-            guard let rawLink = components.queryItems?.first(where: { $0.name == "link" })?.value else {
-                downloader.errorMessage = "Faltou parâmetro 'link' em: \(incomingURL.absoluteString)"
-                return
+            var receivedLink = (components.queryItems?.first(where: { $0.name == "link" })?.value ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !receivedLink.contains("://"), let decoded = receivedLink.removingPercentEncoding {
+                receivedLink = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
             }
-
-            guard let sourceURL = validatedYouTubeURL(rawLink) else {
-                downloader.errorMessage = "O Swift rejeitou este link exato: \(rawLink)"
+            guard !receivedLink.isEmpty else {
+                downloader.errorMessage = "O Atalho abriu o app, mas enviou o link vazio. Verifique a URL compartilhada no Atalho ou cole o link nesta caixa."
+                isLinkFieldFocused = !downloader.isDownloading && !audio.isExporting
                 return
             }
 
             downloader.errorMessage = nil
-            youtubeLink = sourceURL.absoluteString
-
-            if downloader.isDownloading {
-                pendingDeepLink = youtubeLink
-            } else {
-                pendingDeepLink = nil
-                startDownload()
-            }
+            youtubeLink = receivedLink
+            isLinkFieldFocused = !downloader.isDownloading && !audio.isExporting
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
-        .onChange(of: downloader.isDownloading) { _, downloading in
-            guard !downloading, let link = pendingDeepLink else { return }
-            pendingDeepLink = nil
-            youtubeLink = link
-            startDownload()
-        }
         // Áudio muda instantaneamente enquanto o dedo arrasta
-        .onChange(of: speed) { _, value in
-            audio.setSpeed(value)
+        .onChange(of: speed) { _, _ in
             applyPitch()
         }
         .onChange(of: keepOriginalPitch) { _, _ in applyPitch() }
@@ -129,7 +117,7 @@ struct ContentView: View {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio]) { result in
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff]) { result in
             switch result {
             case .success(let url): importFile(url)
             case .failure(let error): errorMessage = error.localizedDescription
@@ -236,7 +224,8 @@ struct ContentView: View {
                               isActive: !hasTrack && !downloader.isDownloading, blur: 10)
                 }
         }
-        .accessibilityLabel("Importar música")
+        .disabled(audio.isExporting || downloader.isDownloading)
+        .accessibilityLabel("Importar música MP3, M4A, WAV ou AIFF")
     }
 
     // MARK: - Campo do link (vidro)
@@ -289,12 +278,6 @@ struct ContentView: View {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(DS.Typography.caption)
                     .foregroundStyle(DS.Ink.error)
-                    .padding(.leading, 16)
-            }
-            if pendingDeepLink != nil {
-                Text("Link recebido. O próximo download começa ao terminar este.")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(currentTheme.accent)
                     .padding(.leading, 16)
             }
         }
@@ -393,55 +376,69 @@ struct ContentView: View {
         .onTapGesture { if !hasTrack { showImporter = true } }
     }
 
-    @ViewBuilder
     private var relatedSection: some View {
-        if relatedSourceURL != nil {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("PRÓXIMAS FAIXAS")
-                        .font(.caption.weight(.heavy))
-                        .tracking(2)
-                        .foregroundStyle(currentTheme.accent)
-                    Spacer()
-                    if isLoadingRelated {
-                        ProgressView().tint(currentTheme.accent)
-                            .accessibilityLabel("Carregando sugestões")
-                    } else {
-                        Button {
-                            relatedRequestID = UUID()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .accessibilityLabel("Atualizar sugestões")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("PRÓXIMAS FAIXAS")
+                    .font(.caption.weight(.heavy))
+                    .tracking(2)
+                    .foregroundStyle(currentTheme.accent)
+                Spacer()
+                if isLoadingRelated {
+                    ProgressView().tint(currentTheme.accent)
+                        .accessibilityLabel("Carregando sugestões")
+                } else if relatedSourceURL != nil {
+                    Button {
+                        relatedRequestID = UUID()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
                     }
+                    .accessibilityLabel("Atualizar sugestões")
                 }
+            }
 
-                if !relatedVideos.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 12) {
-                            ForEach(relatedVideos) { video in
-                                RelatedVideoCard(video: video, theme: currentTheme,
-                                                 isEnabled: !downloader.isDownloading) {
-                                    guard !downloader.isDownloading else { return }
-                                    youtubeLink = video.url.absoluteString
-                                    startDownload()
-                                }
+            if !relatedVideos.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(relatedVideos) { video in
+                            RelatedVideoCard(video: video, theme: currentTheme,
+                                             isEnabled: !downloader.isDownloading && !audio.isExporting) {
+                                guard !downloader.isDownloading, !audio.isExporting else { return }
+                                youtubeLink = video.url.absoluteString
+                                startDownload()
                             }
                         }
-                        .padding(.vertical, 4)
                     }
-                } else if isLoadingRelated {
-                    Text("Buscando músicas para continuar…")
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Ink.secondary)
-                } else {
-                    Text(downloader.relatedErrorMessage ?? "Nenhuma sugestão disponível para esta faixa.")
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Ink.secondary)
+                    .padding(.vertical, 4)
                 }
+            } else if relatedSourceURL == nil {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(.ultraThinMaterial)
+                                .overlay(Image(systemName: "music.note")
+                                    .foregroundStyle(currentTheme.accent.opacity(0.4)))
+                                .frame(width: 152, height: 120)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
+                Text("Baixe uma música do YouTube para carregar as próximas faixas.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Ink.secondary)
+            } else if isLoadingRelated {
+                Text("Buscando músicas para continuar…")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Ink.secondary)
+            } else {
+                Text(downloader.relatedErrorMessage ?? "Nenhuma sugestão disponível para esta faixa.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Ink.secondary)
             }
         }
     }
+
 
     private var durationText: String {
         let seconds = Int(audio.duration / Double(speed))
@@ -554,6 +551,15 @@ struct ContentView: View {
                 ForEach(ExportFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) }
             }
             .pickerStyle(.segmented)
+            .disabled(audio.isExporting)
+
+            Text(exportFormat.qualityDescription)
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Ink.secondary)
+
+            Text("Entrada: MP3, M4A, WAV e AIFF")
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Ink.tertiary)
 
             Button(action: export) {
                 ZStack(alignment: .leading) {
@@ -595,12 +601,12 @@ struct ContentView: View {
     // MARK: - Ações
 
     private func applyPitch() {
-        audio.setPitch(computedPitch)
+        audio.setPlayback(speed: speed, keepOriginalPitch: keepOriginalPitch)
     }
 
     /// Ponte rede → DSP: baixa o .m4a e injeta no mesmo motor de áudio que a tela usa.
     private func startDownload() {
-        guard !downloader.isDownloading else { return }
+        guard !downloader.isDownloading, !audio.isExporting else { return }
         let sourceURL = trimmedLink
         guard DownloadManager.looksLikeYouTube(sourceURL) else {
             downloader.errorMessage = "Cole o link de um vídeo do YouTube."
@@ -613,46 +619,13 @@ struct ContentView: View {
                 try audio.load(url: localURL)
                 coverURL = downloadedCoverURL
                 applyPitch()
-                youtubeLink = ""
+                if youtubeLink == sourceURL { youtubeLink = "" }
                 relatedSourceURL = sourceURL
                 relatedRequestID = UUID()
             } catch {
                 errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
             }
         }
-    }
-
-    private func validatedYouTubeURL(_ raw: String) -> URL? {
-        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Decodifica se vier codificado em percentagem
-        if let decoded = value.removingPercentEncoding {
-            value = decoded
-        }
-
-        // Garante protocolo
-        if !value.contains("://") {
-            value = "https://" + value
-        }
-
-        // Extrai o Video ID de forma infalível por Regex, ignorando parâmetros malucos
-        // Isto apanha qualquer link do YouTube (shorts, youtu.be, watch?v=, etc.)
-        let pattern = "(?:v=|/|shorts/|embed/)([A-Za-z0-9_-]{11})"
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
-              let range = Range(match.range(at: 1), in: value) else {
-            return nil
-        }
-
-        let videoID = String(value[range])
-
-        // Reconstrói sempre um link limpo e canónico do YouTube para o motor baixar
-        var canonical = URLComponents()
-        canonical.scheme = "https"
-        canonical.host = "www.youtube.com"
-        canonical.path = "/watch"
-        canonical.queryItems = [URLQueryItem(name: "v", value: videoID)]
-        return canonical.url
     }
 
     private func resetRelatedVideos() {
@@ -691,11 +664,15 @@ struct ContentView: View {
 
         do {
             // Copia para o sandbox para não depender do acesso de segurança depois.
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent(url.lastPathComponent)
-            try? FileManager.default.removeItem(at: destination)
+            let folder = FileManager.default.temporaryDirectory
+                .appendingPathComponent("nightcore_import_\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var imported = false
+            defer { if !imported { try? FileManager.default.removeItem(at: folder) } }
+            let destination = folder.appendingPathComponent(url.lastPathComponent)
             try FileManager.default.copyItem(at: url, to: destination)
             try audio.load(url: destination)
+            imported = true
             coverURL = nil
             resetRelatedVideos()
             applyPitch()
@@ -999,4 +976,5 @@ struct ShareSheet: UIViewControllerRepresentable {
 #Preview {
     ContentView()
 }
+
 

@@ -401,6 +401,7 @@ def _extract_with(url: str, work_dir: str, label: str,
         ydl_opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "m4a",
+            "preferredquality": "320",  # kb/s quando houver conversão; AAC/m4a nativo é preservado
         }]
     if use_cookies:
         ydl_opts["cookiefile"] = _prepare_cookies(work_dir)
@@ -472,4 +473,5 @@ def _safe_filename(title: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", title)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return (cleaned or "audio")[:120]
+
 

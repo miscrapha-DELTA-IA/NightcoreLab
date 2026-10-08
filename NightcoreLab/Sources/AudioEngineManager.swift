@@ -9,24 +9,34 @@ import UniformTypeIdentifiers
 enum ExportFormat: String, CaseIterable, Identifiable, Sendable {
     case m4a, wav
     var id: String { rawValue }
+    var qualityDescription: String {
+        switch self {
+        case .m4a: return "AAC · 320 kb/s · arquivo compacto"
+        case .wav: return "WAV · PCM 24-bit · sem compressão com perdas"
+        }
+    }
 }
 
 enum AudioEngineError: LocalizedError {
     case noFileLoaded
     case bufferAllocationFailed
     case renderFailed
+    case unsupportedAudio
+    case exportInProgress
 
     var errorDescription: String? {
         switch self {
         case .noFileLoaded:            return "Nenhuma música carregada."
         case .bufferAllocationFailed:  return "Não foi possível alocar o buffer de áudio."
         case .renderFailed:            return "Falha ao renderizar o áudio."
+        case .unsupportedAudio:        return "Áudio inválido ou não suportado. Importe MP3, M4A, WAV ou AIFF."
+        case .exportInProgress:        return "Aguarde a exportação atual terminar."
         }
     }
 }
 
 /// Snapshot dos parâmetros usados no export offline (Sendable para cruzar threads).
-private struct RenderSettings: Sendable {
+struct RenderSettings: Sendable {
     let speed: Float
     let pitch: Float
     let reverb: Float
@@ -47,13 +57,12 @@ final class AudioEngineManager {
     static let bassRange: ClosedRange<Float>   = 0...12   // ganho do low shelf em dB
 
     // Pipeline de masterização
-    static let bassFrequency: Float = 200.0                // Hz (corpo da batida, igual à extensão)
+    static let bassFrequency: Float = 120.0                // reforço de graves sem invadir tanto os médios
     static let bassBandwidth: Float = 1.0                  // oitavas
     static let defaultReverbPreset: AVAudioUnitReverbPreset = .mediumHall   // decay mais próximo dos 2 s da extensão
-    static let limiterThreshold: Float = -0.5              // dB: margem contra inter-sample peaks no encoder AAC
-    static let limiterHeadroom: Float = 0.1                // dB (joelho duro → limiter)
-    static let limiterAttack: Float = 0.001                // s
-    static let limiterRelease: Float = 0.05                // s
+    static let outputHeadroomDB: Float = -1.5              // margem de saída; não é medição true-peak
+    static let limiterAttack: Float = 0.003                // s
+    static let limiterRelease: Float = 0.08                // s
     /// Sobreposição do algoritmo de time-stretch (3…32, padrão 8). Mais alto = menos
     /// artefatos metálicos ao acelerar/desacelerar, com um pouco mais de CPU.
     static let timePitchOverlap: Float = 16
@@ -71,17 +80,18 @@ final class AudioEngineManager {
     private(set) var bass: Float = 0
 
     // Grafo de áudio (masterização):
-    // player → upmix (estéreo) → timePitch → EQ low shelf → reverb medium hall → limiter → mainMixer → saída
+    // player → upmix → varispeed → timePitch (só quando necessário) → EQ → reverb → limiter → saída
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let upmix = AVAudioMixerNode()
+    private let varispeed = AVAudioUnitVarispeed()
     private let timePitch = AudioEngineManager.makeTimePitch()
     private let bassEQ = AudioEngineManager.makeBassEQ()
     private let reverbNode = AudioEngineManager.makeReverb()
     private let limiter = AudioEngineManager.makeLimiter()
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
-    private var processingNodes: [AVAudioNode] { [player, upmix, timePitch, bassEQ, reverbNode, limiter] }
+    private var processingNodes: [AVAudioNode] { [player, upmix, varispeed, timePitch, bassEQ, reverbNode, limiter] }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
@@ -104,8 +114,7 @@ final class AudioEngineManager {
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
 
-        timePitch.rate = speed
-        timePitch.pitch = pitch
+        Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
         bassEQ.bands[0].gain = bass
         reverbNode.wetDryMix = reverb
     }
@@ -113,9 +122,13 @@ final class AudioEngineManager {
     // MARK: Carregar arquivo
 
     func load(url: URL) throws {
+        // Core Audio decodifica MP3/AAC para PCM float; não há conversão com perdas na importação.
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        guard file.length > 0, file.processingFormat.sampleRate > 0,
+              (1...2).contains(file.processingFormat.channelCount) else {
+            throw AudioEngineError.unsupportedAudio
+        }
         stopPlayback()
-
-        let file = try AVAudioFile(forReading: url)
         audioFile = file
         sourceURL = url
         fileName = url.deletingPathExtension().lastPathComponent
@@ -127,7 +140,7 @@ final class AudioEngineManager {
         let graphFormat = AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate,
                                         channels: 2)!
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
-                          timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
+                          varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
                           fileFormat: file.processingFormat, graphFormat: graphFormat)
         engine.prepare()
         needsScheduling = true
@@ -164,25 +177,35 @@ final class AudioEngineManager {
 
     func setSpeed(_ value: Float) {
         speed = value.clamped(to: Self.speedRange)
-        timePitch.rate = speed
+        Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
         setupNowPlaying()   // a barra de progresso da tela de bloqueio acompanha a nova velocidade
     }
 
     func setPitch(_ value: Float) {
         pitch = value.clamped(to: Self.pitchRange)
-        timePitch.pitch = pitch
+        Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
+    }
+
+    /// Atualiza velocidade e tom juntos, sem passar por um estado intermediário audível.
+    func setPlayback(speed value: Float, keepOriginalPitch: Bool) {
+        speed = value.clamped(to: Self.speedRange)
+        pitch = keepOriginalPitch ? 0 : 1200 * log2(speed)
+        Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
+        setupNowPlaying()
     }
 
     func setReverb(_ value: Float) {
         reverb = value.clamped(to: Self.reverbRange)
         reverbNode.wetDryMix = reverb
+        reverbNode.bypass = reverb == 0
     }
 
-    /// Ganho do low shelf em 200 Hz, de 0 a 12 dB. Só o ganho muda; tipo, frequência
-    /// e largura ficam fixos. Sem redução manual de volume: o limiter segura os picos em -0.5 dBFS.
+    /// Ganho do low shelf em 120 Hz, de 0 a 12 dB. Só o ganho muda; tipo, frequência
+    /// e largura ficam fixos. A compensação evita empurrar todo o reforço para o limiter.
     func setBass(_ value: Float) {
         bass = value.clamped(to: Self.bassRange)
         bassEQ.bands[0].gain = bass
+        bassEQ.globalGain = -bass
     }
 
     // MARK: Export offline
@@ -191,6 +214,7 @@ final class AudioEngineManager {
     /// e devolve a URL do arquivo no diretório temporário.
     func exportAudio(format: ExportFormat = .m4a) async throws -> URL {
         guard let sourceURL else { throw AudioEngineError.noFileLoaded }
+        guard !isExporting else { throw AudioEngineError.exportInProgress }
 
         isExporting = true
         exportProgress = 0
@@ -353,12 +377,17 @@ final class AudioEngineManager {
 
         guard let files = try? fileManager.contentsOfDirectory(
             at: tempDir,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return }
 
         var freedBytes: Int64 = 0
         for url in files {
+            if url.lastPathComponent.hasPrefix("nightcore_import_"),
+               (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                try? fileManager.removeItem(at: url)
+                continue
+            }
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   let type = UTType(filenameExtension: url.pathExtension),
                   type.conforms(to: .audio) else { continue }
@@ -381,6 +410,7 @@ final class AudioEngineManager {
     nonisolated private static func connectGraph(engine: AVAudioEngine,
                                                  player: AVAudioPlayerNode,
                                                  upmix: AVAudioMixerNode,
+                                                 varispeed: AVAudioUnitVarispeed,
                                                  timePitch: AVAudioUnitTimePitch,
                                                  eq: AVAudioUnitEQ,
                                                  reverb: AVAudioUnitReverb,
@@ -389,12 +419,30 @@ final class AudioEngineManager {
                                                  graphFormat: AVAudioFormat) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
         engine.connect(player, to: upmix, format: fileFormat)
-        engine.connect(upmix, to: timePitch, format: graphFormat)
+        engine.connect(upmix, to: varispeed, format: graphFormat)
+        engine.connect(varispeed, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
         engine.connect(eq, to: reverb, format: graphFormat)
         // Limiter por último: segura os picos somados de graves + cauda do reverb.
         engine.connect(reverb, to: limiter, format: graphFormat)
         engine.connect(limiter, to: engine.mainMixerNode, format: graphFormat)
+        engine.mainMixerNode.outputVolume = pow(10, outputHeadroomDB / 20)
+    }
+
+    nonisolated static func playbackRates(speed: Float, pitch: Float) -> (tape: Float, stretch: Float) {
+        let tape = pow(2, pitch / 1200)
+        return (tape, speed / tape)
+    }
+
+    nonisolated private static func configurePlayback(varispeed: AVAudioUnitVarispeed,
+                                                       timePitch: AVAudioUnitTimePitch,
+                                                       speed: Float, pitch: Float) {
+        let rates = playbackRates(speed: speed, pitch: pitch)
+        varispeed.rate = rates.tape
+        timePitch.pitch = 0
+        timePitch.rate = rates.stretch
+        // No efeito de fita, não submete transientes e agudos ao algoritmo de time-stretch.
+        timePitch.bypass = abs(rates.stretch - 1) < 0.0001
     }
 
     // MARK: - Fábricas dos nós (usadas pela engine ao vivo e pela offline,
@@ -408,7 +456,7 @@ final class AudioEngineManager {
 
     nonisolated private static func makeBassEQ() -> AVAudioUnitEQ {
         let eq = AVAudioUnitEQ(numberOfBands: 1)
-        eq.globalGain = 0                       // sem compensação manual: quem protege é o limiter
+        eq.globalGain = 0
         let band = eq.bands[0]
         band.filterType = .lowShelf
         band.frequency = bassFrequency
@@ -422,15 +470,15 @@ final class AudioEngineManager {
         let reverb = AVAudioUnitReverb()
         reverb.loadFactoryPreset(defaultReverbPreset)   // preset antes de qualquer wetDryMix
         reverb.wetDryMix = 0
+        reverb.bypass = true
         return reverb
     }
 
-    /// Brickwall de proteção usando o AUDynamicsProcessor da Apple:
-    /// threshold -0.5 dB com headroom de 0.1 dB: limiter de joelho duro, sem compressão abaixo do teto.
+    /// Peak limiter dedicado. A margem final é aplicada no mixer após a limitação.
     nonisolated private static func makeLimiter() -> AVAudioUnitEffect {
         let description = AudioComponentDescription(
             componentType: kAudioUnitType_Effect,
-            componentSubType: kAudioUnitSubType_DynamicsProcessor,
+            componentSubType: kAudioUnitSubType_PeakLimiter,
             componentManufacturer: kAudioUnitManufacturer_Apple,
             componentFlags: 0,
             componentFlagsMask: 0
@@ -442,41 +490,46 @@ final class AudioEngineManager {
         func set<P: BinaryInteger>(_ parameter: P, _ value: AudioUnitParameterValue) {
             AudioUnitSetParameter(unit, AudioUnitParameterID(parameter), kAudioUnitScope_Global, 0, value, 0)
         }
-        set(kDynamicsProcessorParam_Threshold, limiterThreshold)
-        set(kDynamicsProcessorParam_HeadRoom, limiterHeadroom)
-        set(kDynamicsProcessorParam_AttackTime, limiterAttack)
-        set(kDynamicsProcessorParam_ReleaseTime, limiterRelease)
-        set(kDynamicsProcessorParam_ExpansionRatio, 1)   // expander desligado: só limitação
+        set(kLimiterParam_AttackTime, limiterAttack)
+        set(kLimiterParam_DecayTime, limiterRelease)
+        set(kLimiterParam_PreGain, 0)
         return limiter
     }
 
-    nonisolated private static func renderOffline(source: URL,
+    nonisolated static func renderOffline(source: URL,
                                                   settings: RenderSettings,
                                                   format: ExportFormat,
                                                   progress: @Sendable (Double) -> Void) throws -> URL {
-        let file = try AVAudioFile(forReading: source)
+        let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let sourceRate = file.processingFormat.sampleRate
-        // AAC suporta no máximo 48 kHz.
-        let outputRate = format == .m4a ? min(sourceRate, 48_000) : sourceRate
+        guard file.length > 0, sourceRate > 0, (1...2).contains(file.processingFormat.channelCount),
+              speedRange.contains(settings.speed), pitchRange.contains(settings.pitch),
+              reverbRange.contains(settings.reverb), bassRange.contains(settings.bass) else {
+            throw AudioEngineError.unsupportedAudio
+        }
+        // AAC em taxas convencionais; WAV mantém a taxa original.
+        let outputRate = format == .m4a ? (sourceRate == 44_100 ? 44_100.0 : 48_000.0) : sourceRate
 
         // Engine separada: o export não interrompe o playback.
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
         let upmix = AVAudioMixerNode()
+        let varispeed = AVAudioUnitVarispeed()
         let timePitch = makeTimePitch()
         let eq = makeBassEQ()
         let reverb = makeReverb()
         let limiter = makeLimiter()
-        [player, upmix, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
+        [player, upmix, varispeed, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
 
-        timePitch.rate = settings.speed
-        timePitch.pitch = settings.pitch
+        configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: settings.speed, pitch: settings.pitch)
         eq.bands[0].gain = settings.bass
+        eq.globalGain = -settings.bass
         reverb.loadFactoryPreset(AVAudioUnitReverbPreset(rawValue: settings.reverbPresetRaw) ?? defaultReverbPreset)
         reverb.wetDryMix = settings.reverb
+        reverb.bypass = settings.reverb == 0
 
         let renderFormat = AVAudioFormat(standardFormatWithSampleRate: outputRate, channels: 2)!
-        connectGraph(engine: engine, player: player, upmix: upmix, timePitch: timePitch, eq: eq,
+        connectGraph(engine: engine, player: player, upmix: upmix, varispeed: varispeed, timePitch: timePitch, eq: eq,
                      reverb: reverb, limiter: limiter,
                      fileFormat: file.processingFormat, graphFormat: renderFormat)
 
@@ -498,8 +551,9 @@ final class AudioEngineManager {
         let baseName = source.deletingPathExtension().lastPathComponent
         let tag = settings.speed >= 1 ? "nightcore" : "slowed"
         let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(baseName)_\(tag).\(format.rawValue)")
-        try? FileManager.default.removeItem(at: outputURL)
+            .appendingPathComponent("\(baseName)_\(tag)_\(UUID().uuidString.prefix(8)).\(format.rawValue)")
+        var completed = false
+        defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
 
         let fileSettings: [String: Any]
         switch format {
@@ -508,14 +562,16 @@ final class AudioEngineManager {
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: outputRate,
                 AVNumberOfChannelsKey: 2,
-                AVEncoderBitRateKey: 256_000
+                AVEncoderBitRateKey: 320_000,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue,
+                AVSampleRateConverterAudioQualityKey: AVAudioQuality.max.rawValue
             ]
         case .wav:
             fileSettings = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: outputRate,
                 AVNumberOfChannelsKey: 2,
-                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMBitDepthKey: 24,
                 AVLinearPCMIsFloatKey: false,
                 AVLinearPCMIsBigEndianKey: false,
                 AVLinearPCMIsNonInterleaved: false
@@ -532,13 +588,21 @@ final class AudioEngineManager {
 
         var rendered: AVAudioFramePosition = 0
         var lastReported = 0.0
+        var stalledRenders = 0
 
         while rendered < totalFrames {
+            try Task.checkCancellation()
             let remaining = totalFrames - rendered
             let framesToRender = AVAudioFrameCount(min(AVAudioFramePosition(buffer.frameCapacity), remaining))
 
             switch try engine.renderOffline(framesToRender, to: buffer) {
-            case .success:
+            case .success, .insufficientDataFromInputNode:
+                guard buffer.frameLength > 0 else {
+                    stalledRenders += 1
+                    if stalledRenders > 1000 { throw AudioEngineError.renderFailed }
+                    continue
+                }
+                stalledRenders = 0
                 try outputFile.write(from: buffer)
                 rendered += AVAudioFramePosition(buffer.frameLength)
 
@@ -547,7 +611,9 @@ final class AudioEngineManager {
                     lastReported = fraction
                     progress(fraction)
                 }
-            case .insufficientDataFromInputNode, .cannotDoInCurrentContext:
+            case .cannotDoInCurrentContext:
+                stalledRenders += 1
+                if stalledRenders > 1000 { throw AudioEngineError.renderFailed }
                 continue
             case .error:
                 throw AudioEngineError.renderFailed
@@ -556,6 +622,7 @@ final class AudioEngineManager {
             }
         }
 
+        completed = true
         return outputURL
         // outputFile é fechado ao sair do escopo, antes da URL ser usada.
     }
@@ -568,3 +635,4 @@ private extension Comparable {
         min(max(self, range.lowerBound), range.upperBound)
     }
 }
+
