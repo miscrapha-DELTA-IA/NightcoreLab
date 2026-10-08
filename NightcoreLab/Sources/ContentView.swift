@@ -20,6 +20,11 @@ struct ContentView: View {
     @State private var shareItem: ShareItem?
     @State private var errorMessage: String?
 
+    // Download por link do YouTube (via microserviço)
+    @StateObject private var downloader = DownloadManager()
+    @State private var youtubeLink = ""
+    @FocusState private var isLinkFieldFocused: Bool
+
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
     @AppStorage("isAcidTheme") private var isAcidTheme = false
     @Environment(\.openURL) private var openURL
@@ -49,6 +54,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 28) {
                     header
+                    youtubeField
                     trackCard
                     presets
 
@@ -155,6 +161,74 @@ struct ContentView: View {
             .frame(width: 40, height: 40)
             .background(Circle().fill(.white.opacity(0.08)))
             .contentTransition(.symbolEffect(.replace))
+    }
+
+    /// Campo de vidro para colar o link do YouTube, com botão de download.
+    private var youtubeField: some View {
+        let accent = isAcidTheme ? acidGreen : Color.white
+        let trimmedLink = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "link")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(accent.opacity(0.7))
+
+                TextField("", text: $youtubeLink,
+                          prompt: Text("Cole um link do YouTube").foregroundColor(.white.opacity(0.35)))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .submitLabel(.go)
+                    .foregroundStyle(.white)
+                    .tint(accent)
+                    .focused($isLinkFieldFocused)
+                    .onSubmit(startDownload)
+                    .disabled(downloader.isDownloading)
+                    .opacity(downloader.isDownloading ? 0.5 : 1)
+
+                Group {
+                    if downloader.isDownloading {
+                        ProgressView()
+                            .tint(accent)
+                    } else {
+                        Button(action: startDownload) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 30))
+                                .foregroundStyle(accent)
+                                .shadow(color: isAcidTheme ? acidGreen.opacity(0.6) : .clear, radius: 8)
+                        }
+                        .disabled(trimmedLink.isEmpty)
+                        .opacity(trimmedLink.isEmpty ? 0.35 : 1)
+                        .accessibilityLabel("Baixar áudio do link")
+                    }
+                }
+                .frame(width: 36, height: 36)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 6)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(.ultraThinMaterial))
+            .overlay(Capsule().stroke(accent.opacity(isLinkFieldFocused ? 0.8 : 0.22), lineWidth: 1))
+            .shadow(color: accent.opacity(isLinkFieldFocused && isAcidTheme ? 0.35 : 0), radius: 14)
+
+            if downloader.isDownloading {
+                Text(downloader.downloadProgress > 0
+                     ? "Baixando… \(Int(downloader.downloadProgress * 100))%"
+                     : "Extraindo o áudio no servidor…")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(.leading, 16)
+                    .contentTransition(.numericText())
+            } else if let message = downloader.errorMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red.opacity(0.85))
+                    .padding(.leading, 16)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: downloader.isDownloading)
+        .animation(.easeInOut(duration: 0.2), value: isLinkFieldFocused)
     }
 
     /// Mesmo conjunto de sliders nos dois modos. O AnyLayout troca só o arranjo,
@@ -310,6 +384,20 @@ struct ContentView: View {
 
     private func applyPitch() {
         audio.setPitch(computedPitch)
+    }
+
+    /// Ponte rede → DSP: baixa o .m4a e injeta no mesmo motor de áudio que a tela usa.
+    private func startDownload() {
+        isLinkFieldFocused = false
+        downloader.downloadAudio(youtubeURL: youtubeLink) { localURL in
+            do {
+                try audio.load(url: localURL)
+                applyPitch()
+                youtubeLink = ""
+            } catch {
+                errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func importFile(_ url: URL) {

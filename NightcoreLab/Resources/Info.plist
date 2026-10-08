@@ -58,6 +58,16 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 
+	<!-- Permite HTTP sem TLS só na rede local (testar o microserviço pelo IP do PC).
+	     Conexões com a internet continuam exigindo HTTPS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>O Nightcore Lab acessa a rede local para baixar áudio do servidor de extração no seu computador.</string>
+
 	<!-- Sem criptografia própria: pula a pergunta de export compliance a cada build -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
