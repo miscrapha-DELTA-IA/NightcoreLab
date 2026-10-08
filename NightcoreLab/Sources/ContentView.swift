@@ -625,56 +625,28 @@ struct ContentView: View {
     private func validatedYouTubeURL(_ raw: String) -> URL? {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Compatibilidade com Atalhos que codificam o valor duas vezes.
-        if value.lowercased().hasPrefix("https%3a%2f%2f"),
-           let decoded = value.removingPercentEncoding {
+        // Decodifica se vier codificado em percentagem
+        if let decoded = value.removingPercentEncoding {
             value = decoded
         }
 
+        // Garante protocolo
         if !value.contains("://") {
             value = "https://" + value
         }
 
-        guard let components = URLComponents(string: value),
-              let scheme = components.scheme?.lowercased(),
-              ["http", "https"].contains(scheme),
-              let host = components.host?.lowercased(),
-              [
-                  "youtu.be",
-                  "youtube.com",
-                  "www.youtube.com",
-                  "m.youtube.com",
-                  "music.youtube.com"
-              ].contains(host),
-              components.user == nil,
-              components.password == nil,
-              components.port == nil || components.port == 443 || components.port == 80
-        else { return nil }
-
-        let path = components.path.split(separator: "/").map(String.init)
-        let videoID: String?
-
-        if host == "youtu.be", path.count == 1 {
-            videoID = path[0]
-        } else if path == ["watch"] {
-            videoID = components.queryItems?
-                .first(where: { $0.name == "v" })?.value
-        } else if path.count == 2,
-                  ["shorts", "live", "embed"].contains(path[0]) {
-            videoID = path[1]
-        } else {
-            videoID = nil
+        // Extrai o Video ID de forma infalível por Regex, ignorando parâmetros malucos
+        // Isto apanha qualquer link do YouTube (shorts, youtu.be, watch?v=, etc.)
+        let pattern = "(?:v=|/|shorts/|embed/)([A-Za-z0-9_-]{11})"
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+              let range = Range(match.range(at: 1), in: value) else {
+            return nil
         }
 
-        guard let videoID,
-              videoID.count == 11,
-              videoID.range(
-                  of: "^[A-Za-z0-9_-]{11}$",
-                  options: .regularExpression
-              ) != nil
-        else { return nil }
+        let videoID = String(value[range])
 
-        // Reconstrói o link sem parâmetros de rastreio, como ?si=...
+        // Reconstrói sempre um link limpo e canónico do YouTube para o motor baixar
         var canonical = URLComponents()
         canonical.scheme = "https"
         canonical.host = "www.youtube.com"
