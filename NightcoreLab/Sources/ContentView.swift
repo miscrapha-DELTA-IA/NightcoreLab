@@ -18,6 +18,7 @@ struct ContentView: View {
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = DownloadManager()
     @State private var youtubeLink = ""
+    @State private var coverURL: URL?
     @FocusState private var isLinkFieldFocused: Bool
     @State private var showServerSettings = false
 
@@ -506,9 +507,10 @@ struct ContentView: View {
     /// Ponte rede → DSP: baixa o .m4a e injeta no mesmo motor de áudio que a tela usa.
     private func startDownload() {
         isLinkFieldFocused = false
-        downloader.downloadAudio(youtubeURL: youtubeLink) { localURL in
+        downloader.downloadAudio(youtubeURL: youtubeLink) { localURL, downloadedCoverURL in
             do {
                 try audio.load(url: localURL)
+                coverURL = downloadedCoverURL
                 applyPitch()
                 youtubeLink = ""
                 audio.play()   // baixou → já toca, com os ajustes atuais
@@ -540,6 +542,7 @@ struct ContentView: View {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.copyItem(at: url, to: destination)
             try audio.load(url: destination)
+            coverURL = nil
             applyPitch()
         } catch {
             TelemetryManager.shared.log(.importFailed)

@@ -43,8 +43,8 @@ final class DownloadManager: ObservableObject {
     // MARK: API pública
 
     /// Baixa o áudio do link e, em caso de sucesso, chama `onReady` na main thread
-    /// com a URL local do .m4a, pronta para `AudioEngineManager.load(url:)`.
-    func downloadAudio(youtubeURL: String, onReady: @escaping (URL) -> Void) {
+    /// com a URL local do .m4a e a URL opcional da capa enviada pelo servidor.
+    func downloadAudio(youtubeURL: String, onReady: @escaping (URL, URL?) -> Void) {
         let link = youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isDownloading else { return }
 
@@ -124,7 +124,7 @@ final class DownloadManager: ObservableObject {
 
     // MARK: Privado
 
-    private func start(_ request: URLRequest, attempt: Int, onReady: @escaping (URL) -> Void) {
+    private func start(_ request: URLRequest, attempt: Int, onReady: @escaping (URL, URL?) -> Void) {
         let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
             // Fila de background. O arquivo temporário é apagado pelo sistema assim que
             // este bloco retorna, então ele precisa ser movido aqui, de forma síncrona.
@@ -144,10 +144,10 @@ final class DownloadManager: ObservableObject {
         task.resume()
     }
 
-    private func finish(_ result: Result<URL, DownloadFailure>,
+    private func finish(_ result: Result<(URL, URL?), DownloadFailure>,
                         request: URLRequest,
                         attempt: Int,
-                        onReady: @escaping (URL) -> Void) {
+                        onReady: @escaping (URL, URL?) -> Void) {
         progressObservation = nil
         task = nil
 
@@ -163,9 +163,9 @@ final class DownloadManager: ObservableObject {
         isRetrying = false
 
         switch result {
-        case .success(let url):
+        case .success(let data):
             downloadProgress = 1
-            onReady(url)
+            onReady(data.0, data.1)
         case .failure(.cancelled):
             downloadProgress = 0
         case .failure(.retryable(let message)), .failure(.message(let message)):
@@ -176,7 +176,7 @@ final class DownloadManager: ObservableObject {
 
     nonisolated private static func handleResponse(tempURL: URL?,
                                                    response: URLResponse?,
-                                                   error: Error?) -> Result<URL, DownloadFailure> {
+                                                   error: Error?) -> Result<(URL, URL?), DownloadFailure> {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .cancelled:
@@ -224,7 +224,10 @@ final class DownloadManager: ObservableObject {
             // Nome vem do Content-Disposition (título do vídeo), aparece no app e na Tela de Bloqueio.
             let destination = downloadsFolder.appendingPathComponent(fileName(from: http))
             try fileManager.moveItem(at: tempURL, to: destination)
-            return .success(destination)
+            // Nomes de cabeçalhos HTTP não diferenciam maiúsculas de minúsculas.
+            let coverString = http.value(forHTTPHeaderField: "X-Cover-Url")
+            let coverURL = coverString.flatMap { URL(string: $0) }
+            return .success((destination, coverURL))
         } catch {
             return .failure(.message("Não foi possível salvar o áudio: \(error.localizedDescription)"))
         }
