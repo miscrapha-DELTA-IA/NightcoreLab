@@ -68,7 +68,36 @@ struct ContentView: View {
         }
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
-        .onOpenURL(perform: handleDeepLink)
+        .onOpenURL { incomingURL in
+            guard let components = URLComponents(
+                url: incomingURL,
+                resolvingAgainstBaseURL: false
+            ),
+            components.scheme?.lowercased() == "nightcore",
+            components.host?.lowercased() == "download",
+            components.user == nil,
+            components.password == nil,
+            components.port == nil else { return }
+
+            // queryItems decodifica automaticamente o valor percent-encoded.
+            guard let rawLink = components.queryItems?
+                .first(where: { $0.name == "link" })?.value,
+                  let sourceURL = validatedYouTubeURL(rawLink) else {
+                downloader.errorMessage =
+                    "Link inválido. Use nightcore://download?link= com um vídeo do YouTube."
+                return
+            }
+
+            downloader.errorMessage = nil
+            youtubeLink = sourceURL.absoluteString
+
+            if downloader.isDownloading {
+                pendingDeepLink = youtubeLink
+            } else {
+                pendingDeepLink = nil
+                startDownload()
+            }
+        }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
         .onChange(of: downloader.isDownloading) { _, downloading in
             guard !downloading, let link = pendingDeepLink else { return }
@@ -592,19 +621,65 @@ struct ContentView: View {
         }
     }
 
-    private func handleDeepLink(_ url: URL) {
-        guard url.scheme?.lowercased() == "nightcore" else { return }
-        guard let source = DownloadManager.youtubeURL(fromDeepLink: url) else {
-            downloader.errorMessage = "Link inválido. Use nightcore://download?link= com um vídeo do YouTube."
-            return
+    private func validatedYouTubeURL(_ raw: String) -> URL? {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Compatibilidade com Atalhos que codificam o valor duas vezes.
+        if value.lowercased().hasPrefix("https%3a%2f%2f"),
+           let decoded = value.removingPercentEncoding {
+            value = decoded
         }
-        youtubeLink = source.absoluteString
-        if downloader.isDownloading {
-            // Mantém só o link mais recente, sem interromper a transferência atual.
-            pendingDeepLink = source.absoluteString
+
+        if !value.contains("://") {
+            value = "https://" + value
+        }
+
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              let host = components.host?.lowercased(),
+              [
+                  "youtu.be",
+                  "youtube.com",
+                  "www.youtube.com",
+                  "m.youtube.com",
+                  "music.youtube.com"
+              ].contains(host),
+              components.user == nil,
+              components.password == nil,
+              components.port == nil || components.port == 443 || components.port == 80
+        else { return nil }
+
+        let path = components.path.split(separator: "/").map(String.init)
+        let videoID: String?
+
+        if host == "youtu.be", path.count == 1 {
+            videoID = path[0]
+        } else if path == ["watch"] {
+            videoID = components.queryItems?
+                .first(where: { $0.name == "v" })?.value
+        } else if path.count == 2,
+                  ["shorts", "live", "embed"].contains(path[0]) {
+            videoID = path[1]
         } else {
-            startDownload()
+            videoID = nil
         }
+
+        guard let videoID,
+              videoID.count == 11,
+              videoID.range(
+                  of: "^[A-Za-z0-9_-]{11}$",
+                  options: .regularExpression
+              ) != nil
+        else { return nil }
+
+        // Reconstrói o link sem parâmetros de rastreio, como ?si=...
+        var canonical = URLComponents()
+        canonical.scheme = "https"
+        canonical.host = "www.youtube.com"
+        canonical.path = "/watch"
+        canonical.queryItems = [URLQueryItem(name: "v", value: videoID)]
+        return canonical.url
     }
 
     private func resetRelatedVideos() {
