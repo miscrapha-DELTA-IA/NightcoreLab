@@ -8,7 +8,7 @@ final class DownloadManager: ObservableObject {
 
     /// Endereço do microserviço (sem barra no final).
     /// Teste na rede local: use o IP do PC, ex. "http://192.168.0.10:8000".
-    static var apiBaseURL = "https://SEU-SERVICO.onrender.com"
+    static var apiBaseURL = "https://nightcorelab.onrender.com"
 
     /// Generoso de propósito: cold start do Render (~50 s) + extração do yt-dlp no servidor.
     private static let requestTimeout: TimeInterval = 180
