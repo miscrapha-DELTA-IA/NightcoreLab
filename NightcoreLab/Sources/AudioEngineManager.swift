@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import MediaPlayer
 import Observation
 import UniformTypeIdentifiers
@@ -44,8 +45,18 @@ final class AudioEngineManager {
     static let pitchRange: ClosedRange<Float>  = -1200...1200
     static let reverbRange: ClosedRange<Float> = 0...50   // wet/dry em %
     static let bassRange: ClosedRange<Float>   = 0...12   // ganho do low shelf em dB
-    static let bassFrequency: Float = 100.0
-    static let defaultReverbPreset: AVAudioUnitReverbPreset = .largeHall
+
+    // Pipeline de masterização
+    static let bassFrequency: Float = 120.0                // Hz
+    static let bassBandwidth: Float = 1.0                  // oitavas
+    static let defaultReverbPreset: AVAudioUnitReverbPreset = .plate   // placa clássica de estúdio
+    static let limiterThreshold: Float = -0.5              // dB
+    static let limiterHeadroom: Float = 0.1                // dB (joelho duro → limiter)
+    static let limiterAttack: Float = 0.001                // s
+    static let limiterRelease: Float = 0.05                // s
+    /// Sobreposição do algoritmo de time-stretch (3…32, padrão 8). Mais alto = menos
+    /// artefatos metálicos ao acelerar/desacelerar, com um pouco mais de CPU.
+    static let timePitchOverlap: Float = 16
 
     // Estado observável pela UI
     private(set) var isPlaying = false
@@ -59,13 +70,18 @@ final class AudioEngineManager {
     private(set) var reverb: Float = 0
     private(set) var bass: Float = 0
 
-    // Grafo de áudio:  player → upmix (estéreo) → timePitch → EQ (graves) → reverb → mainMixer → saída
+    // Grafo de áudio (masterização):
+    // player → upmix (estéreo) → timePitch → EQ low shelf → reverb plate → limiter → mainMixer → saída
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let upmix = AVAudioMixerNode()
-    private let timePitch = AVAudioUnitTimePitch()
-    private let bassEQ = AVAudioUnitEQ(numberOfBands: 1)
-    private let reverbNode = AVAudioUnitReverb()
+    private let timePitch = AudioEngineManager.makeTimePitch()
+    private let bassEQ = AudioEngineManager.makeBassEQ()
+    private let reverbNode = AudioEngineManager.makeReverb()
+    private let limiter = AudioEngineManager.makeLimiter()
+
+    /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
+    private var processingNodes: [AVAudioNode] { [player, upmix, timePitch, bassEQ, reverbNode, limiter] }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
@@ -78,17 +94,20 @@ final class AudioEngineManager {
     init() {
         clearTempAudioFiles()
         configureSession()
+        setupEngine()
+        observeInterruptions()
+        setupRemoteTransportControls()
+    }
 
-        [player, upmix, timePitch, bassEQ, reverbNode].forEach { engine.attach($0) }
+    /// Anexa a cadeia de masterização e aplica os valores iniciais dos controles.
+    /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
+    private func setupEngine() {
+        processingNodes.forEach { engine.attach($0) }
 
         timePitch.rate = speed
         timePitch.pitch = pitch
-        Self.configureBassEQ(bassEQ, gain: bass)
-        reverbNode.loadFactoryPreset(Self.defaultReverbPreset)
+        bassEQ.bands[0].gain = bass
         reverbNode.wetDryMix = reverb
-
-        observeInterruptions()
-        setupRemoteTransportControls()
     }
 
     // MARK: Carregar arquivo
@@ -103,12 +122,12 @@ final class AudioEngineManager {
         duration = Double(file.length) / file.processingFormat.sampleRate
 
         engine.stop()
-        [player, upmix, timePitch, bassEQ, reverbNode].forEach { engine.disconnectNodeOutput($0) }
+        processingNodes.forEach { engine.disconnectNodeOutput($0) }
 
         let graphFormat = AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate,
                                         channels: 2)!
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
-                          timePitch: timePitch, eq: bassEQ, reverb: reverbNode,
+                          timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
                           fileFormat: file.processingFormat, graphFormat: graphFormat)
         engine.prepare()
         needsScheduling = true
@@ -159,10 +178,11 @@ final class AudioEngineManager {
         reverbNode.wetDryMix = reverb
     }
 
-    /// Ganho da banda de graves (low shelf em 100 Hz), de 0 a 24 dB.
+    /// Ganho do low shelf em 120 Hz, de 0 a 12 dB. Só o ganho muda; tipo, frequência
+    /// e largura ficam fixos. Picos acima de -0.5 dBFS são segurados pelo limiter.
     func setBass(_ value: Float) {
         bass = value.clamped(to: Self.bassRange)
-        Self.configureBassEQ(bassEQ, gain: bass)
+        bassEQ.bands[0].gain = bass
     }
 
     // MARK: Export offline
@@ -364,6 +384,7 @@ final class AudioEngineManager {
                                                  timePitch: AVAudioUnitTimePitch,
                                                  eq: AVAudioUnitEQ,
                                                  reverb: AVAudioUnitReverb,
+                                                 limiter: AVAudioUnitEffect,
                                                  fileFormat: AVAudioFormat,
                                                  graphFormat: AVAudioFormat) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
@@ -371,19 +392,62 @@ final class AudioEngineManager {
         engine.connect(upmix, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
         engine.connect(eq, to: reverb, format: graphFormat)
-        engine.connect(reverb, to: engine.mainMixerNode, format: graphFormat)
+        // Limiter por último: segura os picos somados de graves + cauda do reverb.
+        engine.connect(reverb, to: limiter, format: graphFormat)
+        engine.connect(limiter, to: engine.mainMixerNode, format: graphFormat)
     }
 
-    /// Usado pela engine ao vivo e pela offline, garantindo que o export soe igual ao preview.
-    nonisolated private static func configureBassEQ(_ eq: AVAudioUnitEQ, gain: Float) {
+    // MARK: - Fábricas dos nós (usadas pela engine ao vivo e pela offline,
+    // garantindo que o export soe idêntico ao preview)
+
+    nonisolated private static func makeTimePitch() -> AVAudioUnitTimePitch {
+        let node = AVAudioUnitTimePitch()
+        node.overlap = timePitchOverlap
+        return node
+    }
+
+    nonisolated private static func makeBassEQ() -> AVAudioUnitEQ {
+        let eq = AVAudioUnitEQ(numberOfBands: 1)
+        eq.globalGain = 0                       // sem compensação manual: quem protege é o limiter
         let band = eq.bands[0]
         band.filterType = .lowShelf
         band.frequency = bassFrequency
-        band.gain = gain
+        band.bandwidth = bassBandwidth
+        band.gain = 0
         band.bypass = false
-        // Compensação de headroom: um shelf de +24 dB satura facilmente a saída.
-        // Reduzir o volume geral pela metade do boost evita clipping no fone e no arquivo exportado.
-        eq.globalGain = -gain / 2
+        return eq
+    }
+
+    nonisolated private static func makeReverb() -> AVAudioUnitReverb {
+        let reverb = AVAudioUnitReverb()
+        reverb.loadFactoryPreset(defaultReverbPreset)   // preset antes de qualquer wetDryMix
+        reverb.wetDryMix = 0
+        return reverb
+    }
+
+    /// Brickwall de proteção usando o AUDynamicsProcessor da Apple:
+    /// threshold -0.5 dB com headroom de 0.1 dB faz o compressor agir como limiter.
+    nonisolated private static func makeLimiter() -> AVAudioUnitEffect {
+        let description = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: kAudioUnitSubType_DynamicsProcessor,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        let limiter = AVAudioUnitEffect(audioComponentDescription: description)
+        let unit = limiter.audioUnit
+
+        // Genérico: conforme o SDK, as constantes chegam como Int ou AudioUnitParameterID.
+        func set<P: BinaryInteger>(_ parameter: P, _ value: AudioUnitParameterValue) {
+            AudioUnitSetParameter(unit, AudioUnitParameterID(parameter), kAudioUnitScope_Global, 0, value, 0)
+        }
+        set(kDynamicsProcessorParam_Threshold, limiterThreshold)
+        set(kDynamicsProcessorParam_HeadRoom, limiterHeadroom)
+        set(kDynamicsProcessorParam_AttackTime, limiterAttack)
+        set(kDynamicsProcessorParam_ReleaseTime, limiterRelease)
+        set(kDynamicsProcessorParam_ExpansionRatio, 1)   // expander desligado: só limitação
+        return limiter
     }
 
     nonisolated private static func renderOffline(source: URL,
@@ -399,20 +463,22 @@ final class AudioEngineManager {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
         let upmix = AVAudioMixerNode()
-        let timePitch = AVAudioUnitTimePitch()
-        let eq = AVAudioUnitEQ(numberOfBands: 1)
-        let reverb = AVAudioUnitReverb()
-        [player, upmix, timePitch, eq, reverb].forEach { engine.attach($0) }
+        let timePitch = makeTimePitch()
+        let eq = makeBassEQ()
+        let reverb = makeReverb()
+        let limiter = makeLimiter()
+        [player, upmix, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
 
         timePitch.rate = settings.speed
         timePitch.pitch = settings.pitch
-        configureBassEQ(eq, gain: settings.bass)
-        reverb.loadFactoryPreset(AVAudioUnitReverbPreset(rawValue: settings.reverbPresetRaw) ?? .largeHall)
+        eq.bands[0].gain = settings.bass
+        reverb.loadFactoryPreset(AVAudioUnitReverbPreset(rawValue: settings.reverbPresetRaw) ?? defaultReverbPreset)
         reverb.wetDryMix = settings.reverb
 
         let renderFormat = AVAudioFormat(standardFormatWithSampleRate: outputRate, channels: 2)!
         connectGraph(engine: engine, player: player, upmix: upmix, timePitch: timePitch, eq: eq,
-                     reverb: reverb, fileFormat: file.processingFormat, graphFormat: renderFormat)
+                     reverb: reverb, limiter: limiter,
+                     fileFormat: file.processingFormat, graphFormat: renderFormat)
 
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
         try engine.start()
