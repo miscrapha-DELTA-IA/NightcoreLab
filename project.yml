@@ -53,7 +53,7 @@ targets:
       - path: NightcoreLab/Resources/PrivacyInfo.xcprivacy
         buildPhase: resources
       # Info.plist NÃO entra aqui: ele é referenciado por INFOPLIST_FILE abaixo.
-      # Tools/AppIconView.swift fica fora do target de propósito (só gera o PNG do ícone).
+      # AppIconView.swift (mascote) faz parte do app: aparece no cabeçalho com a cor do tema.
 
     settings:
       base:

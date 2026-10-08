@@ -1,12 +1,21 @@
 import SwiftUI
 
-/// Ícone do Nightcore Lab: mascote felpudo monocromático cujo olho é um disco de vinil.
-/// 100% formas geométricas. Quadrado e opaco: o iOS aplica a máscara arredondada sozinho.
+/// Mascote do Nightcore Lab: monstro felpudo monocromático de um olho só, derretendo na base.
+/// O olho é um disco de vinil com o braço de um toca-discos apoiado nele; o pino central
+/// e a agulha acendem na cor do tema.
+///
+/// - Desenhado num canvas de 1024 × 1024 e escalado para qualquer tamanho
+///   (36 pt no cabeçalho, 1024 px para exportar o ícone).
+/// - Exportar o ícone: `ImageRenderer(content: AppIconView(theme: .acid).frame(width: 1024, height: 1024))`
+///   com `scale = 1`. Quadrado e opaco: o iOS aplica a máscara arredondada sozinho.
 struct AppIconView: View {
+    var theme: AppTheme = .acid
+    /// false = sem o quadrado preto (para usar sobre o fundo do app).
+    var showsBackground: Bool = true
+    /// true = o disco gira e as luzes pulsam (música tocando).
+    var isPlaying: Bool = false
 
-    // MARK: Paleta
-
-    private let neon = Color(red: 0.2, green: 1.0, blue: 0.0)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // MARK: Geometria (canvas de 1024 × 1024)
 
@@ -33,9 +42,29 @@ struct AppIconView: View {
     /// A agulha repousa perto da borda do disco preto, no quadrante inferior direito.
     private var stylus: CGPoint { point(on: eyeCenter, radius: eyeRadius - 24, degrees: 30) }
 
+    private var neon: Color { theme.accent }
+    private var animates: Bool { isPlaying && !reduceMotion }
+
+    // MARK: Corpo da view
+
     var body: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            artwork
+                .frame(width: canvas, height: canvas)
+                .scaleEffect(side / canvas)
+                .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var artwork: some View {
         ZStack {
-            Color.black
+            if showsBackground {
+                Color.black
+            }
 
             fur
             Circle()
@@ -51,7 +80,7 @@ struct AppIconView: View {
         .clipped()
     }
 
-    // MARK: 2. Corpo felpudo
+    // MARK: 1. Corpo felpudo
 
     /// Tufos ao redor do círculo: espinhos (polígonos curvos) intercalados com cápsulas,
     /// com tamanho e ângulo levemente irregulares para quebrar a simetria.
@@ -118,7 +147,7 @@ struct AppIconView: View {
         }
     }
 
-    // MARK: 3. Olho / vinil
+    // MARK: 2. Olho / vinil
 
     private var eye: some View {
         ZStack {
@@ -126,7 +155,7 @@ struct AppIconView: View {
             Circle()
                 .fill(.black)
 
-            // Ranhuras
+            // Ranhuras concêntricas (escuras, quase invisíveis)
             ForEach(0..<14, id: \.self) { i in
                 let diameter = 2 * (70 + CGFloat(i) * 10.5)
                 Circle()
@@ -134,31 +163,34 @@ struct AppIconView: View {
                     .frame(width: diameter, height: diameter)
             }
 
-            // Brilho suave nas ranhuras
-            Circle()
-                .fill(AngularGradient(stops: [
-                    .init(color: .clear, location: 0.00),
-                    .init(color: .white.opacity(0.06), location: 0.10),
-                    .init(color: .clear, location: 0.20),
-                    .init(color: .clear, location: 0.50),
-                    .init(color: .white.opacity(0.04), location: 0.60),
-                    .init(color: .clear, location: 0.70),
-                    .init(color: .clear, location: 1.00)
-                ], center: .center, angle: .degrees(-35)))
-                .padding(14)
+            // Reflexo nas ranhuras: gira como um disco a 33⅓ rpm quando a música toca
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animates)) { context in
+                let degrees = animates
+                    ? (context.date.timeIntervalSinceReferenceDate * 200).truncatingRemainder(dividingBy: 360)
+                    : 0
+                Circle()
+                    .fill(AngularGradient(stops: [
+                        .init(color: .clear, location: 0.00),
+                        .init(color: .white.opacity(0.06), location: 0.10),
+                        .init(color: .clear, location: 0.20),
+                        .init(color: .clear, location: 0.50),
+                        .init(color: .white.opacity(0.04), location: 0.60),
+                        .init(color: .clear, location: 0.70),
+                        .init(color: .clear, location: 1.00)
+                    ], center: .center, angle: .degrees(-35)))
+                    .padding(14)
+                    .rotationEffect(.degrees(degrees))
+            }
 
-            // Rótulo central
+            // Rótulo central, com um anel fino na cor do tema
             Circle()
                 .fill(Color(white: 0.09))
                 .frame(width: 96, height: 96)
+                .overlay(Circle().stroke(neon.opacity(0.35), lineWidth: 3).padding(10))
                 .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 2))
 
-            // Pino neon
-            Circle()
-                .fill(neon)
-                .frame(width: 24, height: 24)
-                .shadow(color: neon.opacity(0.9), radius: 10)
-                .shadow(color: neon.opacity(0.6), radius: 24)
+            // Pino central aceso
+            neonLight(diameter: 24, glow: 10, wideGlow: 24)
 
             // Reflexo do olho (canto superior esquerdo)
             Circle()
@@ -174,7 +206,7 @@ struct AppIconView: View {
         .position(eyeCenter)
     }
 
-    // MARK: 4. Braço do toca-discos
+    // MARK: 3. Braço do toca-discos
 
     private var armVector: CGVector { CGVector(dx: stylus.x - pivot.x, dy: stylus.y - pivot.y) }
     private var armLength: CGFloat { hypot(armVector.dx, armVector.dy) }
@@ -225,16 +257,26 @@ struct AppIconView: View {
                 .rotationEffect(armAngle)
                 .position(pointOnArm(1 - 30 / armLength))
 
-            // Luz neon na agulha
-            Circle()
-                .fill(neon)
-                .frame(width: 16, height: 16)
-                .shadow(color: neon, radius: 8)
-                .shadow(color: neon.opacity(0.6), radius: 20)
+            // Laser da agulha, na cor do tema
+            neonLight(diameter: 16, glow: 8, wideGlow: 20)
                 .position(pointOnArm(1 + 22 / armLength))
         }
         .compositingGroup()
         .shadow(color: .black.opacity(0.35), radius: 10, x: 6, y: 10)
+    }
+
+    // MARK: Luz neon
+
+    /// Ponto de luz na cor do tema. Pulsa quando a música toca.
+    private func neonLight(diameter: CGFloat, glow: CGFloat, wideGlow: CGFloat) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animates)) { context in
+            let phase = animates ? pulsePhase(at: context.date) : 0.6
+            Circle()
+                .fill(neon)
+                .frame(width: diameter, height: diameter)
+                .shadow(color: neon.opacity(0.6 + 0.4 * phase), radius: glow)
+                .shadow(color: neon.opacity(0.35 + 0.35 * phase), radius: wideGlow * (0.8 + 0.4 * phase))
+        }
     }
 
     // MARK: Utilitários
@@ -244,7 +286,7 @@ struct AppIconView: View {
         return CGPoint(x: center.x + radius * cos(r), y: center.y + radius * sin(r))
     }
 
-    /// Pseudoaleatório determinístico (0…1): o ícone sai idêntico em toda renderização.
+    /// Pseudoaleatório determinístico (0…1): o mascote sai idêntico em toda renderização.
     private func noise(_ i: Int, _ salt: Double) -> CGFloat {
         let x = sin(Double(i) * 12.9898 + salt * 78.233) * 43758.5453
         return CGFloat(x - floor(x))
@@ -265,15 +307,21 @@ private struct FurSpike: Shape {
     }
 }
 
-#Preview("Ícone 1024") {
-    AppIconView()
-        .scaleEffect(0.35)
-        .frame(width: 360, height: 360)
+#Preview("Três temas") {
+    HStack(spacing: 16) {
+        ForEach(AppTheme.allCases) { theme in
+            AppIconView(theme: theme)
+                .frame(width: 110, height: 110)
+                .clipShape(RoundedRectangle(cornerRadius: 110 * 0.2237, style: .continuous))
+        }
+    }
+    .padding()
+    .background(Color(white: 0.15))
 }
 
-#Preview("Com máscara do iOS") {
-    AppIconView()
-        .clipShape(RoundedRectangle(cornerRadius: 1024 * 0.2237, style: .continuous))
-        .scaleEffect(0.18)
-        .frame(width: 190, height: 190)
+#Preview("Tocando (cabeçalho)") {
+    AppIconView(theme: .cyber, showsBackground: false, isPlaying: true)
+        .frame(width: 160, height: 160)
+        .padding()
+        .background(Color.black)
 }

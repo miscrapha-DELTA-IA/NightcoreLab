@@ -1,11 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-extension Color {
-    /// Verde neon do tema ácido (o mesmo do pino e da agulha no ícone).
-    static let acidGreen = Color(red: 0.2, green: 1.0, blue: 0.0)
-}
-
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
 
@@ -27,21 +22,15 @@ struct ContentView: View {
     @State private var showServerSettings = false
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
-    @AppStorage("isAcidTheme") private var isAcidTheme = false
+    @AppStorage("selectedTheme") private var currentTheme: AppTheme = .acid
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
     // Troque pelo seu link (Ko-fi, GitHub Sponsors, página com QR Code do Pix…)
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
-    // MARK: Tema
-
-    private let acidGreen = Color.acidGreen
-
-    /// Botões sólidos (importar, play, exportar): branco no tema padrão, verde no ácido.
-    private var primaryFill: Color { isAcidTheme ? acidGreen : .white }
-    /// Ícones secundários do cabeçalho.
-    private var iconColor: Color { isAcidTheme ? acidGreen : .white }
+    private var hasTrack: Bool { audio.fileName != nil }
+    private var trimmedLink: String { youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// Tom resultante: 0 se "Manter o tom original", senão acompanha a velocidade (efeito vinil).
     private var computedPitch: Float {
@@ -50,28 +39,27 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // Luz ambiente na cor do tema: troca com crossfade.
+            AmbientBackground(theme: currentTheme)
+                .id(currentTheme)
+                .transition(.opacity)
 
             ScrollView {
-                VStack(spacing: 28) {
+                VStack(spacing: DS.Spacing.l) {
                     header
                     youtubeField
                     trackCard
                     presets
-
-                    VStack(spacing: 22) {
-                        pitchToggle
-                        sliders
-                    }
-                    .disabled(audio.fileName == nil)
-                    .opacity(audio.fileName == nil ? 0.35 : 1)
-
+                    controls
                     exportSection
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
+        .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, value in
@@ -93,7 +81,7 @@ struct ContentView: View {
         }
         .task { downloader.warmUp() }
         .sheet(isPresented: $showServerSettings) {
-            ServerSettingsView(downloader: downloader, accent: isAcidTheme ? acidGreen : .white)
+            ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio]) { result in
@@ -114,156 +102,195 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Seções
+    // MARK: - Cabeçalho
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("Nightcore Lab")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            Spacer(minLength: 4)
+        HStack(spacing: DS.Spacing.s) {
+            AppIconView(theme: currentTheme, showsBackground: false, isPlaying: audio.isPlaying)
+                .frame(width: 38, height: 38)
 
-            Button {
-                openURL(donationURL)
-            } label: {
-                headerIcon("heart.fill", color: isAcidTheme ? acidGreen : .pink)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Nightcore Lab")
+                    .font(DS.Typography.display)
+                    .foregroundStyle(DS.Ink.primary)
+                Text(currentTheme.displayName.uppercased())
+                    .font(.caption2.weight(.heavy))
+                    .tracking(2.5)
+                    .foregroundStyle(currentTheme.accent)
             }
-            .accessibilityLabel("Apoiar o projeto")
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
 
-            Button {
-                withAnimation(.spring(duration: 0.45, bounce: 0.15)) { isVertical.toggle() }
-            } label: {
-                // Mostra o ícone do modo para o qual o botão vai trocar
-                headerIcon(isVertical ? "slider.horizontal.3" : "slider.vertical.3", color: iconColor)
-            }
-            .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
-            .accessibilityLabel(isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)")
+            Spacer(minLength: 0)
 
-            Button {
-                withAnimation(.easeInOut(duration: 0.3)) { isAcidTheme.toggle() }
-            } label: {
-                headerIcon("bolt.fill", color: isAcidTheme ? acidGreen : .white.opacity(0.6))
-                    .shadow(color: isAcidTheme ? acidGreen.opacity(0.7) : .clear, radius: 8)
-            }
-            .sensoryFeedback(.impact(weight: .heavy), trigger: isAcidTheme)
-            .accessibilityLabel("Tema ácido")
-            .accessibilityValue(isAcidTheme ? "Ativado" : "Desativado")
+            GlassGroup(spacing: 8) {
+                HStack(spacing: 8) {
+                    headerButton("heart.fill", label: "Apoiar o projeto") {
+                        openURL(donationURL)
+                    }
 
-            Button {
-                showImporter = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.black)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(primaryFill))
+                    // Mostra o ícone do modo para o qual o botão vai trocar
+                    headerButton(isVertical ? "slider.horizontal.3" : "slider.vertical.3",
+                                 label: isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)") {
+                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) { isVertical.toggle() }
+                    }
+                    .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
+
+                    themeButton
+                    importButton
+                }
             }
-            .accessibilityLabel("Importar música")
         }
     }
 
-    private func headerIcon(_ systemName: String, color: Color) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(color)
-            .frame(width: 40, height: 40)
-            .background(Circle().fill(.white.opacity(0.08)))
-            .contentTransition(.symbolEffect(.replace))
+    private func headerButton(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(currentTheme.accent)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 40, height: 40)
+                .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
+        }
+        .accessibilityLabel(label)
     }
 
-    /// Campo de vidro para colar o link do YouTube.
+    /// Cicla acid → crimson → cyber.
+    private var themeButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.45)) {
+                currentTheme = currentTheme.next
+            }
+        } label: {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(currentTheme.accent)
+                .symbolEffect(.bounce, value: currentTheme)
+                .frame(width: 40, height: 40)
+                .glassSurface(Circle(), theme: currentTheme, isActive: true, pulses: false,
+                              glowIntensity: 0.6, depth: 0.4)
+        }
+        .sensoryFeedback(.impact(weight: .heavy), trigger: currentTheme)
+        .accessibilityLabel("Trocar tema")
+        .accessibilityValue(currentTheme.displayName)
+        .accessibilityHint("Alterna entre Acid, Crimson e Cyber")
+    }
+
+    /// Ação principal: pulsa enquanto não há música carregada, para guiar o primeiro uso.
+    private var importButton: some View {
+        Button {
+            showImporter = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(currentTheme.onAccent)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(currentTheme.accent))
+                .background {
+                    GlowPulse(shape: Circle(), color: currentTheme.accent,
+                              isActive: !hasTrack && !downloader.isDownloading, blur: 10)
+                }
+        }
+        .accessibilityLabel("Importar música")
+    }
+
+    // MARK: - Campo do link (vidro)
+
     /// [servidor] [link…] [colar | baixar | cancelar]
     private var youtubeField: some View {
-        let accent = isAcidTheme ? acidGreen : Color.white
-        let trimmedLink = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Button {
                     showServerSettings = true
                 } label: {
                     Image(systemName: "server.rack")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(accent.opacity(0.7))
+                        .foregroundStyle(currentTheme.accent.opacity(0.75))
                         .frame(width: 28, height: 36)
                 }
                 .disabled(downloader.isDownloading)
                 .accessibilityLabel("Configurar servidor")
 
                 TextField("", text: $youtubeLink,
-                          prompt: Text("Cole um link do YouTube").foregroundColor(.white.opacity(0.35)))
+                          prompt: Text("Cole um link do YouTube").foregroundColor(DS.Ink.tertiary))
+                    .font(DS.Typography.body)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .submitLabel(.go)
-                    .foregroundStyle(.white)
-                    .tint(accent)
+                    .foregroundStyle(DS.Ink.primary)
                     .focused($isLinkFieldFocused)
                     .onSubmit(startDownload)
                     .disabled(downloader.isDownloading)
                     .opacity(downloader.isDownloading ? 0.5 : 1)
 
-                Group {
-                    if downloader.isDownloading {
-                        // Toque no indicador para cancelar
-                        Button {
-                            downloader.cancel()
-                        } label: {
-                            ZStack {
-                                ProgressView().tint(accent)
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 8, weight: .heavy))
-                                    .foregroundStyle(accent.opacity(0.8))
-                            }
-                        }
-                        .accessibilityLabel("Cancelar download")
-                    } else if trimmedLink.isEmpty {
-                        // Botão de colar do sistema: não dispara o aviso de privacidade da área de transferência
-                        PasteButton(payloadType: String.self) { strings in
-                            guard let text = strings.first else { return }
-                            Task { @MainActor in pasteAndDownload(text) }
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.small)
-                        .tint(accent.opacity(isAcidTheme ? 1 : 0.9))
-                    } else {
-                        Button(action: startDownload) {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .font(.system(size: 30))
-                                .foregroundStyle(accent)
-                                .shadow(color: isAcidTheme ? acidGreen.opacity(0.6) : .clear, radius: 8)
-                        }
-                        .accessibilityLabel("Baixar áudio do link")
-                    }
-                }
-                .frame(width: 36, height: 36)
+                linkAction
+                    .frame(width: 36, height: 36)
             }
             .padding(.leading, 10)
             .padding(.trailing, 6)
             .padding(.vertical, 6)
-            .background(Capsule().fill(.ultraThinMaterial))
-            .overlay(Capsule().stroke(accent.opacity(isLinkFieldFocused ? 0.8 : 0.22), lineWidth: 1))
-            .shadow(color: accent.opacity(isLinkFieldFocused && isAcidTheme ? 0.35 : 0), radius: 14)
+            .glassSurface(Capsule(), theme: currentTheme,
+                          isActive: isLinkFieldFocused || downloader.isDownloading,
+                          depth: 0.7)
 
             if downloader.isDownloading {
                 Text(downloadStatusText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(DS.Typography.captionNumeric)
+                    .foregroundStyle(DS.Ink.secondary)
                     .padding(.leading, 16)
                     .contentTransition(.numericText())
             } else if let message = downloader.errorMessage {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.red.opacity(0.85))
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Ink.error)
                     .padding(.leading, 16)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: downloader.isDownloading)
         .animation(.easeInOut(duration: 0.2), value: isLinkFieldFocused)
         .animation(.easeInOut(duration: 0.2), value: trimmedLink.isEmpty)
+    }
+
+    @ViewBuilder
+    private var linkAction: some View {
+        if downloader.isDownloading {
+            // Toque no indicador para cancelar
+            Button {
+                downloader.cancel()
+            } label: {
+                ZStack {
+                    ProgressView()
+                        .tint(currentTheme.accent)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .heavy))
+                        .foregroundStyle(currentTheme.accent.opacity(0.85))
+                }
+            }
+            .accessibilityLabel("Cancelar download")
+        } else if trimmedLink.isEmpty {
+            // Botão de colar do sistema: não dispara o aviso de privacidade da área de transferência
+            PasteButton(payloadType: String.self) { strings in
+                guard let text = strings.first else { return }
+                Task { @MainActor in pasteAndDownload(text) }
+            }
+            .labelStyle(.iconOnly)
+            .buttonBorderShape(.circle)
+            .controlSize(.small)
+            .tint(currentTheme.accent)
+            .foregroundStyle(currentTheme.onAccent)
+        } else {
+            // Link pronto: o botão pulsa chamando para o download
+            Button(action: startDownload) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(currentTheme.accent)
+                    .background {
+                        GlowPulse(shape: Circle(), color: currentTheme.accent, isActive: true, blur: 8)
+                    }
+            }
+            .accessibilityLabel("Baixar áudio do link")
+        }
     }
 
     private var downloadStatusText: String {
@@ -275,71 +302,76 @@ struct ContentView: View {
             : "Extraindo o áudio no servidor…"
     }
 
-    /// Mesmo conjunto de sliders nos dois modos. O AnyLayout troca só o arranjo,
-    /// preservando a identidade das views, então a rotação é animada em vez de recriada.
-    private var sliders: some View {
-        let layout = isVertical
-            ? AnyLayout(HStackLayout(alignment: .bottom, spacing: 14))
-            : AnyLayout(VStackLayout(spacing: 22))
-
-        return layout {
-            GiantSlider(title: "Velocidade", value: $speed,
-                        range: AudioEngineManager.speedRange, defaultValue: 1.0,
-                        tint: .pink, isVertical: isVertical, isAcidTheme: isAcidTheme) { String(format: "%.2f×", $0) }
-
-            GiantSlider(title: "Reverb", value: $reverb,
-                        range: AudioEngineManager.reverbRange, defaultValue: 0,
-                        tint: .cyan, isVertical: isVertical, isAcidTheme: isAcidTheme) { String(format: "%.0f%%", $0) }
-
-            GiantSlider(title: "Baixo", value: $bass,
-                        range: AudioEngineManager.bassRange, defaultValue: 0,
-                        tint: .orange, isVertical: isVertical, isAcidTheme: isAcidTheme) { String(format: "+%.1f dB", $0) }
-        }
-    }
+    // MARK: - Cartão da música (vidro)
 
     private var trackCard: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: DS.Spacing.m) {
             Button {
                 audio.togglePlayback()
             } label: {
                 Image(systemName: audio.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundStyle(.black)
-                    .frame(width: 64, height: 64)
-                    .background(Circle().fill(primaryFill))
-                    .shadow(color: isAcidTheme ? acidGreen.opacity(0.5) : .clear, radius: 14)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(currentTheme.onAccent)
                     .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 60, height: 60)
+                    .background(Circle().fill(currentTheme.accent))
+                    .background {
+                        GlowPulse(shape: Circle(), color: currentTheme.accent,
+                                  isActive: audio.isPlaying, blur: 12)
+                    }
             }
-            .disabled(audio.fileName == nil)
+            .disabled(!hasTrack)
+            .opacity(hasTrack ? 1 : 0.4)
             .accessibilityLabel(audio.isPlaying ? "Pausar" : "Tocar")
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(audio.fileName ?? "Nenhuma música")
-                    .font(.headline)
-                    .foregroundStyle(.white)
+                    .font(DS.Typography.trackTitle)
+                    .foregroundStyle(DS.Ink.primary)
                     .lineLimit(1)
-                Text(audio.fileName == nil ? "Toque em + para importar" : durationText)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.5))
+                Text(hasTrack ? durationText : "Toque em + ou cole um link")
+                    .font(DS.Typography.subtitleNumeric)
+                    .foregroundStyle(DS.Ink.secondary)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
             }
-            Spacer()
+
+            Spacer(minLength: 0)
+
+            LevelBars(color: currentTheme.accent, isAnimating: audio.isPlaying)
+                .opacity(hasTrack ? 1 : 0)
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.white.opacity(0.06)))
-        .onTapGesture { if audio.fileName == nil { showImporter = true } }
+        .padding(DS.Spacing.m)
+        .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous),
+                      theme: currentTheme, isActive: audio.isPlaying)
+        .contentShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
+        .onTapGesture { if !hasTrack { showImporter = true } }
     }
 
+    private var durationText: String {
+        let seconds = Int(audio.duration / Double(speed))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    // MARK: - Presets
+
     private var presets: some View {
-        HStack(spacing: 10) {
-            presetButton("Redefinir", speed: 1.0, reverb: 0, bass: 0)
-            presetButton("Lentidão", speed: 0.8, reverb: 35, bass: 0)
-            presetButton("Nightcore", speed: 1.25, reverb: 0, bass: 5)
+        GlassGroup(spacing: DS.Spacing.s) {
+            HStack(spacing: DS.Spacing.s) {
+                presetButton("Redefinir", speed: 1.0, reverb: 0, bass: 0)
+                presetButton("Lentidão", speed: 0.8, reverb: 35, bass: 0)
+                presetButton("Nightcore", speed: 1.25, reverb: 0, bass: 5)
+            }
         }
-        .disabled(audio.fileName == nil)
+        .disabled(!hasTrack)
+        .opacity(hasTrack ? 1 : 0.4)
     }
 
     private func presetButton(_ title: String, speed s: Float, reverb r: Float, bass b: Float) -> some View {
-        Button {
+        let isSelected = hasTrack
+            && abs(speed - s) < 0.001 && abs(reverb - r) < 0.01 && abs(bass - b) < 0.01
+
+        return Button {
             withAnimation(.spring(duration: 0.35)) {
                 speed = s
                 reverb = r
@@ -348,38 +380,81 @@ struct ContentView: View {
         } label: {
             Text(title)
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(isSelected ? currentTheme.accent : DS.Ink.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(Capsule().fill(.white.opacity(0.08)))
+                .glassSurface(Capsule(), theme: currentTheme, isActive: isSelected, pulses: false,
+                              glowIntensity: 0.5, depth: 0.4)
         }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    // MARK: - Controles
+
+    private var controls: some View {
+        VStack(spacing: DS.Spacing.l) {
+            pitchToggle
+            sliders
+        }
+        .disabled(!hasTrack)
+        .opacity(hasTrack ? 1 : 0.4)
     }
 
     private var pitchToggle: some View {
         Toggle(isOn: $keepOriginalPitch) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Manter o tom original")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(DS.Typography.bodyStrong)
+                    .foregroundStyle(DS.Ink.primary)
                 Text(keepOriginalPitch
                      ? "Só a velocidade muda"
                      : "Tom acompanha a velocidade: \(String(format: "%+.0f", computedPitch)) cents")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(DS.Typography.captionNumeric)
+                    .foregroundStyle(DS.Ink.secondary)
                     .contentTransition(.numericText())
             }
         }
-        .tint(isAcidTheme ? acidGreen : .pink)
-        .padding(.horizontal, 16)
+        .tint(currentTheme.accent)
+        .padding(.horizontal, DS.Spacing.m)
         .padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.white.opacity(0.06)))
+        .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous),
+                      theme: currentTheme, depth: 0.6)
         .sensoryFeedback(.impact(weight: .light), trigger: keepOriginalPitch)
     }
 
+    /// Mesmo conjunto de sliders nos dois modos. O AnyLayout troca só o arranjo,
+    /// preservando a identidade das views, então a rotação é animada em vez de recriada.
+    private var sliders: some View {
+        let layout = isVertical
+            ? AnyLayout(HStackLayout(alignment: .bottom, spacing: 14))
+            : AnyLayout(VStackLayout(spacing: DS.Spacing.l))
+
+        return layout {
+            GiantSlider(title: "Velocidade", value: $speed,
+                        range: AudioEngineManager.speedRange, defaultValue: 1.0,
+                        theme: currentTheme, isVertical: isVertical) { String(format: "%.2f×", $0) }
+
+            GiantSlider(title: "Reverb", value: $reverb,
+                        range: AudioEngineManager.reverbRange, defaultValue: 0,
+                        theme: currentTheme, isVertical: isVertical) { String(format: "%.0f%%", $0) }
+
+            GiantSlider(title: "Baixo", value: $bass,
+                        range: AudioEngineManager.bassRange, defaultValue: 0,
+                        theme: currentTheme, isVertical: isVertical) { String(format: "+%.1f dB", $0) }
+        }
+    }
+
+    // MARK: - Exportar
+
     private var exportSection: some View {
         VStack(spacing: 14) {
+            HStack {
+                SectionLabel(text: "Exportar")
+                Spacer()
+            }
+
             Picker("Formato", selection: $exportFormat) {
                 ForEach(ExportFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) }
             }
@@ -388,7 +463,7 @@ struct ContentView: View {
             Button(action: export) {
                 ZStack(alignment: .leading) {
                     GeometryReader { geo in
-                        // Escurece a parte já renderizada (visível tanto no branco quanto no verde)
+                        // Escurece a parte já renderizada
                         Capsule()
                             .fill(.black.opacity(0.18))
                             .frame(width: geo.size.width * audio.exportProgress)
@@ -396,22 +471,25 @@ struct ContentView: View {
                     Text(audio.isExporting
                          ? "Renderizando… \(Int(audio.exportProgress * 100))%"
                          : "Exportar e compartilhar")
-                        .font(.headline)
-                        .foregroundStyle(.black)
+                        .font(.headline.monospacedDigit())
+                        .foregroundStyle(currentTheme.onAccent)
                         .frame(maxWidth: .infinity)
+                        .contentTransition(.numericText())
                 }
-                .frame(height: 58)
-                .background(Capsule().fill(primaryFill))
+                .frame(height: 56)
+                .background(Capsule().fill(currentTheme.accent))
                 .clipShape(Capsule())
-                .shadow(color: isAcidTheme ? acidGreen.opacity(0.4) : .clear, radius: 16)
+                .background {
+                    GlowPulse(shape: Capsule(), color: currentTheme.accent, isActive: audio.isExporting)
+                }
             }
-            .disabled(audio.fileName == nil || audio.isExporting)
-            .opacity(audio.fileName == nil ? 0.35 : 1)
+            .disabled(!hasTrack || audio.isExporting)
+            .opacity(hasTrack ? 1 : 0.35)
 
             Toggle(isOn: $telemetryEnabled) {
                 Text("Enviar estatísticas anônimas de uso")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Ink.secondary)
             }
             .tint(.gray)
             .padding(.top, 4)
@@ -419,12 +497,7 @@ struct ContentView: View {
         .padding(.top, 8)
     }
 
-    private var durationText: String {
-        let seconds = Int(audio.duration / Double(speed))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-
-    // MARK: Ações
+    // MARK: - Ações
 
     private func applyPitch() {
         audio.setPitch(computedPitch)
@@ -493,23 +566,20 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Slider gigante customizado
+// MARK: - Slider gigante (fader)
 
 struct GiantSlider: View {
     let title: String
     @Binding var value: Float
     let range: ClosedRange<Float>
     let defaultValue: Float
-    var tint: Color = .white
+    /// Tema ativo: a barra usa o gradiente acento → secundária do tema.
+    let theme: AppTheme
     /// true = fader de mesa de som: a barra cresce de baixo para cima.
     var isVertical: Bool = false
-    /// true = ignora o `tint` e pinta a barra de verde neon.
-    var isAcidTheme: Bool = false
     let format: (Float) -> String
 
     @State private var isDragging = false
-
-    private var fillColor: Color { isAcidTheme ? .acidGreen : tint }
 
     private let thickness: CGFloat = 72        // altura (horizontal) ou largura máxima (vertical)
     private let verticalLength: CGFloat = 320  // altura do fader vertical
@@ -517,12 +587,15 @@ struct GiantSlider: View {
     private var span: Float { range.upperBound - range.lowerBound }
     private var progress: CGFloat { CGFloat((value - range.lowerBound) / span) }
     private var defaultPosition: CGFloat { CGFloat((defaultValue - range.lowerBound) / span) }
+    private var trackShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: DS.Radius.track, style: .continuous)
+    }
 
     var body: some View {
         Group {
             if isVertical {
-                VStack(spacing: 10) {
-                    titleLabel
+                VStack(spacing: DS.Spacing.s) {
+                    SectionLabel(text: title)
                     valueLabel
                     track
                         .frame(maxWidth: thickness)
@@ -530,9 +603,9 @@ struct GiantSlider: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: DS.Spacing.s) {
                     HStack {
-                        titleLabel
+                        SectionLabel(text: title)
                         Spacer()
                         valueLabel
                     }
@@ -554,24 +627,14 @@ struct GiantSlider: View {
         }
     }
 
-    // MARK: Rótulos
-
-    private var titleLabel: some View {
-        Text(title.uppercased())
-            .font(.caption.weight(.semibold))
-            .tracking(isVertical ? 1 : 2)
-            .foregroundStyle(.white.opacity(0.5))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-    }
-
     private var valueLabel: some View {
         Text(format(value))
-            .font(.system(isVertical ? .headline : .title3, design: .rounded).weight(.semibold).monospacedDigit())
-            .foregroundStyle(.white)
+            .font(isVertical ? DS.Typography.valueCompact : DS.Typography.value)
+            .foregroundStyle(isDragging ? theme.accent : DS.Ink.primary)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .contentTransition(.numericText())
+            .animation(.easeOut(duration: 0.15), value: isDragging)
     }
 
     // MARK: Trilho
@@ -581,15 +644,32 @@ struct GiantSlider: View {
             let length = isVertical ? geo.size.height : geo.size.width
 
             ZStack(alignment: isVertical ? .bottom : .leading) {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(.white.opacity(0.06))
+                // Sulco rebaixado: borda escura em cima e clara embaixo, como um fader físico
+                trackShape
+                    .fill(Color.white.opacity(0.045))
+                    .overlay(
+                        trackShape.strokeBorder(
+                            LinearGradient(colors: [.black.opacity(0.55), .white.opacity(0.09)],
+                                           startPoint: .top, endPoint: .bottom),
+                            lineWidth: 1
+                        )
+                    )
 
                 // Preenchimento: cresce da esquerda (horizontal) ou de baixo (vertical)
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(fillColor.gradient)
-                    .shadow(color: isAcidTheme ? Color.acidGreen.opacity(0.45) : .clear, radius: 10)
+                trackShape
+                    .fill(theme.gradient(vertical: isVertical))
                     .frame(width: isVertical ? nil : length * progress,
                            height: isVertical ? length * progress : nil)
+                    .shadow(color: theme.accent.opacity(isDragging ? 0.7 : 0.35),
+                            radius: isDragging ? 16 : 9)
+                    .overlay(alignment: isVertical ? .top : .trailing) {
+                        // Linha de leitura na ponta da barra
+                        Capsule()
+                            .fill(.white.opacity(0.9))
+                            .frame(width: isVertical ? 28 : 3, height: isVertical ? 3 : 28)
+                            .padding(isVertical ? .top : .trailing, 10)
+                            .opacity(progress > 0.08 ? 1 : 0)
+                    }
 
                 // Marcador do valor neutro
                 if defaultPosition > 0 && defaultPosition < 1 {
