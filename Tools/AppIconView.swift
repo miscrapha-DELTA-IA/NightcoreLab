@@ -1,186 +1,267 @@
 import SwiftUI
 
-/// Ícone do Nightcore Lab desenhado 100% com formas geométricas.
-/// Quadrado e opaco: o iOS aplica a máscara arredondada sozinho, então não arredonde os cantos.
+/// Ícone do Nightcore Lab: mascote felpudo monocromático cujo olho é um disco de vinil.
+/// 100% formas geométricas. Quadrado e opaco: o iOS aplica a máscara arredondada sozinho.
 struct AppIconView: View {
+
+    // MARK: Paleta
+
+    private let neon = Color(red: 0.2, green: 1.0, blue: 0.0)
 
     // MARK: Geometria (canvas de 1024 × 1024)
 
     private let canvas: CGFloat = 1024
 
-    private let recordCenter = CGPoint(x: 460, y: 570)
-    private let recordRadius: CGFloat = 370
+    private let bodyCenter = CGPoint(x: 500, y: 470)
+    private let bodyRadius: CGFloat = 320
 
-    private let pivot = CGPoint(x: 850, y: 190)          // base do braço, fora do disco
-    private var stylus: CGPoint {                        // ponto onde a agulha toca o disco
-        let angle = Angle.degrees(28).radians
-        let r = recordRadius * 0.72
-        return CGPoint(x: recordCenter.x + r * cos(angle),
-                       y: recordCenter.y + r * sin(angle))
-    }
+    private var eyeCenter: CGPoint { CGPoint(x: bodyCenter.x, y: bodyCenter.y - 4) }
+    private let eyeRadius: CGFloat = 222
 
-    private var armVector: CGVector { CGVector(dx: stylus.x - pivot.x, dy: stylus.y - pivot.y) }
-    private var armLength: CGFloat { hypot(armVector.dx, armVector.dy) }
-    private var armAngle: Angle { .radians(atan2(armVector.dy, armVector.dx)) }
-    private var armDirection: CGVector { CGVector(dx: armVector.dx / armLength, dy: armVector.dy / armLength) }
+    private let tuftCount = 46
+    /// Faixa na base sem pelos: é onde o corpo "derrete".
+    private let meltArc: ClosedRange<Double> = 55...125
 
-    /// Ponto ao longo do braço: 0 = pivô, 1 = agulha (valores fora de 0…1 extrapolam).
-    private func pointOnArm(_ t: CGFloat) -> CGPoint {
-        CGPoint(x: pivot.x + armVector.dx * t, y: pivot.y + armVector.dy * t)
-    }
+    /// Gotas que escorrem da base: deslocamento horizontal, largura e comprimento.
+    private let dripSpecs: [(dx: CGFloat, width: CGFloat, length: CGFloat)] = [
+        (-95, 46, 105),
+        (-10, 58, 150),
+        (78, 40, 80)
+    ]
 
-    // MARK: Paleta
-
-    private let metalLight = Color(white: 0.86)
-    private let metalDark = Color(white: 0.52)
-    private let graphite = Color(white: 0.11)
+    private let pivot = CGPoint(x: 862, y: 232)
+    /// A agulha repousa perto da borda do disco preto, no quadrante inferior direito.
+    private var stylus: CGPoint { point(on: eyeCenter, radius: eyeRadius - 24, degrees: 30) }
 
     var body: some View {
         ZStack {
-            background
-            record
+            Color.black
+
+            fur
+            Circle()
+                .fill(.white)
+                .frame(width: bodyRadius * 2, height: bodyRadius * 2)
+                .position(bodyCenter)
+            drips
+
+            eye
             tonearm
         }
         .frame(width: canvas, height: canvas)
         .clipped()
     }
 
-    // MARK: 1. Fundo
+    // MARK: 2. Corpo felpudo
 
-    private var background: some View {
-        RadialGradient(colors: [Color(white: 0.10), Color(white: 0.035), .black],
-                       center: UnitPoint(x: recordCenter.x / canvas, y: recordCenter.y / canvas),
-                       startRadius: 40, endRadius: 760)
+    /// Tufos ao redor do círculo: espinhos (polígonos curvos) intercalados com cápsulas,
+    /// com tamanho e ângulo levemente irregulares para quebrar a simetria.
+    private var fur: some View {
+        ZStack {
+            ForEach(0..<tuftCount, id: \.self) { i in
+                let degrees = Double(i) / Double(tuftCount) * 360 + Double(noise(i, 1) - 0.5) * 6
+                if !meltArc.contains(degrees) {
+                    tuft(index: i, degrees: degrees)
+                }
+            }
+        }
     }
 
-    // MARK: 2. Disco de vinil
+    private func tuft(index i: Int, degrees: Double) -> some View {
+        let length = 48 + noise(i, 2) * 52
+        let width = 44 + noise(i, 3) * 26
+        let center = point(on: bodyCenter, radius: bodyRadius + length * 0.5 - 26, degrees: degrees)
 
-    private var record: some View {
-        ZStack {
-            // Corpo do disco
-            Circle()
-                .fill(RadialGradient(colors: [Color(white: 0.07), Color(white: 0.025)],
-                                     center: .center, startRadius: 0, endRadius: recordRadius))
-                .overlay(Circle().stroke(.white.opacity(0.08), lineWidth: 2))
-                .shadow(color: .black.opacity(0.7), radius: 40, y: 24)
+        return Group {
+            if i.isMultiple(of: 3) {
+                Capsule()
+                    .fill(.white)
+                    .frame(width: width * 1.25, height: length * 0.75)
+            } else {
+                FurSpike()
+                    .fill(.white)
+                    .frame(width: width, height: length)
+            }
+        }
+        .rotationEffect(.degrees(degrees + 90))   // ponta apontando para fora
+        .position(center)
+    }
 
-            // Sulcos concêntricos
-            ForEach(0..<15, id: \.self) { i in
-                let diameter = 2 * (150 + CGFloat(i) * 14.5)
+    /// Escorridos na base, cada um terminando numa gota, mais duas gotas soltas.
+    private var drips: some View {
+        let bottom = bodyCenter.y + bodyRadius
+
+        return ZStack {
+            ForEach(dripSpecs.indices, id: \.self) { i in
+                let spec = dripSpecs[i]
+                let x = bodyCenter.x + spec.dx
+
+                Capsule()
+                    .fill(.white)
+                    .frame(width: spec.width, height: spec.length + 60)
+                    .position(x: x, y: bottom - 60 + (spec.length + 60) / 2)
+
                 Circle()
-                    .stroke(.white.opacity(i.isMultiple(of: 4) ? 0.075 : 0.035), lineWidth: 1.5)
+                    .fill(.white)
+                    .frame(width: spec.width * 1.3, height: spec.width * 1.3)
+                    .position(x: x, y: bottom + spec.length - spec.width * 0.3)
+            }
+
+            Circle()
+                .fill(.white)
+                .frame(width: 40, height: 40)
+                .position(x: bodyCenter.x - 185, y: bottom + 115)
+
+            Circle()
+                .fill(.white)
+                .frame(width: 22, height: 22)
+                .position(x: bodyCenter.x + 150, y: bottom + 62)
+        }
+    }
+
+    // MARK: 3. Olho / vinil
+
+    private var eye: some View {
+        ZStack {
+            // Pupila = disco
+            Circle()
+                .fill(.black)
+
+            // Ranhuras
+            ForEach(0..<14, id: \.self) { i in
+                let diameter = 2 * (70 + CGFloat(i) * 10.5)
+                Circle()
+                    .stroke(.white.opacity(i.isMultiple(of: 4) ? 0.12 : 0.06), lineWidth: 1.5)
                     .frame(width: diameter, height: diameter)
             }
 
-            // Brilho da luz refletida nos sulcos (duas faixas opostas)
+            // Brilho suave nas ranhuras
             Circle()
                 .fill(AngularGradient(stops: [
                     .init(color: .clear, location: 0.00),
-                    .init(color: .white.opacity(0.07), location: 0.09),
-                    .init(color: .clear, location: 0.18),
+                    .init(color: .white.opacity(0.06), location: 0.10),
+                    .init(color: .clear, location: 0.20),
                     .init(color: .clear, location: 0.50),
-                    .init(color: .white.opacity(0.05), location: 0.59),
-                    .init(color: .clear, location: 0.68),
+                    .init(color: .white.opacity(0.04), location: 0.60),
+                    .init(color: .clear, location: 0.70),
                     .init(color: .clear, location: 1.00)
-                ], center: .center, angle: .degrees(-30)))
-                .padding(18)
+                ], center: .center, angle: .degrees(-35)))
+                .padding(14)
 
             // Rótulo central
             Circle()
-                .fill(graphite)
-                .frame(width: 210, height: 210)
-                .overlay(Circle().stroke(.pink.opacity(0.85), lineWidth: 5).padding(14))
-                .overlay(Circle().stroke(.white.opacity(0.06), lineWidth: 2))
+                .fill(Color(white: 0.09))
+                .frame(width: 96, height: 96)
+                .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 2))
 
-            // Eixo
+            // Pino neon
             Circle()
-                .fill(LinearGradient(colors: [metalLight, metalDark], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 26, height: 26)
+                .fill(neon)
+                .frame(width: 24, height: 24)
+                .shadow(color: neon.opacity(0.9), radius: 10)
+                .shadow(color: neon.opacity(0.6), radius: 24)
+
+            // Reflexo do olho (canto superior esquerdo)
+            Circle()
+                .fill(.white)
+                .frame(width: 70, height: 70)
+                .offset(x: -92, y: -92)
+            Circle()
+                .fill(.white)
+                .frame(width: 24, height: 24)
+                .offset(x: -40, y: -132)
         }
-        .frame(width: recordRadius * 2, height: recordRadius * 2)
-        .position(recordCenter)
+        .frame(width: eyeRadius * 2, height: eyeRadius * 2)
+        .position(eyeCenter)
     }
 
-    // MARK: 3. Braço e cápsula
+    // MARK: 4. Braço do toca-discos
+
+    private var armVector: CGVector { CGVector(dx: stylus.x - pivot.x, dy: stylus.y - pivot.y) }
+    private var armLength: CGFloat { hypot(armVector.dx, armVector.dy) }
+    private var armAngle: Angle { .radians(atan2(armVector.dy, armVector.dx)) }
+
+    /// Ponto ao longo do braço: 0 = pivô, 1 = agulha (fora de 0…1 extrapola).
+    private func pointOnArm(_ t: CGFloat) -> CGPoint {
+        CGPoint(x: pivot.x + armVector.dx * t, y: pivot.y + armVector.dy * t)
+    }
 
     private var tonearm: some View {
-        ZStack {
-            // Contrapeso, atrás do pivô
-            Capsule()
-                .fill(LinearGradient(colors: [Color(white: 0.30), Color(white: 0.16)], startPoint: .top, endPoint: .bottom))
-                .overlay(Capsule().stroke(.white.opacity(0.10), lineWidth: 2))
-                .frame(width: 120, height: 84)
-                .rotationEffect(armAngle)
-                .position(pointOnArm(-0.22))
+        let metal = LinearGradient(colors: [Color(white: 0.82), Color(white: 0.52)],
+                                   startPoint: .top, endPoint: .bottom)
 
-            // Haste do braço
+        return ZStack {
+            // Contrapeso
             Capsule()
-                .fill(LinearGradient(colors: [metalLight, metalDark], startPoint: .top, endPoint: .bottom))
+                .fill(Color(white: 0.22))
+                .overlay(Capsule().stroke(.white.opacity(0.85), lineWidth: 5))
+                .frame(width: 92, height: 64)
+                .rotationEffect(armAngle)
+                .position(pointOnArm(-0.17))
+
+            // Haste: contorno preto para destacar sobre o corpo branco
+            Capsule()
+                .fill(metal)
+                .overlay(Capsule().stroke(.black, lineWidth: 4))
                 .frame(width: armLength * 0.98, height: 20)
                 .rotationEffect(armAngle)
                 .position(pointOnArm(0.49))
 
-            // Base do pivô com anel ciano
+            // Base do pivô
             Circle()
-                .fill(graphite)
-                .frame(width: 176, height: 176)
-                .overlay(Circle().stroke(.white.opacity(0.08), lineWidth: 2))
+                .fill(Color(white: 0.14))
+                .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 6))
+                .frame(width: 124, height: 124)
+                .position(pivot)
+            Circle()
+                .fill(metal)
+                .frame(width: 54, height: 54)
                 .position(pivot)
 
-            Circle()
-                .stroke(.cyan, lineWidth: 7)
-                .frame(width: 128, height: 128)
-                .shadow(color: .cyan.opacity(0.9), radius: 18)
-                .position(pivot)
-
-            Circle()
-                .fill(LinearGradient(colors: [metalLight, metalDark], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 78, height: 78)
-                .position(pivot)
-
-            Circle()
-                .fill(graphite)
-                .frame(width: 22, height: 22)
-                .position(pivot)
-
-            // Headshell (suporte da cápsula)
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(LinearGradient(colors: [Color(white: 0.24), Color(white: 0.13)], startPoint: .top, endPoint: .bottom))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 2))
-                .frame(width: 128, height: 62)
+            // Cápsula (headshell)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color(white: 0.55))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(.black, lineWidth: 4))
+                .frame(width: 96, height: 50)
                 .rotationEffect(armAngle)
-                .position(pointOnArm(1 - 40 / armLength))
+                .position(pointOnArm(1 - 30 / armLength))
 
-            // Faixa rosa na frente da cápsula
-            Rectangle()
-                .fill(.pink)
-                .frame(width: 14, height: 62)
-                .shadow(color: .pink.opacity(0.9), radius: 14)
-                .rotationEffect(armAngle)
-                .position(pointOnArm(1 + 18 / armLength))
-
-            // Agulha tocando o disco: ponto rosa com halo
+            // Luz neon na agulha
             Circle()
-                .fill(.pink.opacity(0.25))
-                .frame(width: 70, height: 70)
-                .blur(radius: 14)
-                .position(pointOnArm(1 + 30 / armLength))
-
-            Circle()
-                .fill(.white)
-                .frame(width: 12, height: 12)
-                .shadow(color: .pink, radius: 10)
-                .position(pointOnArm(1 + 30 / armLength))
-
-            // LED ciano no braço
-            Circle()
-                .fill(.cyan)
-                .frame(width: 10, height: 10)
-                .shadow(color: .cyan, radius: 8)
-                .position(pointOnArm(0.30))
+                .fill(neon)
+                .frame(width: 16, height: 16)
+                .shadow(color: neon, radius: 8)
+                .shadow(color: neon.opacity(0.6), radius: 20)
+                .position(pointOnArm(1 + 22 / armLength))
         }
         .compositingGroup()
-        .shadow(color: .black.opacity(0.65), radius: 22, x: 14, y: 20)
+        .shadow(color: .black.opacity(0.35), radius: 10, x: 6, y: 10)
+    }
+
+    // MARK: Utilitários
+
+    private func point(on center: CGPoint, radius: CGFloat, degrees: Double) -> CGPoint {
+        let r = Angle.degrees(degrees).radians
+        return CGPoint(x: center.x + radius * cos(r), y: center.y + radius * sin(r))
+    }
+
+    /// Pseudoaleatório determinístico (0…1): o ícone sai idêntico em toda renderização.
+    private func noise(_ i: Int, _ salt: Double) -> CGFloat {
+        let x = sin(Double(i) * 12.9898 + salt * 78.233) * 43758.5453
+        return CGFloat(x - floor(x))
+    }
+}
+
+/// Tufo de pelo: triângulo com laterais curvas e ponta levemente torta.
+private struct FurSpike: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addQuadCurve(to: CGPoint(x: rect.midX + rect.width * 0.12, y: rect.minY),
+                          control: CGPoint(x: rect.minX + rect.width * 0.2, y: rect.midY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.maxY),
+                          control: CGPoint(x: rect.maxX - rect.width * 0.1, y: rect.midY))
+        path.closeSubpath()
+        return path
     }
 }
 

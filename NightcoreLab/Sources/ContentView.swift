@@ -1,6 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension Color {
+    /// Verde neon do tema ácido (o mesmo do pino e da agulha no ícone).
+    static let acidGreen = Color(red: 0.2, green: 1.0, blue: 0.0)
+}
+
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
 
@@ -16,11 +21,21 @@ struct ContentView: View {
     @State private var errorMessage: String?
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
+    @AppStorage("isAcidTheme") private var isAcidTheme = false
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
     // Troque pelo seu link (Ko-fi, GitHub Sponsors, página com QR Code do Pix…)
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
+
+    // MARK: Tema
+
+    private let acidGreen = Color.acidGreen
+
+    /// Botões sólidos (importar, play, exportar): branco no tema padrão, verde no ácido.
+    private var primaryFill: Color { isAcidTheme ? acidGreen : .white }
+    /// Ícones secundários do cabeçalho.
+    private var iconColor: Color { isAcidTheme ? acidGreen : .white }
 
     /// Tom resultante: 0 se "Manter o tom original", senão acompanha a velocidade (efeito vinil).
     private var computedPitch: Float {
@@ -86,22 +101,18 @@ struct ContentView: View {
     // MARK: Seções
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("Nightcore Lab")
                 .font(.system(size: 30, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Spacer()
+                .minimumScaleFactor(0.6)
+            Spacer(minLength: 4)
 
             Button {
                 openURL(donationURL)
             } label: {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.pink)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(.white.opacity(0.08)))
+                headerIcon("heart.fill", color: isAcidTheme ? acidGreen : .pink)
             }
             .accessibilityLabel("Apoiar o projeto")
 
@@ -109,15 +120,20 @@ struct ContentView: View {
                 withAnimation(.spring(duration: 0.45, bounce: 0.15)) { isVertical.toggle() }
             } label: {
                 // Mostra o ícone do modo para o qual o botão vai trocar
-                Image(systemName: isVertical ? "slider.horizontal.3" : "slider.vertical.3")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(.white.opacity(0.08)))
-                    .contentTransition(.symbolEffect(.replace))
+                headerIcon(isVertical ? "slider.horizontal.3" : "slider.vertical.3", color: iconColor)
             }
             .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
             .accessibilityLabel(isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)")
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) { isAcidTheme.toggle() }
+            } label: {
+                headerIcon("bolt.fill", color: isAcidTheme ? acidGreen : .white.opacity(0.6))
+                    .shadow(color: isAcidTheme ? acidGreen.opacity(0.7) : .clear, radius: 8)
+            }
+            .sensoryFeedback(.impact(weight: .heavy), trigger: isAcidTheme)
+            .accessibilityLabel("Tema ácido")
+            .accessibilityValue(isAcidTheme ? "Ativado" : "Desativado")
 
             Button {
                 showImporter = true
@@ -125,11 +141,20 @@ struct ContentView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(.black)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(.white))
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(primaryFill))
             }
             .accessibilityLabel("Importar música")
         }
+    }
+
+    private func headerIcon(_ systemName: String, color: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: 40, height: 40)
+            .background(Circle().fill(.white.opacity(0.08)))
+            .contentTransition(.symbolEffect(.replace))
     }
 
     /// Mesmo conjunto de sliders nos dois modos. O AnyLayout troca só o arranjo,
@@ -142,15 +167,15 @@ struct ContentView: View {
         return layout {
             GiantSlider(title: "Velocidade", value: $speed,
                         range: AudioEngineManager.speedRange, defaultValue: 1.0,
-                        tint: .pink, isVertical: isVertical) { String(format: "%.2f×", $0) }
+                        tint: .pink, isVertical: isVertical, isAcidTheme: isAcidTheme) { String(format: "%.2f×", $0) }
 
             GiantSlider(title: "Reverb", value: $reverb,
                         range: AudioEngineManager.reverbRange, defaultValue: 0,
-                        tint: .cyan, isVertical: isVertical) { String(format: "%.0f%%", $0) }
+                        tint: .cyan, isVertical: isVertical, isAcidTheme: isAcidTheme) { String(format: "%.0f%%", $0) }
 
             GiantSlider(title: "Baixo", value: $bass,
                         range: AudioEngineManager.bassRange, defaultValue: 0,
-                        tint: .orange, isVertical: isVertical) { String(format: "+%.1f dB", $0) }
+                        tint: .orange, isVertical: isVertical, isAcidTheme: isAcidTheme) { String(format: "+%.1f dB", $0) }
         }
     }
 
@@ -163,7 +188,8 @@ struct ContentView: View {
                     .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(.black)
                     .frame(width: 64, height: 64)
-                    .background(Circle().fill(.white))
+                    .background(Circle().fill(primaryFill))
+                    .shadow(color: isAcidTheme ? acidGreen.opacity(0.5) : .clear, radius: 14)
                     .contentTransition(.symbolEffect(.replace))
             }
             .disabled(audio.fileName == nil)
@@ -227,7 +253,7 @@ struct ContentView: View {
                     .contentTransition(.numericText())
             }
         }
-        .tint(.pink)
+        .tint(isAcidTheme ? acidGreen : .pink)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.white.opacity(0.06)))
@@ -244,8 +270,9 @@ struct ContentView: View {
             Button(action: export) {
                 ZStack(alignment: .leading) {
                     GeometryReader { geo in
+                        // Escurece a parte já renderizada (visível tanto no branco quanto no verde)
                         Capsule()
-                            .fill(.white.opacity(0.25))
+                            .fill(.black.opacity(0.18))
                             .frame(width: geo.size.width * audio.exportProgress)
                     }
                     Text(audio.isExporting
@@ -256,8 +283,9 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .frame(height: 58)
-                .background(Capsule().fill(.white))
+                .background(Capsule().fill(primaryFill))
                 .clipShape(Capsule())
+                .shadow(color: isAcidTheme ? acidGreen.opacity(0.4) : .clear, radius: 16)
             }
             .disabled(audio.fileName == nil || audio.isExporting)
             .opacity(audio.fileName == nil ? 0.35 : 1)
@@ -331,9 +359,13 @@ struct GiantSlider: View {
     var tint: Color = .white
     /// true = fader de mesa de som: a barra cresce de baixo para cima.
     var isVertical: Bool = false
+    /// true = ignora o `tint` e pinta a barra de verde neon.
+    var isAcidTheme: Bool = false
     let format: (Float) -> String
 
     @State private var isDragging = false
+
+    private var fillColor: Color { isAcidTheme ? .acidGreen : tint }
 
     private let thickness: CGFloat = 72        // altura (horizontal) ou largura máxima (vertical)
     private let verticalLength: CGFloat = 320  // altura do fader vertical
@@ -410,7 +442,8 @@ struct GiantSlider: View {
 
                 // Preenchimento: cresce da esquerda (horizontal) ou de baixo (vertical)
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(tint.gradient)
+                    .fill(fillColor.gradient)
+                    .shadow(color: isAcidTheme ? Color.acidGreen.opacity(0.45) : .clear, radius: 10)
                     .frame(width: isVertical ? nil : length * progress,
                            height: isVertical ? length * progress : nil)
 
