@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var reverb: Float = 0
     @State private var bass: Float = 0
     @State private var keepOriginalPitch = false
+    @State private var isVertical = false
 
     @State private var showImporter = false
     @State private var exportFormat: ExportFormat = .m4a
@@ -38,18 +39,7 @@ struct ContentView: View {
 
                     VStack(spacing: 22) {
                         pitchToggle
-
-                        GiantSlider(title: "Velocidade", value: $speed,
-                                    range: AudioEngineManager.speedRange, defaultValue: 1.0,
-                                    tint: .pink) { String(format: "%.2f×", $0) }
-
-                        GiantSlider(title: "Reverb", value: $reverb,
-                                    range: AudioEngineManager.reverbRange, defaultValue: 0,
-                                    tint: .cyan) { String(format: "%.0f%%", $0) }
-
-                        GiantSlider(title: "Baixo", value: $bass,
-                                    range: AudioEngineManager.bassRange, defaultValue: 0,
-                                    tint: .orange) { String(format: "+%.1f dB", $0) }
+                        sliders
                     }
                     .disabled(audio.fileName == nil)
                     .opacity(audio.fileName == nil ? 0.35 : 1)
@@ -100,6 +90,8 @@ struct ContentView: View {
             Text("Nightcore Lab")
                 .font(.system(size: 30, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Spacer()
 
             Button {
@@ -114,6 +106,20 @@ struct ContentView: View {
             .accessibilityLabel("Apoiar o projeto")
 
             Button {
+                withAnimation(.spring(duration: 0.45, bounce: 0.15)) { isVertical.toggle() }
+            } label: {
+                // Mostra o ícone do modo para o qual o botão vai trocar
+                Image(systemName: isVertical ? "slider.horizontal.3" : "slider.vertical.3")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(.white.opacity(0.08)))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
+            .accessibilityLabel(isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)")
+
+            Button {
                 showImporter = true
             } label: {
                 Image(systemName: "plus")
@@ -123,6 +129,28 @@ struct ContentView: View {
                     .background(Circle().fill(.white))
             }
             .accessibilityLabel("Importar música")
+        }
+    }
+
+    /// Mesmo conjunto de sliders nos dois modos. O AnyLayout troca só o arranjo,
+    /// preservando a identidade das views, então a rotação é animada em vez de recriada.
+    private var sliders: some View {
+        let layout = isVertical
+            ? AnyLayout(HStackLayout(alignment: .bottom, spacing: 14))
+            : AnyLayout(VStackLayout(spacing: 22))
+
+        return layout {
+            GiantSlider(title: "Velocidade", value: $speed,
+                        range: AudioEngineManager.speedRange, defaultValue: 1.0,
+                        tint: .pink, isVertical: isVertical) { String(format: "%.2f×", $0) }
+
+            GiantSlider(title: "Reverb", value: $reverb,
+                        range: AudioEngineManager.reverbRange, defaultValue: 0,
+                        tint: .cyan, isVertical: isVertical) { String(format: "%.0f%%", $0) }
+
+            GiantSlider(title: "Baixo", value: $bass,
+                        range: AudioEngineManager.bassRange, defaultValue: 0,
+                        tint: .orange, isVertical: isVertical) { String(format: "+%.1f dB", $0) }
         }
     }
 
@@ -301,63 +329,41 @@ struct GiantSlider: View {
     let range: ClosedRange<Float>
     let defaultValue: Float
     var tint: Color = .white
+    /// true = fader de mesa de som: a barra cresce de baixo para cima.
+    var isVertical: Bool = false
     let format: (Float) -> String
 
     @State private var isDragging = false
+
+    private let thickness: CGFloat = 72        // altura (horizontal) ou largura máxima (vertical)
+    private let verticalLength: CGFloat = 320  // altura do fader vertical
 
     private var span: Float { range.upperBound - range.lowerBound }
     private var progress: CGFloat { CGFloat((value - range.lowerBound) / span) }
     private var defaultPosition: CGFloat { CGFloat((defaultValue - range.lowerBound) / span) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(title.uppercased())
-                    .font(.caption.weight(.semibold))
-                    .tracking(2)
-                    .foregroundStyle(.white.opacity(0.5))
-                Spacer()
-                Text(format(value))
-                    .font(.system(.title3, design: .rounded).weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .contentTransition(.numericText())
-            }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(.white.opacity(0.06))
-
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(tint.gradient)
-                        .frame(width: geo.size.width * progress)
-
-                    // Marcador do valor neutro
-                    if defaultPosition > 0 && defaultPosition < 1 {
-                        Capsule()
-                            .fill(.white.opacity(0.35))
-                            .frame(width: 2, height: 28)
-                            .offset(x: geo.size.width * defaultPosition - 1)
-                    }
+        Group {
+            if isVertical {
+                VStack(spacing: 10) {
+                    titleLabel
+                    valueLabel
+                    track
+                        .frame(maxWidth: thickness)
+                        .frame(height: verticalLength)
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { gesture in
-                            isDragging = true
-                            let fraction = min(max(gesture.location.x / geo.size.width, 0), 1)
-                            var newValue = range.lowerBound + Float(fraction) * span
-                            // "Imã" no valor neutro (±2%)
-                            if abs(newValue - defaultValue) < span * 0.02 { newValue = defaultValue }
-                            value = newValue
-                        }
-                        .onEnded { _ in isDragging = false }
-                )
+                .frame(maxWidth: .infinity)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        titleLabel
+                        Spacer()
+                        valueLabel
+                    }
+                    track
+                        .frame(height: thickness)
+                }
             }
-            .frame(height: 72)
-            .scaleEffect(isDragging ? 1.02 : 1)
-            .animation(.spring(duration: 0.25), value: isDragging)
-            .sensoryFeedback(.selection, trigger: value == defaultValue)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
@@ -370,6 +376,74 @@ struct GiantSlider: View {
             @unknown default: break
             }
         }
+    }
+
+    // MARK: Rótulos
+
+    private var titleLabel: some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .tracking(isVertical ? 1 : 2)
+            .foregroundStyle(.white.opacity(0.5))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+    }
+
+    private var valueLabel: some View {
+        Text(format(value))
+            .font(.system(isVertical ? .headline : .title3, design: .rounded).weight(.semibold).monospacedDigit())
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .contentTransition(.numericText())
+    }
+
+    // MARK: Trilho
+
+    private var track: some View {
+        GeometryReader { geo in
+            let length = isVertical ? geo.size.height : geo.size.width
+
+            ZStack(alignment: isVertical ? .bottom : .leading) {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.white.opacity(0.06))
+
+                // Preenchimento: cresce da esquerda (horizontal) ou de baixo (vertical)
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(tint.gradient)
+                    .frame(width: isVertical ? nil : length * progress,
+                           height: isVertical ? length * progress : nil)
+
+                // Marcador do valor neutro
+                if defaultPosition > 0 && defaultPosition < 1 {
+                    Capsule()
+                        .fill(.white.opacity(0.35))
+                        .frame(width: isVertical ? 28 : 2, height: isVertical ? 2 : 28)
+                        .offset(x: isVertical ? 0 : length * defaultPosition - 1,
+                                y: isVertical ? -(length * defaultPosition - 1) : 0)
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        isDragging = true
+                        // Vertical: y cresce para baixo na tela, então invertemos (topo = máximo).
+                        let raw = isVertical
+                            ? 1 - gesture.location.y / length
+                            : gesture.location.x / length
+                        let fraction = min(max(raw, 0), 1)
+                        var newValue = range.lowerBound + Float(fraction) * span
+                        // "Imã" no valor neutro (±2%)
+                        if abs(newValue - defaultValue) < span * 0.02 { newValue = defaultValue }
+                        value = newValue
+                    }
+                    .onEnded { _ in isDragging = false }
+            )
+        }
+        .scaleEffect(isDragging ? 1.02 : 1)
+        .animation(.spring(duration: 0.25), value: isDragging)
+        .sensoryFeedback(.selection, trigger: value == defaultValue)
     }
 }
 
