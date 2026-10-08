@@ -21,8 +21,9 @@ jobs:
 
     env:
       BASE_URL: https://nightcorelab.onrender.com
-      # Vídeo de teste oficial do projeto youtube-dl/yt-dlp (10 s)
-      TEST_VIDEO: https://www.youtube.com/watch?v=BaW_jenozKc
+      # "Me at the zoo" (19 s): primeiro vídeo do YouTube, estável desde 2005.
+      # (O antigo vídeo de teste do youtube-dl, BaW_jenozKc, foi removido.)
+      TEST_VIDEO: https://www.youtube.com/watch?v=jNQXAC9IVRw
 
     steps:
       - name: Esperar o Render publicar este commit

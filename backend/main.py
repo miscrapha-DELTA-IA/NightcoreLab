@@ -231,7 +231,7 @@ def _friendly_error(message: str) -> str:
         return "Vídeo privado."
     if "confirm you're not a bot" in lowered or "confirm you’re not a bot" in lowered:
         return "O YouTube bloqueou o servidor temporariamente (verificação anti-bot)."
-    if "video unavailable" in lowered or "not available" in lowered:
+    if "unavailable" in lowered or "not available" in lowered:
         return "Vídeo indisponível ou bloqueado na região do servidor."
     return "O yt-dlp não conseguiu processar este vídeo."
 
