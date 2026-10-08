@@ -20,7 +20,10 @@ Variáveis de ambiente opcionais:
     MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 2; protege os 512 MB do tier gratuito)
     COOKIES_FILE              caminho de um cookies.txt (formato Netscape) para contornar a
                               verificação anti-bot do YouTube. No Render, use um Secret File:
-                              /etc/secrets/cookies.txt
+                              /etc/secrets/<nome do Secret File>. O nome precisa bater
+                              exatamente (em produção: /etc/secrets/COOKIES_FILE).
+                              Diagnóstico: o health check (GET /) mostra "cookies",
+                              "cookies_env" e "secret_files".
 """
 
 from __future__ import annotations
