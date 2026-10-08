@@ -96,7 +96,44 @@ def health():
         "cookies": bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE),
         # Diagnóstico (só nomes, nunca o conteúdo): ajuda a achar o que falta na configuração.
         "cookies_env": COOKIES_FILE or None,
+        "cookies_summary": _cookies_summary(),
         "secret_files": _secret_file_names(),
+    }
+
+
+# Cookies que só existem numa sessão logada do Google/YouTube.
+_LOGIN_COOKIE_NAMES = {"LOGIN_INFO", "SAPISID", "__Secure-3PAPISID", "__Secure-3PSID", "SID", "HSID", "SSID"}
+
+
+def _cookies_summary() -> dict:
+    """Resume o cookies.txt sem expor valores: formato, quantidade e se há sessão logada."""
+    if not COOKIES_FILE or not os.path.isfile(COOKIES_FILE):
+        return {"found": False}
+    try:
+        with open(COOKIES_FILE, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return {"found": True, "readable": False}
+
+    header_ok = bool(lines) and "HTTP Cookie File" in lines[0]
+    names, domains = set(), set()
+    for line in lines:
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+        elif not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            domains.add(parts[0].lstrip("."))
+            names.add(parts[5])
+    login = sorted(names & _LOGIN_COOKIE_NAMES)
+    return {
+        "found": True,
+        "netscape_header": header_ok,
+        "entries": len(names),
+        "youtube_domain": any(d.endswith("youtube.com") for d in domains),
+        "login_cookies": login,          # só nomes, nunca valores
+        "logged_in": "LOGIN_INFO" in login or "SAPISID" in login,
     }
 
 
@@ -190,6 +227,12 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
     cookie_copy = _prepare_cookies(work_dir)
     if cookie_copy:
         ydl_opts["cookiefile"] = cookie_copy
+        summary = _cookies_summary()
+        log.info("usando cookies: %s entradas, youtube=%s, logado=%s (%s)",
+                 summary.get("entries"), summary.get("youtube_domain"),
+                 summary.get("logged_in"), ", ".join(summary.get("login_cookies", [])) or "nenhum")
+    else:
+        log.info("sem cookies (COOKIES_FILE=%r, existe=%s)", COOKIES_FILE, os.path.isfile(COOKIES_FILE) if COOKIES_FILE else False)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
