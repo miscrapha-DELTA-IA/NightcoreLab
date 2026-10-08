@@ -8,14 +8,26 @@ Rodar localmente:
     pip install -r requirements.txt
     uvicorn main:app --host 0.0.0.0 --port 8000
 
-No Render (Start Command):
-    uvicorn main:app --host 0.0.0.0 --port $PORT
+No Render (Root Directory = backend):
+    Build:  pip install -r requirements.txt
+    Start:  uvicorn main:app --host 0.0.0.0 --port $PORT
+
+Variáveis de ambiente opcionais:
+    MAX_DURATION_SECONDS      duração máxima por faixa (padrão 1200 = 20 min)
+    MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 2; protege os 512 MB do tier gratuito)
+    COOKIES_FILE              caminho de um cookies.txt (formato Netscape) para contornar a
+                              verificação anti-bot do YouTube. No Render, use um Secret File:
+                              /etc/secrets/cookies.txt
 """
+
+from __future__ import annotations
 
 import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -24,8 +36,14 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl
 
-# Limite de duração para proteger CPU, disco e banda do tier gratuito (padrão: 20 min).
 MAX_DURATION_SECONDS = int(os.getenv("MAX_DURATION_SECONDS", "1200"))
+MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
+COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
+
+WORK_DIR_PREFIX = "nightcore_"
+# Pastas mais velhas que isso são restos de envios interrompidos (cliente desconectou
+# no meio, servidor reiniciou...) e podem ser apagadas com segurança.
+STALE_AFTER_SECONDS = 30 * 60
 
 # Só aceita links do YouTube: impede que o servidor vire um proxy genérico de downloads.
 ALLOWED_HOSTS = {
@@ -36,10 +54,12 @@ ALLOWED_HOSTS = {
     "youtu.be",
 }
 
+_download_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
+
 app = FastAPI(
     title="Nightcore Lab Bridge",
     description="Extrai o áudio de um link do YouTube em .m4a e o envia direto, sem armazenar.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 
@@ -47,10 +67,15 @@ class DownloadRequest(BaseModel):
     url: HttpUrl
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def health():
-    """Health check (também serve para 'acordar' o serviço no Render)."""
-    return {"status": "ok", "ffmpeg": shutil.which("ffmpeg") is not None}
+    """Health check. Aceita HEAD para monitores de uptime; também 'acorda' o Render."""
+    return {
+        "status": "ok",
+        "ffmpeg": shutil.which("ffmpeg") is not None,
+        "yt_dlp": yt_dlp.version.__version__,
+        "cookies": bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE),
+    }
 
 
 @app.post("/download")
@@ -62,7 +87,12 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     if host not in ALLOWED_HOSTS:
         raise HTTPException(status_code=400, detail="Apenas links do YouTube são aceitos.")
 
-    work_dir = tempfile.mkdtemp(prefix="nightcore_")
+    _sweep_stale_work_dirs()
+
+    if not _download_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Servidor ocupado com outros downloads. Tente em alguns segundos.")
+
+    work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
 
     def cleanup() -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -78,6 +108,10 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     except Exception:
         cleanup()
         raise HTTPException(status_code=500, detail="Erro inesperado ao processar o áudio.")
+    finally:
+        # A vaga é liberada assim que a extração (parte pesada) termina;
+        # o envio do arquivo em si é leve e não precisa segurar a vaga.
+        _download_slots.release()
 
     # Auto-limpeza: roda só depois que o FileResponse terminou de enviar o arquivo.
     # Apaga a pasta inteira (inclui .part e restos do yt-dlp), não só o .m4a.
@@ -87,6 +121,7 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         path=audio_path,
         media_type="audio/mp4",           # MIME correto para .m4a (AAC em contêiner MP4)
         filename=f"{_safe_filename(title)}.m4a",
+        headers={"Cache-Control": "no-store"},
         background=background_tasks,
     )
 
@@ -106,6 +141,7 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
         "cachedir": False,           # nada persistido fora da pasta temporária
         "socket_timeout": 30,
         "retries": 3,
+        "fragment_retries": 3,
     }
     if has_ffmpeg:
         # Se o melhor áudio disponível não for m4a, converte para m4a (AAC).
@@ -114,17 +150,21 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
             "preferredcodec": "m4a",
         }]
 
+    cookie_copy = _prepare_cookies(work_dir)
+    if cookie_copy:
+        ydl_opts["cookiefile"] = cookie_copy
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
+        if info.get("is_live"):
+            raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
         duration = info.get("duration") or 0
         if duration > MAX_DURATION_SECONDS:
             raise HTTPException(
                 status_code=413,
                 detail=f"Áudio longo demais ({duration // 60} min). Limite: {MAX_DURATION_SECONDS // 60} min.",
             )
-        if info.get("is_live"):
-            raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
 
         ydl.process_ie_result(info, download=True)
 
@@ -134,20 +174,47 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str]:
     return files[0], info.get("title") or info.get("id") or "audio"
 
 
+def _prepare_cookies(work_dir: str) -> str | None:
+    """Copia o cookies.txt para a pasta do pedido.
+
+    O yt-dlp regrava o arquivo de cookies ao terminar; o Secret File do Render é
+    somente leitura, e pedidos simultâneos não devem disputar o mesmo arquivo.
+    """
+    if not COOKIES_FILE or not os.path.isfile(COOKIES_FILE):
+        return None
+    destination = os.path.join(work_dir, "cookies.txt")
+    shutil.copyfile(COOKIES_FILE, destination)
+    return destination
+
+
+def _sweep_stale_work_dirs() -> None:
+    """Apaga pastas de pedidos antigos que não foram limpas (ex.: o iPhone desconectou
+    no meio do envio e a tarefa de limpeza não rodou)."""
+    temp_root = Path(tempfile.gettempdir())
+    cutoff = time.time() - STALE_AFTER_SECONDS
+    for path in temp_root.glob(f"{WORK_DIR_PREFIX}*"):
+        try:
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+
+
 def _friendly_error(message: str) -> str:
     lowered = message.lower()
     if "sign in to confirm your age" in lowered or ("age" in lowered and "restrict" in lowered):
         return "Vídeo com restrição de idade: não é possível extrair o áudio."
     if "private video" in lowered:
         return "Vídeo privado."
-    if "video unavailable" in lowered or "not available" in lowered:
-        return "Vídeo indisponível ou bloqueado na região do servidor."
     if "confirm you're not a bot" in lowered or "confirm you’re not a bot" in lowered:
         return "O YouTube bloqueou o servidor temporariamente (verificação anti-bot)."
+    if "video unavailable" in lowered or "not available" in lowered:
+        return "Vídeo indisponível ou bloqueado na região do servidor."
     return "O yt-dlp não conseguiu processar este vídeo."
 
 
 def _safe_filename(title: str) -> str:
     """Remove caracteres inválidos em nomes de arquivo e limita o tamanho."""
-    cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", title).strip()
+    cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", title)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return (cleaned or "audio")[:120]
