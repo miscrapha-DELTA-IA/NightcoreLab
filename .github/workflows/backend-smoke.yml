@@ -79,7 +79,11 @@ jobs:
           if [ "$code" != "200" ]; then
             echo "Resposta do servidor:"
             cat audio.bin; echo
-            echo "::error::/download respondeu HTTP $code (veja a mensagem acima e os logs do Render)."
+            if grep -qi 'anti-bot' audio.bin; then
+              echo "::error::O YouTube bloqueou o IP do Render (verificação anti-bot). Solução: cadastre um cookies.txt como Secret File no Render e defina COOKIES_FILE=/etc/secrets/cookies.txt (veja o topo de backend/main.py)."
+            else
+              echo "::error::/download respondeu HTTP $code (veja a mensagem acima e os logs do Render)."
+            fi
             exit 1
           fi
 
