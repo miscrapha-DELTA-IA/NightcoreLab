@@ -99,8 +99,7 @@ class RelatedTests(unittest.TestCase):
     def test_busy_does_not_block_download_slots(self):
         main._related_slots.acquire()
         self.assertEqual(self.client.get("/related", params={"url": SOURCE}).status_code, 429)
-        self.assertTrue(main._download_slots.acquire(blocking=False))
-        main._download_slots.release()
+        self.assertEqual(main.download_semaphore._value, min(main.MAX_CONCURRENT_DOWNLOADS, 2))
 
     def test_empty_mix_is_valid_empty_list(self):
         with patch.object(main.yt_dlp, "YoutubeDL") as extractor:
