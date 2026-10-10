@@ -52,6 +52,22 @@ struct ContentView: View {
                 .id(currentTheme)
                 .transition(.opacity)
 
+            if let artwork = coverURL {
+                GeometryReader { geometry in
+                    WebImage(url: artwork)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .blur(radius: 50)
+                        .overlay(Color.black.opacity(0.65))
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .id(artwork)
+                .transition(.opacity)
+            }
+
             ScrollView {
                 VStack(spacing: DS.Spacing.l) {
                     header
@@ -85,6 +101,7 @@ struct ContentView: View {
             .scrollDisabled(isAdjustingSlider)
 .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
         }
+        .animation(.easeInOut(duration: 0.8), value: coverURL)
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
         .onOpenURL { incomingURL in
@@ -307,7 +324,23 @@ struct ContentView: View {
         .clipShape(trackCardShape)
         .glassSurface(trackCardShape, theme: currentTheme, isActive: audio.isPlaying)
         .contentShape(trackCardShape)
-        .onTapGesture { if !hasTrack { showImporter = true } }
+        .onTapGesture {
+            if hasTrack {
+                audio.togglePlayback()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            } else {
+                showImporter = true
+            }
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    guard hasTrack, abs(value.translation.width) > 50,
+                          abs(value.translation.width) > abs(value.translation.height) else { return }
+                    audio.seek(by: value.translation.width > 0 ? 15 : -15)
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                }
+        )
     }
 
     /// Botão vinil: avança o fundo do player em ciclo fosco → nítido → em movimento.
