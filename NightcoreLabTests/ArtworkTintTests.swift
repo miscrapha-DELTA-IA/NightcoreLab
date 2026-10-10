@@ -22,7 +22,8 @@ final class ArtworkTintTests: XCTestCase {
     }
 
     func testTransparentPixelsAreIgnored() {
-        let rgba = Array(repeating: [UInt8(255), 0, 0, 0], count: 24 * 24)
+        let transparentPixel: [UInt8] = [255, 0, 0, 0]
+        let rgba = Array(repeating: transparentPixel, count: 24 * 24)
             .flatMap { $0 }
         XCTAssertNil(ArtworkTintExtractor.dominantHue(in: rgba))
     }
