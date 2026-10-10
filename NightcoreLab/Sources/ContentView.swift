@@ -28,6 +28,8 @@ struct ContentView: View {
     @State private var keepOriginalPitch = false
     @State private var isVertical = false
     @State private var isAdjustingSlider = false
+    @State private var isDraggingTime = false
+    @State private var dragProgress: Double = 0.0
 
     /// Estilo do fundo do mini-player (botão de vinil): fosco → nítido → em movimento.
     @State private var bgStyle: PlayerBackgroundStyle = .blurred
@@ -324,6 +326,8 @@ struct ContentView: View {
                     .foregroundStyle(hasTrack ? Color.white : DS.Ink.secondary)
                     .lineLimit(1)
                     .contentTransition(.numericText())
+
+                miniScrubber
             }
 
             Spacer(minLength: 0)
@@ -356,12 +360,61 @@ struct ContentView: View {
         .simultaneousGesture(
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
-                    guard hasTrack, abs(value.translation.width) > 50,
+                    guard hasTrack, !isDraggingTime, abs(value.translation.width) > 50,
                           abs(value.translation.width) > abs(value.translation.height) else { return }
                     audio.seek(by: value.translation.width > 0 ? 15 : -15)
                     UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                 }
         )
+    }
+
+    /// Linha do tempo minimalista, atualizada sem modificar o pipeline de áudio.
+    private var miniScrubber: some View {
+        GeometryReader { geometry in
+            TimelineView(.animation(minimumInterval: 1.0 / 15.0,
+                                    paused: !audio.isPlaying || isDraggingTime)) { _ in
+                let safeDuration = max(audio.duration, 1)
+                let progress = min(max(isDraggingTime ? dragProgress :
+                                      audio.playbackTime / safeDuration, 0), 1)
+                let width = max(geometry.size.width, 1)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(height: 4)
+                    Capsule()
+                        .fill(Color.white)
+                        .frame(width: width * progress, height: 4)
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 12, height: 12)
+                        .offset(x: max(0, min(width - 12, width * progress - 6)))
+                }
+                .frame(height: 12)
+                .contentShape(Rectangle())
+            }
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard hasTrack, audio.duration > 0 else { return }
+                        isDraggingTime = true
+                        dragProgress = min(max(Double(value.location.x / max(geometry.size.width, 1)), 0), 1)
+                    }
+                    .onEnded { value in
+                        guard hasTrack, audio.duration > 0 else {
+                            isDraggingTime = false
+                            return
+                        }
+                        let percent = min(max(Double(value.location.x / max(geometry.size.width, 1)), 0), 1)
+                        audio.seek(to: percent * audio.duration)
+                        isDraggingTime = false
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
+            )
+        }
+        .frame(height: 12)
+        .padding(.top, 5)
+        .accessibilityLabel("Posição da música")
+        .accessibilityValue("\\(Int(audio.playbackTime)) de \\(Int(audio.duration)) segundos")
     }
 
     /// Botão vinil: avança o fundo do player em ciclo fosco → nítido → em movimento.

@@ -177,10 +177,13 @@ final class AudioEngineManager {
         isPlaying ? pause() : play()
     }
 
-    /// Move o transporte por segundos da fonte original, preservando play/pause.
-    func seek(by seconds: TimeInterval) {
-        guard let file = audioFile, duration > 0 else { return }
-        let target = min(max((isPlaying ? currentTime : lastKnownTime) + seconds, 0), duration)
+    /// Posição em segundos da fonte original para visualização do scrubber.
+    var playbackTime: TimeInterval { currentTime }
+
+    /// Seek absoluto, preservando o estado de reprodução e a cadeia DSP.
+    func seek(to seconds: TimeInterval) {
+        guard let file = audioFile, duration > 0, seconds.isFinite else { return }
+        let target = min(max(seconds, 0), duration)
         let shouldResume = isPlaying
         scheduleGeneration += 1
         player.stop()
@@ -195,6 +198,11 @@ final class AudioEngineManager {
             }
         }
         setupNowPlaying()
+    }
+
+    /// Seek relativo usado pelo gesto horizontal do cartão.
+    func seek(by seconds: TimeInterval) {
+        seek(to: currentTime + seconds)
     }
 
     // MARK: Parâmetros em tempo real
