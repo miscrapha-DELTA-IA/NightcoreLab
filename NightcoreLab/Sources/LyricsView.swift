@@ -76,6 +76,12 @@ enum LyricsService {
 
 /// The moving mask is isolated from the scrolling list. Only the active row
 /// reads the audio clock at display cadence.
+/// Persistent user preference; unlike the theme itself it belongs to Karaoke only.
+enum LyricsColorMode: String, CaseIterable {
+    case artwork
+    case theme
+}
+
 private struct ProgressiveLyricLine: View {
     let text: String
     let start: TimeInterval
@@ -94,15 +100,31 @@ private struct ProgressiveLyricLine: View {
                     Text(text)
                         .font(.title.bold())
                         .foregroundStyle(accent)
+                        // SwiftUI interpolates between the cover tint and Acid/Cyber/Crimson.
+                        .animation(.easeInOut(duration: 0.42), value: accent)
                         .mask(alignment: .leading) {
                             GeometryReader { geometry in
-                                Rectangle()
-                                    .frame(width: geometry.size.width * fraction)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                let width = geometry.size.width
+                                let revealed = width * fraction
+                                // A subtle feathered edge inspired by KaraokeText's
+                                // per-glyph sweep, without its iOS 18 dependency.
+                                let feather = max(0, min(18, revealed, width - revealed))
+                                HStack(spacing: 0) {
+                                    Rectangle()
+                                        .fill(.white)
+                                        .frame(width: max(0, revealed - feather))
+                                    LinearGradient(
+                                        colors: [.white, .clear],
+                                        startPoint: .leading, endPoint: .trailing
+                                    )
+                                    .frame(width: feather)
+                                    Spacer(minLength: 0)
+                                }
                             }
                         }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .shadow(color: .black.opacity(0.62), radius: 5, y: 2)
         }
     }
 }
@@ -130,8 +152,17 @@ private struct LyricsBackdrop: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
-            .blur(radius: 50, opaque: true)
-            .overlay(Color.black.opacity(0.6))
+            // Keep the artwork sharp: darken instead of blurring it.
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        .black.opacity(0.30),
+                        .black.opacity(0.47),
+                        .black.opacity(0.39)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
@@ -150,6 +181,51 @@ struct LyricsView: View {
     @State private var activeIndex: Int?
     @State private var loading = true
     @State private var errorMessage: String?
+    @State private var artworkTint: ArtworkTint?
+    @AppStorage("lyricsColorMode") private var colorMode: LyricsColorMode = .artwork
+
+    private var lyricAccent: Color {
+        switch colorMode {
+        case .artwork: return artworkTint?.color ?? theme.accent
+        case .theme: return theme.accent
+        }
+    }
+
+    private func colorModeButton(_ mode: LyricsColorMode) -> some View {
+        let selected = colorMode == mode
+        let label = mode == .artwork ? "Capa" : "Tema"
+        let icon = mode == .artwork ? "photo.fill" : "paintpalette.fill"
+        return Button {
+            withAnimation(.easeInOut(duration: 0.42)) {
+                colorMode = mode
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(mode == .artwork ? (artworkTint?.color ?? theme.accent) : theme.accent)
+                    .frame(width: 8, height: 8)
+                Image(systemName: icon)
+                Text(label)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.68))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background {
+                Capsule().fill(selected ? lyricAccent.opacity(0.23) : .black.opacity(0.28))
+            }
+            .overlay {
+                Capsule().strokeBorder(
+                    selected ? lyricAccent.opacity(0.92) : .white.opacity(0.15),
+                    lineWidth: 1
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode == .artwork ? "Usar cor da capa" :
+                            "Usar cor do tema \(theme.displayName)")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
 
     private func lineIndex(at time: TimeInterval) -> Int? {
         // Binary search: O(log n) per clock tick, without reparsing the lyrics.
@@ -180,7 +256,7 @@ struct LyricsView: View {
                                 end: index + 1 < parsedLines.count
                                     ? parsedLines[index + 1].time
                                     : max(audio.duration, line.time + 1),
-                                accent: theme.accent,
+                                accent: lyricAccent,
                                 audio: audio
                             )
                             .id(index)
@@ -256,6 +332,17 @@ struct LyricsView: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                 .padding(.horizontal, 16)
 
+                HStack(spacing: 10) {
+                    Text("COR DAS LETRAS")
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(.white.opacity(0.73))
+                    Spacer(minLength: 4)
+                    colorModeButton(.artwork)
+                    colorModeButton(.theme)
+                }
+                .padding(.horizontal, 22)
+
                 if loading {
                     Spacer()
                     ProgressView("Buscando letras…")
@@ -284,6 +371,14 @@ struct LyricsView: View {
                 }
             }
             .padding(.top, 20)
+        }
+        .task(id: track.id) {
+            artworkTint = nil
+            let sampled = await ArtworkTintExtractor.fetch(for: track)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.42)) {
+                artworkTint = sampled
+            }
         }
         .task(id: track.id) {
             loading = true
