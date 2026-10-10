@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var bass: Float = 0
     @State private var keepOriginalPitch = false
     @State private var isVertical = false
+    @State private var isAdjustingSlider = false
 
     /// Estilo do fundo do mini-player (botão de vinil): fosco → nítido → em movimento.
     @State private var bgStyle: PlayerBackgroundStyle = .blurred
@@ -74,6 +75,8 @@ struct ContentView: View {
                 .padding(.bottom, 32)
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollDisabled(isAdjustingSlider)
+.onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
         }
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
@@ -888,6 +891,12 @@ private struct VinylPlaybackArtwork: View {
 
 // MARK: - Slider gigante (fader)
 
+/// Sobe do slider até a página: true enquanto algum slider está sendo ajustado.
+struct SliderAdjustingKey: PreferenceKey {
+    static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
 struct GiantSlider: View {
     let title: String
     @Binding var value: Float
@@ -900,6 +909,16 @@ struct GiantSlider: View {
     let format: (Float) -> String
 
     @State private var isDragging = false
+    /// Zera sozinho quando o toque termina OU é cancelado (ex.: a página assumiu a rolagem).
+    @GestureState private var isTouching = false
+    /// Valor "cru" durante o arrasto; o ímã do valor neutro só afeta o valor exibido.
+    @State private var raw: Float = 0
+    @State private var lastAlong: CGFloat = 0
+    @State private var lock: AxisLock = .undecided
+    /// 1 = arrasto normal; menor = ajuste mais fino (dedo mais longe da barra).
+    @State private var precision: Float = 1
+
+    private enum AxisLock { case undecided, adjust, scroll }
 
     private let thickness: CGFloat = 72        // altura (horizontal) ou largura máxima (vertical)
     private let verticalLength: CGFloat = 320  // altura do fader vertical
@@ -934,6 +953,7 @@ struct GiantSlider: View {
                 }
             }
         }
+        .preference(key: SliderAdjustingKey.self, value: isDragging)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(format(value))
@@ -948,14 +968,162 @@ struct GiantSlider: View {
     }
 
     private var valueLabel: some View {
-        Text(format(value))
-            .font(isVertical ? DS.Typography.valueCompact : DS.Typography.value)
-            .foregroundStyle(isDragging ? theme.accent : DS.Ink.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .contentTransition(.numericText())
-            .animation(.easeOut(duration: 0.15), value: isDragging)
+        HStack(spacing: 6) {
+            if isDragging, let precisionLabel {
+                Text(precisionLabel)
+                    .font(DS.Typography.captionNumeric)
+                    .foregroundStyle(theme.accent)
+            }
+            Text(format(value))
+                .font(isVertical ? DS.Typography.valueCompact : DS.Typography.value)
+                .foregroundStyle(isDragging ? theme.accent : DS.Ink.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
+        }
+        .animation(.easeOut(duration: 0.15), value: isDragging)
     }
+
+    private var precisionLabel: String? {
+        switch precision {
+        case ..<0.15: return "⅒×"
+        case ..<0.3:  return "¼×"
+        case ..<0.9:  return "½×"
+        default:      return nil
+        }
+    }
+
+    // MARK: Gesto
+
+    /// Horizontal: arrasto direto, mas só vira ajuste se o movimento for claramente horizontal;
+    /// gesto vertical é rolagem da página e não toca no slider.
+    private func adjustHorizontal(_ g: DragGesture.Value, length: CGFloat) {
+        if lock == .undecided {
+            lock = abs(g.translation.width) > abs(g.translation.height) * 1.3 ? .adjust : .scroll
+            if lock == .adjust { beginAdjust() }
+        }
+        guard lock == .adjust else { return }
+        applyDrag(along: g.translation.width, across: g.translation.height, length: length, sign: 1)
+    }
+
+    /// Vertical (mesa de som): arrasto na vertical conflita com a rolagem, então o fader
+    /// só é "agarrado" após segurar ~0,15 s. Um deslize rápido continua rolando a página.
+    private func adjustVertical(_ g: DragGesture.Value?, length: CGFloat) {
+        if lock == .undecided {
+            lock = .adjust
+            beginAdjust()
+        }
+        guard let g else { return }
+        applyDrag(along: g.translation.height, across: g.translation.width, length: length, sign: -1)
+    }
+
+    private func beginAdjust() {
+        raw = value
+        lastAlong = 0
+        isDragging = true
+    }
+
+    private func endAdjust() {
+        lock = .undecided
+        precision = 1
+        isDragging = false
+    }
+
+    /// Ajuste relativo: o valor parte de onde está e só muda pelo quanto o dedo se mexeu.
+    /// Afastar o dedo da barra (no eixo transversal) reduz a razão: ½×, ¼×, ⅒×.
+    private func applyDrag(along: CGFloat, across: CGFloat, length: CGFloat, sign: Float) {
+        guard length > 0 else { return }
+        let delta = Float((along - lastAlong) / length)
+        lastAlong = along
+
+        let ratio = precisionRatio(forDistance: abs(across))
+        if ratio != precision { precision = ratio }
+
+        raw = min(max(raw + sign * delta * span * ratio, range.lowerBound), range.upperBound)
+        // Ímã no valor neutro, sem prender: `raw` continua acumulando por baixo.
+        value = abs(raw - defaultValue) < span * 0.02 * ratio ? defaultValue : raw
+    }
+
+    private func precisionRatio(forDistance distance: CGFloat) -> Float {
+        switch distance {
+        case ..<48:  return 1
+        case ..<110: return 0.5
+        case ..<190: return 0.25
+        default:     return 0.1
+        }
+    }
+
+    // MARK: Trilho
+
+    private var track: some View {
+        GeometryReader { geo in
+            let length = isVertical ? geo.size.height : geo.size.width
+
+            ZStack(alignment: isVertical ? .bottom : .leading) {
+                // Sulco rebaixado: borda escura em cima e clara embaixo, como um fader físico
+                trackShape
+                    .fill(Color.white.opacity(0.045))
+                    .overlay(
+                        trackShape.strokeBorder(
+                            LinearGradient(colors: [.black.opacity(0.55), .white.opacity(0.09)],
+                                           startPoint: .top, endPoint: .bottom),
+                            lineWidth: 1
+                        )
+                    )
+
+                // Preenchimento: cresce da esquerda (horizontal) ou de baixo (vertical)
+                trackShape
+                    .fill(theme.gradient(vertical: isVertical))
+                    .frame(width: isVertical ? nil : length * progress,
+                           height: isVertical ? length * progress : nil)
+                    .shadow(color: theme.accent.opacity(isDragging ? 0.7 : 0.35),
+                            radius: isDragging ? 16 : 9)
+                    .overlay(alignment: isVertical ? .top : .trailing) {
+                        // Linha de leitura na ponta da barra
+                        Capsule()
+                            .fill(.white.opacity(0.9))
+                            .frame(width: isVertical ? 28 : 3, height: isVertical ? 3 : 28)
+                            .padding(isVertical ? .top : .trailing, 10)
+                            .opacity(progress > 0.08 ? 1 : 0)
+                    }
+
+                // Marcador do valor neutro
+                if defaultPosition > 0 && defaultPosition < 1 {
+                    Capsule()
+                        .fill(.white.opacity(0.35))
+                        .frame(width: isVertical ? 28 : 2, height: isVertical ? 2 : 28)
+                        .offset(x: isVertical ? 0 : length * defaultPosition - 1,
+                                y: isVertical ? -(length * defaultPosition - 1) : 0)
+                }
+            }
+            .contentShape(Rectangle())
+            // `simultaneousGesture`: a página continua rolando até o gesto provar que é um ajuste.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 6)
+                    .updating($isTouching) { _, state, _ in state = true }
+                    .onChanged { g in
+                        guard !isVertical else { return }
+                        adjustHorizontal(g, length: length)
+                    }
+            )
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.15, maximumDistance: 10)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .updating($isTouching) { _, state, _ in state = true }
+                    .onChanged { phase in
+                        guard isVertical, case .second(true, let g) = phase else { return }
+                        adjustVertical(g, length: length)
+                    }
+            )
+            .onChange(of: isTouching) { _, touching in
+                if !touching { endAdjust() }
+            }
+        }
+        .scaleEffect(isDragging ? 1.02 : 1)
+        .animation(.spring(duration: 0.25), value: isDragging)
+        .sensoryFeedback(.selection, trigger: value == defaultValue)
+    }
+}
 
     // MARK: Trilho
 
