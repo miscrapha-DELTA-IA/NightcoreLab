@@ -12,6 +12,12 @@ final class PlaybackQueue: ObservableObject {
         upNextQueue = candidates.filter { seen.insert($0.id).inserted }
     }
 
+    func select(_ track: Track) -> [Track]? {
+        guard let index = upNextQueue.firstIndex(where: { $0.id == track.id }) else { return nil }
+        upNextQueue.removeFirst(index + 1)
+        return upNextQueue
+    }
+
     func takeNext() -> Track? {
         guard !upNextQueue.isEmpty else { return nil }
         return upNextQueue.removeFirst()
@@ -491,7 +497,7 @@ struct ContentView: View {
                     ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
                         let track = playbackQueue.upNextQueue[index]
                         Button {
-                            playTrack(track, upcoming: Array(playbackQueue.upNextQueue.dropFirst(index + 1)))
+                            playFromQueue(track)
                         } label: {
                             HStack(spacing: 10) {
                                 Text(String(format: "%02d", index + 1))
@@ -741,11 +747,18 @@ struct ContentView: View {
         playTrack(track, upcoming: [])
     }
 
-    private func playTrack(_ track: Track, upcoming: [Track]) {
+    private func playFromQueue(_ track: Track) {
+        guard playbackQueue.select(track) != nil else { return }
+        playTrack(track, upcoming: playbackQueue.upNextQueue, preservingQueue: true)
+    }
+
+    private func playTrack(_ track: Track, upcoming: [Track], preservingQueue: Bool = false) {
         guard !audio.isExporting else { return }
-        resetRelatedVideos()
-        relatedVideos = upcoming
-        playbackQueue.replace(with: upcoming, excluding: track.id)
+        if !preservingQueue {
+            resetRelatedVideos()
+            playbackQueue.replace(with: upcoming, excluding: track.id)
+        }
+        // Queue transitions retain recommendations and the remaining queue.
         downloader.select(track) { localURL, downloadedCoverURL in
             do {
                 try audio.load(url: localURL)
@@ -773,7 +786,7 @@ struct ContentView: View {
     private func advanceQueue() {
         guard !audio.isExporting, let next = playbackQueue.takeNext() else { return }
         let rest = playbackQueue.tracks
-        playTrack(next, upcoming: rest)
+        playTrack(next, upcoming: rest, preservingQueue: true)
     }
 
     private func resetRelatedVideos() {
