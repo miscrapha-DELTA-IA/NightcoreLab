@@ -47,6 +47,7 @@ struct ContentView: View {
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
     @State private var currentTrack: Track?
+    @State private var showLyrics = false
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
@@ -172,6 +173,16 @@ struct ContentView: View {
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
         }
         .task { downloader.warmUp() }
+        .sheet(isPresented: $showLyrics) {
+            if let currentTrack {
+                TimelineView(.periodic(from: .now, by: 0.15)) { _ in
+                    LyricsView(track: currentTrack, playbackTime: audio.playbackTime,
+                               isPlaying: audio.isPlaying, dismiss: { showLyrics = false })
+                }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+        }
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
@@ -319,10 +330,25 @@ struct ContentView: View {
             .accessibilityLabel(audio.isPlaying ? "Pausar" : "Tocar")
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(audio.fileName ?? "Nenhuma música")
-                    .font(DS.Typography.trackTitle)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(audio.fileName ?? "Nenhuma música")
+                        .font(DS.Typography.trackTitle)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if currentTrack != nil {
+                        Button {
+                            showLyrics = true
+                        } label: {
+                            Image(systemName: "mic.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(currentTheme.accent)
+                                .frame(width: 30, height: 30)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Abrir letras da música")
+                    }
+                }
                 Text(hasTrack ? durationText : "Toque em + ou cole um link")
                     .font(DS.Typography.subtitleNumeric)
                     .foregroundStyle(hasTrack ? Color.white : DS.Ink.secondary)
