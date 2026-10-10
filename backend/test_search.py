@@ -60,7 +60,7 @@ class SearchTests(unittest.TestCase):
 
     def test_search_does_not_consume_audio_slots(self):
         main._search_slots.acquire()
-        with patch.object(main.subprocess, 'run') as run:
+        with patch("ytmusicapi.YTMusic") as factory:
             self.assertEqual(self.client.get('/search', params={'query': 'music'}).status_code, 429)
             factory.assert_not_called()
         self.assertEqual(main.download_semaphore._value, min(main.MAX_CONCURRENT_DOWNLOADS, 2))
