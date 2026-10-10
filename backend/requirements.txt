@@ -8,3 +8,5 @@ yt-dlp[default]
 deno
 # Bundle de autoridades certificadoras para validação TLS.
 certifi>=2024.0.0
+# Separate metadata search from yt-dlp download/extraction.
+ytmusicapi>=1.7,<2

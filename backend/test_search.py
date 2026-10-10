@@ -16,54 +16,45 @@ class SearchTests(unittest.TestCase):
         slots.start()
         self.addCleanup(slots.stop)
 
-    def test_ndjson_and_literal_query_arguments(self):
-        query = 'nightcore; $(echo secret) "mix"'
-        payload = '{"id":"abcdefghijk","title":"Test"}\n'
-        with patch.object(main.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as run:
-            response = self.client.get('/search', params={'query': query})
+    def test_ndjson_and_song_filter(self):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.search.return_value = [
+            {"resultType": "song", "videoId": "abcdefghijk", "title": "Song",
+             "duration_seconds": 180, "thumbnails": [{"url": "https://example.com/a.jpg"}]},
+        ]
+        with patch("ytmusicapi.YTMusic", return_value=client):
+            response = self.client.get("/search", params={"query": "music"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.text, payload)
-        self.assertIn('application/x-ndjson', response.headers['content-type'])
-        self.assertEqual(run.call_args.args[0][3:6], [f'ytmsearch15:{query}', '--dump-json', '--flat-playlist'])
-        self.assertNotIn('shell', run.call_args.kwargs)
-        self.assertEqual(run.call_args.kwargs['timeout'], 75)
+        self.assertIn("application/x-ndjson", response.headers["content-type"])
+        self.assertEqual(response.json() if False else len(response.text.splitlines()), 1)
+        self.assertIn('"id": "abcdefghijk"', response.text)
+        client.search.assert_called_once_with("music", filter="songs", limit=20)
 
-    def test_fallback_when_music_search_is_unsupported(self):
-        query = "test artist"
-        payload = '{"id":"abcdefghijk","title":"Track","duration":180}\n'
-        unsupported = subprocess.CompletedProcess([], 1, '', 'Unsupported URL: ytmsearch')
-        available = subprocess.CompletedProcess([], 0, payload, '')
-        with patch.object(main.subprocess, "run", side_effect=[unsupported, available]) as run:
-            response = self.client.get('/search', params={'query': query})
+    def test_search_filters_long_and_missing_duration(self):
+        songs = [
+            {"resultType": "song", "videoId": "abcdefghijk", "title": "Long", "duration_seconds": 600},
+            {"resultType": "song", "videoId": "lmnopqrstuv", "title": "Short", "duration_seconds": 599},
+            {"resultType": "song", "videoId": "zzzzzzzzzzz", "title": "Unknown"},
+        ]
+        with patch("ytmusicapi.YTMusic") as factory:
+            factory.return_value.search.return_value = songs
+            response = self.client.get("/search", params={"query": "music"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.text, payload)
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args_list[1].args[0][3], f'ytsearch15:{query} official audio')
-
-    def test_search_filters_long_duration(self):
-        payload = ('{"id":"abcdefghijk","title":"Long","duration":600}\n'
-                   '{"id":"lmnopqrstuv","title":"Short","duration":599}\n')
-        with patch.object(main.subprocess, "run",
-                          return_value=subprocess.CompletedProcess([], 0, payload, '')):
-            response = self.client.get('/search', params={'query': 'music'})
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn('"Long"', response.text)
-        self.assertIn('"Short"', response.text)
+        self.assertNotIn("Long", response.text)
+        self.assertNotIn("Unknown", response.text)
+        self.assertIn("Short", response.text)
 
     def test_invalid_queries_never_execute(self):
-        with patch.object(main.subprocess, 'run') as run:
+        with patch("ytmusicapi.YTMusic") as factory:
             for query in ['', '   ', 'a' * 201]:
                 self.assertIn(self.client.get('/search', params={'query': query}).status_code, [400, 422])
             self.assertEqual(self.client.get('/search').status_code, 422)
-            run.assert_not_called()
+            factory.assert_not_called()
 
-    def test_timeout_and_failure_release_slot(self):
-        with patch.object(main.subprocess, 'run', side_effect=subprocess.TimeoutExpired('yt-dlp', 75)):
-            self.assertEqual(self.client.get('/search', params={'query': 'music'}).status_code, 504)
-        self.assertTrue(main._search_slots.acquire(blocking=False))
-        main._search_slots.release()
-        with patch.object(main.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'blocked')):
-            self.assertEqual(self.client.get('/search', params={'query': 'music'}).status_code, 502)
+    def test_failure_releases_slot(self):
+        with patch("ytmusicapi.YTMusic", side_effect=RuntimeError("blocked")):
+            self.assertEqual(self.client.get("/search", params={"query": "music"}).status_code, 502)
         self.assertTrue(main._search_slots.acquire(blocking=False))
         main._search_slots.release()
 
@@ -71,7 +62,7 @@ class SearchTests(unittest.TestCase):
         main._search_slots.acquire()
         with patch.object(main.subprocess, 'run') as run:
             self.assertEqual(self.client.get('/search', params={'query': 'music'}).status_code, 429)
-            run.assert_not_called()
+            factory.assert_not_called()
         self.assertTrue(main._download_slots.acquire(blocking=False))
         main._download_slots.release()
 

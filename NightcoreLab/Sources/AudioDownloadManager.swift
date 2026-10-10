@@ -134,7 +134,7 @@ final class AudioDownloadManager: ObservableObject {
 
     nonisolated static func nextTracks(_ tracks: [Track], excluding id: String) -> [Track] {
         var seen = Set([id])
-        return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(3))
+        return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(2))
     }
 
     func cancel() {

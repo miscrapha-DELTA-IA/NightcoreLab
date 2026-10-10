@@ -183,50 +183,52 @@ def related(url: HttpUrl):
         _related_slots.release()
 
 
+def _music_search_entries(items: list[dict]) -> str:
+    """Return the existing Swift-compatible NDJSON contract using YT Music songs."""
+    accepted = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict) or item.get("resultType") != "song":
+            continue
+        video_id = item.get("videoId")
+        duration = item.get("duration_seconds")
+        if (not isinstance(video_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id)
+                or not isinstance(duration, (int, float))
+                or not 0 < duration < MAX_DURATION_SECONDS
+                or item.get("isAvailable") is False or video_id in seen):
+            continue
+        title = item.get("title")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        seen.add(video_id)
+        artwork = next((thumb.get("url") for thumb in reversed(item.get("thumbnails") or [])
+                        if isinstance(thumb, dict) and isinstance(thumb.get("url"), str)
+                        and thumb["url"].startswith("https://")), None)
+        accepted.append(json.dumps({"id": video_id, "title": title.strip(),
+                                    "duration": duration, "thumbnail": artwork,
+                                    "is_live": False}, ensure_ascii=False))
+        if len(accepted) >= 15:
+            break
+    return "\\n".join(accepted).replace("\\\\n", "\\n") + ("\\n" if accepted else "")
+
+
 @app.get("/search")
 def search(query: str = Query(min_length=1, max_length=200)):
-    """Flat yt-dlp NDJSON for the native Swift search view; no audio extraction."""
+    """Search YouTube Music songs without invoking yt-dlp or extracting audio."""
     query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Digite uma busca.")
     if not _search_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.")
     try:
-        # ytmsearch belongs to Lavalink on many deployments; yt-dlp may not
-        # provide this extractor. Try it first, then fall back without breaking search.
-        # argv, never a shell: punctuation cannot become executable code.
-        result = None
-        for prefix in ("ytmsearch15", "ytsearch15"):
-            arguments = [f"{prefix}:{query if prefix.startswith('ytm') else query + ' official audio'}",
-                         "--dump-json", "--flat-playlist"]
-            result = subprocess.run(
-                [sys.executable, "-m", "yt_dlp", *arguments,
-                 "--ignore-config", "--no-cache-dir", "--socket-timeout", "15", "--retries", "1"],
-                capture_output=True, text=True, encoding="utf-8", timeout=75, check=False,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                break
-        if result is None or result.returncode or not result.stdout.strip():
-            log.warning("yt-dlp search failed: %s", (result.stderr if result else "")[:500])
-            raise HTTPException(status_code=502, detail="Busca temporariamente indisponível.")
-        # Flat metadata frequently omits duration. Reject known long/unknown-live
-        # results here; the download extraction enforces the hard duration cap.
-        accepted = []
-        for raw in result.stdout.splitlines():
-            try:
-                item = json.loads(raw)
-            except ValueError:
-                continue
-            duration = item.get("duration")
-            if (isinstance(duration, (int, float)) and duration >= MAX_DURATION_SECONDS
-                    or item.get("is_live") or item.get("live_status") in ("is_live", "is_upcoming")):
-                continue
-            accepted.append(raw)
-        return Response(content="\n".join(accepted) + ("\n" if accepted else ""),
+        from ytmusicapi import YTMusic
+        results = YTMusic().search(query, filter="songs", limit=20)
+        return Response(content=_music_search_entries(results),
                         media_type="application/x-ndjson",
                         headers={"Cache-Control": "no-store"})
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="A busca demorou demais. Tente novamente.")
+    except Exception:
+        log.exception("YouTube Music search failed")
+        raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.")
     finally:
         _search_slots.release()
 
