@@ -63,8 +63,7 @@ class SearchTests(unittest.TestCase):
         with patch.object(main.subprocess, 'run') as run:
             self.assertEqual(self.client.get('/search', params={'query': 'music'}).status_code, 429)
             factory.assert_not_called()
-        self.assertTrue(main._download_slots.acquire(blocking=False))
-        main._download_slots.release()
+        self.assertEqual(main.download_semaphore._value, min(main.MAX_CONCURRENT_DOWNLOADS, 2))
 
     def test_get_download_reuses_existing_audio_bridge(self):
         url = 'https://www.youtube.com/watch?v=abcdefghijk'
