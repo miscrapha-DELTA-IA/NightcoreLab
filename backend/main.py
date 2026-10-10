@@ -209,7 +209,7 @@ def _music_search_entries(items: list[dict]) -> str:
                                     "is_live": False}, ensure_ascii=False))
         if len(accepted) >= 15:
             break
-    return "\\n".join(accepted).replace("\\\\n", "\\n") + ("\\n" if accepted else "")
+    return "\n".join(accepted) + ("\n" if accepted else "")
 
 
 @app.get("/search")
