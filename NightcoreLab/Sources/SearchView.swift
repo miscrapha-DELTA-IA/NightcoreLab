@@ -1,6 +1,14 @@
 import SwiftUI
 import SDWebImageSwiftUI
 
+/// Presentation-only choice: discovery never merges search hits with recommendations.
+enum DiscoveryPresentation {
+    static func visibleTracks(searchQuery: String?,
+                              searchResults: [Track], suggestions: [Track]) -> [Track] {
+        searchQuery == nil ? suggestions : searchResults
+    }
+}
+
 struct SearchView: View {
     @ObservedObject var downloader: AudioDownloadManager
     let theme: AppTheme
@@ -22,7 +30,10 @@ struct SearchView: View {
     @FocusState private var isFocused: Bool
 
     private var isSearchMode: Bool { submittedQuery != nil }
-    private var displayedTracks: [Track] { isSearchMode ? searchResults : suggestedTracks }
+    private var displayedTracks: [Track] {
+        DiscoveryPresentation.visibleTracks(searchQuery: submittedQuery,
+                                            searchResults: searchResults, suggestions: suggestedTracks)
+    }
 
     private func showSuggestions() {
         query = ""
@@ -75,7 +86,7 @@ struct SearchView: View {
                     .submitLabel(.search)
                     .focused($isFocused)
                     .onSubmit { handleInput(query) }
-                    .disabled(!isEnabled || downloader.isDownloading)
+                    .disabled(!isEnabled)
                 if isSearching || downloader.isDownloading { ProgressView().tint(theme.accent) }
                 if !query.isEmpty {
                     Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
