@@ -83,6 +83,11 @@ final class AudioDownloadManager: ObservableObject {
         downloadProgress = cachedLocal == nil ? 0 : 1
         attempts[track.id] = 0
         let cached = cachedTrack(track)
+        if let cachedLocal {
+            // Local playback is immediate and does not invalidate in-flight Up Next work.
+            deliver(cachedLocal, track: cached)
+            return
+        }
         serialize {
             guard generation == self.selectionGeneration else { return }
             // Stop queue advancement before removing speculative work. An already-running
@@ -113,8 +118,6 @@ final class AudioDownloadManager: ObservableObject {
             }
             self.persistPending()
         }
-        // Cache hits open immediately, before awaiting cancellation of speculative transfers.
-        if let cachedLocal { deliver(cachedLocal, track: cached) }
     }
 
     /// Called only once the audio engine has actually started playback.
