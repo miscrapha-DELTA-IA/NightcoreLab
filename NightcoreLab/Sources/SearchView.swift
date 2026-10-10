@@ -6,24 +6,56 @@ struct SearchView: View {
     let theme: AppTheme
     let isEnabled: Bool
     let onSelect: (Track, [Track]) -> Void
+    let onLink: (String) -> Void
+    let onServerSettings: () -> Void
     @State private var query = ""
     @State private var results: [Track] = []
     @State private var isSearching = false
     @State private var errorMessage: String?
     @State private var hasSearched = false
+    @State private var submittedQuery: String?
     @FocusState private var isFocused: Bool
+
+    private var looksLikeLink: Bool {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return text.hasPrefix("http") || text.contains("youtu.be") || text.contains("youtube.com")
+    }
+
+    private func handleInput(_ input: String) {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, isEnabled else { return }
+        isFocused = false
+        errorMessage = nil
+        results = []
+        hasSearched = false
+        if value.lowercased().hasPrefix("http") ||
+            value.lowercased().contains("youtu.be") ||
+            value.lowercased().contains("youtube.com") {
+            submittedQuery = nil
+            query = ""
+            onLink(value)
+        } else {
+            submittedQuery = value
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(theme.accent)
-                TextField("Buscar músicas no YouTube", text: $query)
+                Button(action: onServerSettings) {
+                    Image(systemName: "server.rack").foregroundStyle(theme.accent)
+                }
+                .accessibilityLabel("Configurar servidor")
+                Image(systemName: looksLikeLink ? "arrow.down.circle" : "magnifyingglass")
+                    .foregroundStyle(theme.accent)
+                TextField("Buscar música ou colar link", text: $query)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
                     .focused($isFocused)
-                    .onSubmit { isFocused = false }
-                if isSearching { ProgressView().tint(theme.accent) }
+                    .onSubmit { handleInput(query) }
+                    .disabled(!isEnabled || downloader.isDownloading)
+                if isSearching || downloader.isDownloading { ProgressView().tint(theme.accent) }
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .accessibilityLabel("Limpar busca")
@@ -73,18 +105,15 @@ struct SearchView: View {
                 }
             }
         }
-        .task(id: query) {
-            let requested = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            results = []
-            errorMessage = nil
-            hasSearched = false
-            isSearching = false
-            guard !requested.isEmpty else { return }
+        .task(id: submittedQuery) {
+            guard let requested = submittedQuery else {
+                isSearching = false
+                return
+            }
+            isSearching = true
             do {
-                try await Task.sleep(for: .milliseconds(400))
-                try Task.checkCancellation()
-                isSearching = true
-                let found = try await YouTubeSearchService().search(query: requested, serverURL: AudioDownloadManager.apiBaseURL)
+                let found = try await YouTubeSearchService().search(
+                    query: requested, serverURL: AudioDownloadManager.apiBaseURL)
                 try Task.checkCancellation()
                 results = found
                 hasSearched = true
