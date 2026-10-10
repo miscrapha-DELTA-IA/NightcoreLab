@@ -16,7 +16,7 @@ YouTube exige um runtime de JavaScript desde o yt-dlp 2025.11.12: o requirements
 instala "yt-dlp[default]" (traz o yt-dlp-ejs) e o pacote "deno" (binário oficial do Deno).
 
 Variáveis de ambiente opcionais:
-    MAX_DURATION_SECONDS      duração máxima por faixa (padrão 1200 = 20 min)
+    MAX_DURATION_SECONDS      limite fixo de segurança: duração inferior a 600 s (10 min)
     MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 2; protege os 512 MB do tier gratuito)
     COOKIES_FILE              caminho de um cookies.txt (formato Netscape) para contornar a
                               verificação anti-bot do YouTube. No Render, use um Secret File:
@@ -29,6 +29,7 @@ Variáveis de ambiente opcionais:
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
 import re
@@ -203,9 +204,9 @@ def search(query: str = Query(min_length=1, max_length=200)):
                  "--ignore-config", "--no-cache-dir", "--socket-timeout", "15", "--retries", "1"],
                 capture_output=True, text=True, encoding="utf-8", timeout=75, check=False,
             )
-            if result.returncode == 0:
+            if result.returncode == 0 and result.stdout.strip():
                 break
-        if result is None or result.returncode:
+        if result is None or result.returncode or not result.stdout.strip():
             log.warning("yt-dlp search failed: %s", (result.stderr if result else "")[:500])
             raise HTTPException(status_code=502, detail="Busca temporariamente indisponível.")
         # Flat metadata frequently omits duration. Reject known long/unknown-live
