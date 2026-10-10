@@ -14,6 +14,7 @@ struct SearchView: View {
     @State private var errorMessage: String?
     @State private var hasSearched = false
     @State private var submittedQuery: String?
+    @State private var searchRequestID = UUID()
     @FocusState private var isFocused: Bool
 
     private var looksLikeLink: Bool {
@@ -32,10 +33,12 @@ struct SearchView: View {
             value.lowercased().contains("youtu.be") ||
             value.lowercased().contains("youtube.com") {
             submittedQuery = nil
+            searchRequestID = UUID()
             query = ""
             onLink(value)
         } else {
             submittedQuery = value
+            searchRequestID = UUID()
         }
     }
 
@@ -105,7 +108,7 @@ struct SearchView: View {
                 }
             }
         }
-        .task(id: submittedQuery) {
+        .task(id: searchRequestID) {
             guard let requested = submittedQuery else {
                 isSearching = false
                 return
