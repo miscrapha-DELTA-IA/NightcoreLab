@@ -348,6 +348,11 @@ def _release_download(video_id: str, entry: InFlightDownload,
             shutil.rmtree(entry.task.result()[3], ignore_errors=True)
 
 
+async def _release_response(video_id: str, entry: InFlightDownload) -> None:
+    # Starlette runs async background callbacks on the owning event loop.
+    _release_download(video_id, entry)
+
+
 @app.post("/download")
 async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     url = str(request.url)
@@ -379,7 +384,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
 
     # Retain the file until this response has finished transmitting. Multiple
     # consumers share the same task but own independent response lifetimes.
-    background_tasks.add_task(_release_download, video_id, entry)
+    background_tasks.add_task(_release_response, video_id, entry)
     headers = {"Cache-Control": "no-store"}
     if thumbnail:
         headers["X-Cover-Url"] = thumbnail
