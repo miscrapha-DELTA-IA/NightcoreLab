@@ -1123,6 +1123,7 @@ struct GiantSlider: View {
         .animation(.spring(duration: 0.25), value: isDragging)
         .sensoryFeedback(.selection, trigger: value == defaultValue)
     }
+}
 
 // MARK: - Share sheet
 
