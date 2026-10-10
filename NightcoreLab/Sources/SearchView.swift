@@ -5,6 +5,10 @@ struct SearchView: View {
     @ObservedObject var downloader: AudioDownloadManager
     let theme: AppTheme
     let isEnabled: Bool
+    let suggestedTracks: [Track]
+    let isLoadingSuggestions: Bool
+    let canRefreshSuggestions: Bool
+    let onRefreshSuggestions: () -> Void
     let onSelect: (Track, [Track]) -> Void
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
@@ -16,6 +20,20 @@ struct SearchView: View {
     @State private var submittedQuery: String?
     @State private var searchRequestID = UUID()
     @FocusState private var isFocused: Bool
+
+    private var isSearchMode: Bool { submittedQuery != nil }
+    private var displayedTracks: [Track] { isSearchMode ? searchResults : suggestedTracks }
+
+    private func showSuggestions() {
+        query = ""
+        searchResults = []
+        submittedQuery = nil
+        hasSearched = false
+        isSearching = false
+        errorMessage = nil
+        searchRequestID = UUID()
+        isFocused = false
+    }
 
     private var looksLikeLink: Bool {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -60,39 +78,58 @@ struct SearchView: View {
                     .disabled(!isEnabled || downloader.isDownloading)
                 if isSearching || downloader.isDownloading { ProgressView().tint(theme.accent) }
                 if !query.isEmpty {
-                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
                         .accessibilityLabel("Limpar busca")
                 }
             }
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
 
-            if let errorMessage {
-                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-            } else if hasSearched && searchResults.isEmpty && !isSearching {
-                Text("Nenhuma música encontrada.").font(.caption).foregroundStyle(.secondary)
-            }
-            if !searchResults.isEmpty {
-                HStack {
-                    Label("RESULTADOS DA BUSCA", systemImage: "magnifyingglass")
-                        .font(.caption.weight(.heavy))
-                        .tracking(1.4)
+            HStack {
+                Label("DESCOBRIR", systemImage: "sparkles")
+                    .font(.caption.weight(.heavy))
+                    .tracking(1.4)
+                    .foregroundStyle(theme.accent)
+                Spacer()
+                if isSearchMode {
+                    Button("Sugestões") { showSuggestions() }
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(theme.accent)
-                    Spacer()
-                    Text("\(searchResults.count) músicas")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Voltar às sugestões")
+                } else if canRefreshSuggestions {
+                    Button(action: onRefreshSuggestions) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(theme.accent)
+                    }
+                    .accessibilityLabel("Atualizar sugestões")
                 }
-                Text("Toque numa música para reproduzir agora")
+            }
+
+            if let errorMessage, isSearchMode {
+                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+            } else if isSearchMode && hasSearched && searchResults.isEmpty && !isSearching {
+                Text("Nenhuma música encontrada. Experimente outro termo.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
+                Text("Escolha uma música para descobrir faixas relacionadas.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if (isSearchMode && isSearching) || (!isSearchMode && isLoadingSuggestions) {
+                ProgressView(isSearchMode ? "Procurando músicas…" : "Carregando sugestões…")
+                    .tint(theme.accent)
+            }
+            if !displayedTracks.isEmpty {
+                Text(isSearchMode ? "Resultados da pesquisa · tocar agora" :
+                     "Sugestões relacionadas · tocar agora")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 12) {
-                        ForEach(searchResults) { result in
+                        ForEach(displayedTracks) { result in
                             let track = downloader.cachedTrack(result)
                             Button {
                                 isFocused = false
-                                // Play now: other search hits never become the playback queue.
+                                // Search/discovery never append all results to the playback queue.
                                 onSelect(track, [])
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -108,7 +145,7 @@ struct SearchView: View {
                                         .lineLimit(2)
                                         .multilineTextAlignment(.leading)
                                         .frame(height: 34, alignment: .topLeading)
-                                    Label(track.isCached ? "Pronta para tocar" : "Tocar",
+                                    Label(track.isCached ? "Pronta para tocar" : "Tocar agora",
                                           systemImage: track.isCached ? "checkmark.circle.fill" : "play.circle")
                                         .font(.caption2).foregroundStyle(theme.accent)
                                 }
@@ -118,6 +155,7 @@ struct SearchView: View {
                             .disabled(!isEnabled)
                         }
                     }
+                    .padding(.vertical, 3)
                 }
             }
         }

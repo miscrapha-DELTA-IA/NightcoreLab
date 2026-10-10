@@ -12,18 +12,69 @@ final class PlaybackQueue: ObservableObject {
         upNextQueue = candidates.filter { seen.insert($0.id).inserted }
     }
 
-    func select(_ track: Track) -> [Track]? {
+    /// Stage the selection without mutating the visible queue.
+    func remaining(after track: Track) -> [Track]? {
         guard let index = upNextQueue.firstIndex(where: { $0.id == track.id }) else { return nil }
-        upNextQueue.removeFirst(index + 1)
-        return upNextQueue
+        return Array(upNextQueue.dropFirst(index + 1))
     }
 
-    func takeNext() -> Track? {
-        guard !upNextQueue.isEmpty else { return nil }
-        return upNextQueue.removeFirst()
+    /// Commit only once the audio engine has reported a successful play.
+    @discardableResult
+    func commitPlaying(_ track: Track) -> Bool {
+        guard let index = upNextQueue.firstIndex(where: { $0.id == track.id }) else { return false }
+        upNextQueue.removeFirst(index + 1)
+        return true
     }
 
     func clear() { upNextQueue.removeAll() }
+}
+
+@MainActor
+final class PlaybackTransitionCoordinator: ObservableObject {
+    enum Phase: Equatable {
+        case idle
+        case preparing(String)
+        case playing(String)
+        case failed(String)
+    }
+
+    @Published private(set) var phase: Phase = .idle
+    private var token = UUID()
+
+    @discardableResult
+    func begin(trackID: String) -> UUID {
+        token = UUID()
+        phase = .preparing(trackID)
+        return token
+    }
+
+    func isCurrent(_ request: UUID, trackID: String) -> Bool {
+        request == token && phase == .preparing(trackID)
+    }
+
+    @discardableResult
+    func didStart(_ request: UUID, trackID: String) -> Bool {
+        guard isCurrent(request, trackID: trackID) else { return false }
+        phase = .playing(trackID)
+        return true
+    }
+
+    @discardableResult
+    func didFail(_ request: UUID, trackID: String) -> Bool {
+        guard isCurrent(request, trackID: trackID) else { return false }
+        phase = .failed(trackID)
+        return true
+    }
+
+    var isPreparing: Bool {
+        if case .preparing = phase { return true }
+        return false
+    }
+
+    func reset() {
+        token = UUID()
+        phase = .idle
+    }
 }
 
 struct ContentView: View {
@@ -49,6 +100,7 @@ struct ContentView: View {
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
     @StateObject private var playbackQueue = PlaybackQueue()
+    @StateObject private var playbackTransition = PlaybackTransitionCoordinator()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
@@ -103,6 +155,10 @@ struct ContentView: View {
                     SearchView(
                         downloader: downloader, theme: currentTheme,
                         isEnabled: !audio.isExporting,
+                        suggestedTracks: relatedVideos,
+                        isLoadingSuggestions: isLoadingRelated,
+                        canRefreshSuggestions: relatedSourceURL != nil,
+                        onRefreshSuggestions: { relatedRequestID = UUID() },
                         onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
                         onLink: { link in startDownload(link) },
                         onServerSettings: { showServerSettings = true }
@@ -531,43 +587,6 @@ struct ContentView: View {
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: currentTheme, depth: 0.6)
 
-            if !relatedVideos.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Label("DESCOBRIR MAIS", systemImage: "sparkles")
-                            .font(.caption.weight(.heavy))
-                            .tracking(1.5)
-                            .foregroundStyle(currentTheme.accent)
-                        Spacer()
-                        if isLoadingRelated {
-                            ProgressView().tint(currentTheme.accent)
-                        } else if relatedSourceURL != nil {
-                            Button { relatedRequestID = UUID() } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .accessibilityLabel("Atualizar sugestões")
-                        }
-                    }
-                    Text("Sugestões relacionadas · toque para reproduzir agora")
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Ink.secondary)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 12) {
-                            ForEach(relatedVideos) { video in
-                                RelatedVideoCard(video: downloader.cachedTrack(video),
-                                                 theme: currentTheme, isEnabled: !audio.isExporting) {
-                                    playTrack(video, upcoming: [])
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            } else if isLoadingRelated {
-                Text("Buscando sugestões relacionadas…")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Ink.secondary)
-            }
         }
     }
 
@@ -748,34 +767,52 @@ struct ContentView: View {
     }
 
     private func playFromQueue(_ track: Track) {
-        guard playbackQueue.select(track) != nil else { return }
-        playTrack(track, upcoming: playbackQueue.upNextQueue, preservingQueue: true)
+        guard !audio.isExporting,
+              let remaining = playbackQueue.remaining(after: track) else { return }
+        // The row must stay visible during transfer/loading, including on failure.
+        playTrack(track, upcoming: remaining, preservingQueue: true)
     }
 
     private func playTrack(_ track: Track, upcoming: [Track], preservingQueue: Bool = false) {
         guard !audio.isExporting else { return }
-        if !preservingQueue {
-            resetRelatedVideos()
-            playbackQueue.replace(with: upcoming, excluding: track.id)
-        }
-        // Queue transitions retain recommendations and the remaining queue.
-        downloader.select(track) { localURL, downloadedCoverURL in
+        let token = playbackTransition.begin(trackID: track.id)
+        downloader.select(track, onReady: { localURL, downloadedCoverURL in
+            guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
             do {
                 try audio.load(url: localURL)
-                coverURL = downloadedCoverURL
                 applyPitch()
-                playingTrackID = track.id
-                currentTrack = track
                 audio.play()
-                if upcoming.isEmpty {
+                guard audio.isPlaying else {
+                    if playbackTransition.didFail(token, trackID: track.id) {
+                        errorMessage = "Não foi possível iniciar a reprodução. A fila foi preservada."
+                    }
+                    return
+                }
+                guard playbackTransition.didStart(token, trackID: track.id) else { return }
+                // Commit the queue only AFTER actual playback has started.
+                if preservingQueue {
+                    playbackQueue.commitPlaying(track)
+                } else {
+                    resetRelatedVideos()
+                    playbackQueue.replace(with: upcoming, excluding: track.id)
+                }
+                coverURL = downloadedCoverURL
+                playingTrackID = track.id
+                currentTrack = downloader.cachedTrack(track)
+                // Only fetch new suggestions when there is no queued successor.
+                if playbackQueue.upNextQueue.isEmpty {
                     relatedSourceURL = track.url.absoluteString
                     relatedRequestID = UUID()
                 }
                 prefetchUpcoming()
             } catch {
-                errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
+                guard playbackTransition.didFail(token, trackID: track.id) else { return }
+                errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
             }
-        }
+        }, onFailure: { message in
+            guard playbackTransition.didFail(token, trackID: track.id) else { return }
+            errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+        })
     }
 
     private func prefetchUpcoming() {
@@ -784,9 +821,9 @@ struct ContentView: View {
     }
 
     private func advanceQueue() {
-        guard !audio.isExporting, let next = playbackQueue.takeNext() else { return }
-        let rest = playbackQueue.tracks
-        playTrack(next, upcoming: rest, preservingQueue: true)
+        guard !audio.isExporting, !playbackTransition.isPreparing,
+              let next = playbackQueue.upNextQueue.first else { return }
+        playFromQueue(next)
     }
 
     private func resetRelatedVideos() {
@@ -805,7 +842,9 @@ struct ContentView: View {
         guard !Task.isCancelled, requestID == relatedRequestID,
               sourceURL == relatedSourceURL else { return }
         relatedVideos = videos
-        if let playingTrackID {
+        // An in-flight recommendations request must never overwrite an active queue.
+        if let playingTrackID, playbackQueue.upNextQueue.isEmpty,
+           !playbackTransition.isPreparing {
             playbackQueue.replace(with: videos, excluding: playingTrackID)
         }
         isLoadingRelated = false
@@ -831,6 +870,7 @@ struct ContentView: View {
             playingTrackID = nil
             currentTrack = nil
             playbackQueue.clear()
+            playbackTransition.reset()
             downloader.cancel()
             resetRelatedVideos()
             applyPitch()

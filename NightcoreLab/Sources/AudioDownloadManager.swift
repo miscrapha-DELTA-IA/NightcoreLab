@@ -33,6 +33,7 @@ final class AudioDownloadManager: ObservableObject {
     private var selectedID: String?
     private var playingID: String?
     private var onReady: ((URL, URL?) -> Void)?
+    private var onFailure: ((String) -> Void)?
     private var lastWarmUp: Date?
     private var mutation: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
@@ -70,12 +71,14 @@ final class AudioDownloadManager: ObservableObject {
         select(track, onReady: onReady)
     }
 
-    func select(_ track: Track, onReady: @escaping (URL, URL?) -> Void) {
+    func select(_ track: Track, onReady: @escaping (URL, URL?) -> Void,
+                onFailure: ((String) -> Void)? = nil) {
         retryTask?.cancel()
         selectionGeneration = UUID()
         let generation = selectionGeneration
         selectedID = track.id
         self.onReady = onReady
+        self.onFailure = onFailure
         errorMessage = nil
         isRetrying = false
         let cachedLocal = cache.localURL(for: track.id)
@@ -90,27 +93,29 @@ final class AudioDownloadManager: ObservableObject {
         }
         serialize {
             guard generation == self.selectionGeneration else { return }
-            // Stop queue advancement before removing speculative work. An already-running
-            // download of the selected track is reused instead of being restarted.
-            self.transfers.setMaxConcurrentDownloads(0)
+            // The pinned DownloadKit starts idle entries in updateQueue() when another
+            // entry is removed. Do not reset concurrency or cancel the selected task:
+            // resume() creates a NEW URLSession task and used to orphan the old one.
             let obsolete = self.transfers.downloads.filter { self.tracks[$0.id]?.id != track.id }
             for item in obsolete {
                 self.tracks[item.id] = nil
                 self.tasks[item.id] = nil
                 await self.transfers.remove(item)
+                guard generation == self.selectionGeneration else { return }
             }
-            self.transfers.setMaxConcurrentDownloads(1)
-            guard generation == self.selectionGeneration else { return }
-            if cachedLocal != nil {
-                self.persistPending()
-                return
+            // A speculative transfer may have finished while we removed obsolete work.
+            if let local = self.cache.localURL(for: track.id) {
+                self.deliver(local, track: self.cachedTrack(track))
             } else if let existing = self.transfers.downloads.first(where: { self.tracks[$0.id]?.id == track.id }) {
+                existing.userInfo["priority"] = URLSessionTask.highPriority
                 self.tasks[existing.id]?.priority = URLSessionTask.highPriority
                 self.downloadProgress = existing.fractionCompleted
-                if existing.status != .downloading {
-                    // Changing maxConcurrentDownloads alone does not drain the upstream queue.
-                    self.tasks[existing.id]?.cancel()
-                    existing.userInfo["priority"] = URLSessionTask.highPriority
+                switch existing.status {
+                case .downloading, .finished:
+                    break // Never restart an already running or completing transfer.
+                case .idle, .paused, .failed:
+                    // Idle has not begun; paused/failed require a fresh task.
+                    // updateQueue() is triggered by resume() when needed.
                     await self.transfers.resume(existing)
                 }
             } else {
@@ -174,6 +179,7 @@ final class AudioDownloadManager: ObservableObject {
         retryTask?.cancel()
         selectedID = nil
         onReady = nil
+        onFailure = nil
         isDownloading = false
         isRetrying = false
         downloadProgress = 0
@@ -224,6 +230,7 @@ final class AudioDownloadManager: ObservableObject {
         downloadProgress = 1
         let callback = onReady
         onReady = nil
+        onFailure = nil
         callback?(local, track.thumbnailURL)
     }
 
@@ -232,7 +239,10 @@ final class AudioDownloadManager: ObservableObject {
         isDownloading = false
         isRetrying = false
         errorMessage = message
+        let callback = onFailure
         onReady = nil
+        onFailure = nil
+        callback?(message)
     }
 
     private var pendingURL: URL { cache.folder.appendingPathComponent("pending.json") }
