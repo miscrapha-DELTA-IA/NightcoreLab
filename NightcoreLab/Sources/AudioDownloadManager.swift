@@ -19,6 +19,9 @@ final class AudioDownloadManager: ObservableObject {
     @Published private(set) var relatedErrorMessage: String?
     @Published private(set) var downloadProgress: Double = 0
     @Published private(set) var isRetrying = false
+    @Published private(set) var isRateLimited = false
+    private var rateLimitUntil: Date = .distantPast
+    private var breakerTask: Task<Void, Never>?
     @Published private(set) var cachedIDs = Set<String>()
     var backgroundCompletionHandler: (() -> Void)?
 
@@ -119,11 +122,12 @@ final class AudioDownloadManager: ObservableObject {
         guard selectedID == id else { return }
         playingID = id
         let generation = selectionGeneration
+        guard !isRateLimited else { return }
         let next = Self.nextTracks(upcoming, excluding: id)
         serialize {
-            guard generation == self.selectionGeneration else { return }
+            guard generation == self.selectionGeneration, !self.isRateLimited else { return }
             for track in next {
-                guard generation == self.selectionGeneration else { return }
+                guard generation == self.selectionGeneration, !self.isRateLimited else { return }
                 guard self.cache.localURL(for: track.id) == nil,
                       !self.tracks.values.contains(where: { $0.id == track.id }) else { continue }
                 await self.append(track, priority: URLSessionTask.lowPriority)
@@ -135,6 +139,31 @@ final class AudioDownloadManager: ObservableObject {
     nonisolated static func nextTracks(_ tracks: [Track], excluding id: String) -> [Track] {
         var seen = Set([id])
         return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(2))
+    }
+
+    private func activateRateLimit(retryAfter: TimeInterval = 60) {
+        isRateLimited = true
+        rateLimitUntil = max(rateLimitUntil, Date().addingTimeInterval(max(60, retryAfter)))
+        breakerTask?.cancel()
+        breakerTask = Task { @MainActor in
+            let wait = max(0, rateLimitUntil.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled, Date() >= rateLimitUntil else { return }
+            isRateLimited = false
+        }
+        serialize {
+            self.transfers.setMaxConcurrentDownloads(0)
+            let speculative = self.transfers.downloads.filter {
+                self.tracks[$0.id]?.id != self.selectedID
+            }
+            for item in speculative {
+                self.tracks[item.id] = nil
+                self.tasks[item.id] = nil
+                await self.transfers.remove(item)
+            }
+            self.transfers.setMaxConcurrentDownloads(1)
+            self.persistPending()
+        }
     }
 
     func cancel() {
@@ -177,6 +206,7 @@ final class AudioDownloadManager: ObservableObject {
         }
         // GET is intentional: background download tasks must be reconstructible without a POST body.
         let request = URLRequest(url: url, timeoutInterval: 180)
+        guard priority != URLSessionTask.lowPriority || !isRateLimited else { return }
         let download = Download(request: request)
         tracks[download.id] = track
         download.userInfo["priority"] = priority
@@ -393,9 +423,19 @@ extension AudioDownloadManager: DownloadManagerDelegate {
 
     func downloadStatusDidChange(_ download: Download) async {
         guard case .failed(let error) = download.status, let track = tracks[download.id] else { return }
+        let response = tasks[download.id]?.response as? HTTPURLResponse
+        let rateLimited: Bool
+        if case .serverError(let status) = error {
+            rateLimited = status == 429
+        } else {
+            rateLimited = response?.statusCode == 429
+        }
+        let retryAfter = response?.value(forHTTPHeaderField: "Retry-After")
+            .flatMap(TimeInterval.init) ?? 60
         tracks[download.id] = nil
         tasks[download.id] = nil
         serialize { await self.transfers.remove(download); self.persistPending() }
+        if rateLimited { activateRateLimit(retryAfter: retryAfter) }
         // Speculative failures stay silent and can be retried on explicit selection.
         guard selectedID == track.id, onReady != nil else { return }
         let attempt = (attempts[track.id] ?? 0) + 1
@@ -413,7 +453,8 @@ extension AudioDownloadManager: DownloadManagerDelegate {
         isRetrying = true
         let generation = selectionGeneration
         retryTask = Task { @MainActor in
-            do { try await Task.sleep(for: .seconds(attempt * 3)) } catch { return }
+            let delay = rateLimited ? max(60, self.rateLimitUntil.timeIntervalSinceNow) : Double(3 * (1 << (attempt - 1)))
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard generation == self.selectionGeneration else { return }
             self.serialize {
                 guard generation == self.selectionGeneration else { return }
