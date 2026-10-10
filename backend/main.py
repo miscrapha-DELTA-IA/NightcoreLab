@@ -1,8 +1,8 @@
 """
 Nightcore Lab — ponte de extração de áudio para o app iOS.
 
-Nada fica guardado: cada pedido usa um diretório temporário próprio,
-o .m4a é enviado direto na resposta e a pasta é apagada assim que o envio termina.
+Extrações concluídas podem ser reaproveitadas do cache LRU em /tmp (até 300 MB).
+Diretórios de trabalho são descartados após o término dos envios.
 
 Rodar localmente:
     pip install -r requirements.txt
@@ -97,6 +97,14 @@ def _cached_audio(video_id: str) -> tuple[Path, str, str | None, str] | None:
             return audio, info["title"], info.get("thumbnail"), ""
         except (OSError, ValueError, KeyError, TypeError):
             return None
+
+
+def _pin_cached_audio(video_id: str):
+    with _cache_lock:
+        result = _cached_audio(video_id)
+        if result is not None:
+            _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
+        return result
 
 
 def _prune_audio_cache(protected: set[str] | None = None) -> None:
@@ -418,8 +426,8 @@ def _release_download(video_id: str, entry: InFlightDownload,
             if not entry.task.cancelled() and entry.task.exception() is None:
                 workspace = entry.task.result()[3]
                 if workspace:
-                    awaitable = asyncio.to_thread(shutil.rmtree, workspace, ignore_errors=True)
-                    asyncio.create_task(awaitable)
+                    # Work directory is small after publishing the cached audio.
+                    shutil.rmtree(workspace, ignore_errors=True)
         except Exception:
             log.exception("failed to clean download workspace for %s", video_id)
 
@@ -435,14 +443,15 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     video_id = _youtube_video_id(url)
     entry = in_flight_downloads.get(video_id)
     if entry is None:
-        hit = await asyncio.to_thread(_cached_audio, video_id)
+        # Pin the cache entry atomically with lookup: pruning runs under the same lock.
+        hit = await asyncio.to_thread(_pin_cached_audio, video_id)
         entry = in_flight_downloads.get(video_id)
         if entry is None and hit is not None:
             audio_path, title, thumbnail, _ = hit
-            with _cache_lock:
-                _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
             background_tasks.add_task(_release_cached_reader, video_id)
             return _audio_response(audio_path, title, thumbnail, background_tasks)
+        if hit is not None:
+            _release_cached_reader(video_id)
     if entry is None:
         entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
         in_flight_downloads[video_id] = entry
