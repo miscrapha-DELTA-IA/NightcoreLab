@@ -24,9 +24,31 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.text, payload)
         self.assertIn('application/x-ndjson', response.headers['content-type'])
-        self.assertEqual(run.call_args.args[0][3:6], [f'ytsearch15:{query}', '--dump-json', '--flat-playlist'])
+        self.assertEqual(run.call_args.args[0][3:6], [f'ytmsearch15:{query}', '--dump-json', '--flat-playlist'])
         self.assertNotIn('shell', run.call_args.kwargs)
         self.assertEqual(run.call_args.kwargs['timeout'], 75)
+
+    def test_fallback_when_music_search_is_unsupported(self):
+        query = "test artist"
+        payload = '{"id":"abcdefghijk","title":"Track","duration":180}\n'
+        unsupported = subprocess.CompletedProcess([], 1, '', 'Unsupported URL: ytmsearch')
+        available = subprocess.CompletedProcess([], 0, payload, '')
+        with patch.object(main.subprocess, "run", side_effect=[unsupported, available]) as run:
+            response = self.client.get('/search', params={'query': query})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, payload)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][3], f'ytsearch15:{query} official audio')
+
+    def test_search_filters_long_duration(self):
+        payload = ('{"id":"abcdefghijk","title":"Long","duration":600}\n'
+                   '{"id":"lmnopqrstuv","title":"Short","duration":599}\n')
+        with patch.object(main.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 0, payload, '')):
+            response = self.client.get('/search', params={'query': 'music'})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('"Long"', response.text)
+        self.assertIn('"Short"', response.text)
 
     def test_invalid_queries_never_execute(self):
         with patch.object(main.subprocess, 'run') as run:
