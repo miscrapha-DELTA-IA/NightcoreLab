@@ -111,6 +111,7 @@ struct ContentView: View {
                         Text(downloadStatusText)
                             .font(DS.Typography.captionNumeric)
                             .foregroundStyle(DS.Ink.secondary)
+                            .transition(.opacity)
                     } else if let message = downloader.errorMessage {
                         Label(message, systemImage: "exclamationmark.triangle.fill")
                             .font(DS.Typography.caption)
@@ -125,6 +126,7 @@ struct ContentView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 32)
+                .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollDisabled(isAdjustingSlider)
