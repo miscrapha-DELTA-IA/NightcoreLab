@@ -100,6 +100,7 @@ final class AudioEngineManager {
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
     @ObservationIgnored private var lastKnownTime: TimeInterval = 0
+    @ObservationIgnored private var scheduledStartTime: TimeInterval = 0
 
     init() {
         clearTempAudioFiles()
@@ -144,6 +145,8 @@ final class AudioEngineManager {
                           fileFormat: file.processingFormat, graphFormat: graphFormat)
         engine.prepare()
         needsScheduling = true
+        scheduledStartTime = 0
+        lastKnownTime = 0
         setupNowPlaying()
     }
 
@@ -171,6 +174,26 @@ final class AudioEngineManager {
 
     func togglePlayback() {
         isPlaying ? pause() : play()
+    }
+
+    /// Move o transporte por segundos da fonte original, preservando play/pause.
+    func seek(by seconds: TimeInterval) {
+        guard let file = audioFile, duration > 0 else { return }
+        let target = min(max((isPlaying ? currentTime : lastKnownTime) + seconds, 0), duration)
+        let shouldResume = isPlaying
+        scheduleGeneration += 1
+        player.stop()
+        isPlaying = false
+        lastKnownTime = target
+        scheduledStartTime = target
+        needsScheduling = true
+        if target < duration {
+            schedule(file, startingAt: target)
+            if shouldResume {
+                play()
+            }
+        }
+        setupNowPlaying()
     }
 
     // MARK: Parâmetros em tempo real
@@ -237,10 +260,16 @@ final class AudioEngineManager {
 
     // MARK: - Privado: playback
 
-    private func schedule(_ file: AVAudioFile) {
+    private func schedule(_ file: AVAudioFile, startingAt start: TimeInterval = 0) {
         scheduleGeneration += 1
         let generation = scheduleGeneration
-        player.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+        let startFrame = min(max(AVAudioFramePosition(start * file.processingFormat.sampleRate), 0), file.length)
+        let remaining = file.length - startFrame
+        guard remaining > 0 else { return }
+        scheduledStartTime = start
+        player.scheduleSegment(file, startingFrame: startFrame,
+                               frameCount: AVAudioFrameCount(min(remaining, Int64(UInt32.max))),
+                               at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in self?.playbackFinished(generation: generation) }
         }
         needsScheduling = false
@@ -253,6 +282,7 @@ final class AudioEngineManager {
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0
+        scheduledStartTime = 0
         setupNowPlaying()
     }
 
@@ -262,6 +292,7 @@ final class AudioEngineManager {
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0
+        scheduledStartTime = 0
     }
 
     // MARK: - Now Playing (Tela de Bloqueio / Control Center)
@@ -273,7 +304,7 @@ final class AudioEngineManager {
               let playerTime = player.playerTime(forNodeTime: nodeTime) else {
             return needsScheduling ? 0 : lastKnownTime
         }
-        let seconds = Double(playerTime.sampleTime) / playerTime.sampleRate
+        let seconds = scheduledStartTime + Double(playerTime.sampleTime) / playerTime.sampleRate
         return min(max(seconds, 0), duration)
     }
 
