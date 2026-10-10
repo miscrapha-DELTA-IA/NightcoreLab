@@ -78,10 +78,10 @@ final class AudioDownloadManager: ObservableObject {
         self.onReady = onReady
         errorMessage = nil
         isRetrying = false
-        isDownloading = true
-        downloadProgress = 0
-        attempts[track.id] = 0
         let cachedLocal = cache.localURL(for: track.id)
+        isDownloading = cachedLocal == nil
+        downloadProgress = cachedLocal == nil ? 0 : 1
+        attempts[track.id] = 0
         let cached = cachedTrack(track)
         serialize {
             guard generation == self.selectionGeneration else { return }
