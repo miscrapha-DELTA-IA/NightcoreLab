@@ -326,8 +326,13 @@ def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
 
 
 async def _shared_extraction(url: str):
+    # The semaphore is always released by the context manager, including on failure.
+    # Do not cancel to_thread on client disconnect: the blocking worker cannot be killed.
     async with download_semaphore:
-        return await asyncio.to_thread(_run_extraction, url)
+        try:
+            return await asyncio.to_thread(_run_extraction, url)
+        finally:
+            log.debug("yt-dlp worker finished or cancelled for %s", url)
 
 
 def _cleanup_orphan(video_id: str, entry: InFlightDownload) -> None:
@@ -343,9 +348,12 @@ def _release_download(video_id: str, entry: InFlightDownload,
         entry.consumers -= 1
     if entry.consumers == 0 and entry.task.done():
         if in_flight_downloads.get(video_id) is entry:
-            del in_flight_downloads[video_id]
-        if not entry.task.cancelled() and entry.task.exception() is None:
-            shutil.rmtree(entry.task.result()[3], ignore_errors=True)
+            in_flight_downloads.pop(video_id, None)
+        try:
+            if not entry.task.cancelled() and entry.task.exception() is None:
+                shutil.rmtree(entry.task.result()[3], ignore_errors=True)
+        except Exception:
+            log.exception("failed to clean download workspace for %s", video_id)
 
 
 async def _release_response(video_id: str, entry: InFlightDownload) -> None:
@@ -365,7 +373,12 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     entry.consumers += 1
     try:
         # A disconnected consumer must not cancel the extraction for other clients.
-        audio_path, title, thumbnail, _ = await asyncio.shield(entry.task)
+        audio_path, title, thumbnail, _ = await asyncio.wait_for(
+            asyncio.shield(entry.task), timeout=240
+        )
+    except asyncio.TimeoutError:
+        _release_download(video_id, entry)
+        raise HTTPException(status_code=504, detail="Tempo limite de extração excedido.")
     except yt_dlp.utils.DownloadError as error:
         _release_download(video_id, entry)
         log.warning("download falhou (%s): %s", video_id, str(error)[:600])
