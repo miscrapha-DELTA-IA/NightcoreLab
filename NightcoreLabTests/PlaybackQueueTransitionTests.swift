@@ -122,4 +122,25 @@ final class PlaybackQueueTransitionTests: XCTestCase {
         XCTAssertTrue(queue.commitPlaying(automatic))
         XCTAssertEqual(queue.upNextQueue.map(\.id), [second.id])
     }
+    func testDiscoveryModeDisplaysOnlySearchResults() {
+        let searched = track("aaaaaaaaaaa")
+        let suggested = track("bbbbbbbbbbb")
+        let visible = DiscoveryPresentation.visibleTracks(
+            searchQuery: "music", searchResults: [searched], suggestions: [suggested])
+        XCTAssertEqual(visible.map(\.id), [searched.id])
+    }
+
+    func testReturningToDiscoveryDoesNotMutateQueue() {
+        let queue = PlaybackQueue()
+        let searched = track("aaaaaaaaaaa")
+        let suggested = track("bbbbbbbbbbb")
+        queue.replace(with: [suggested], excluding: searched.id)
+        _ = DiscoveryPresentation.visibleTracks(
+            searchQuery: "music", searchResults: [searched], suggestions: [suggested])
+        let shown = DiscoveryPresentation.visibleTracks(
+            searchQuery: nil, searchResults: [searched], suggestions: [suggested])
+        XCTAssertEqual(shown.map(\.id), [suggested.id])
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [suggested.id])
+    }
+
 }
