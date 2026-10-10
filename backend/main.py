@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib.util
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import json
 import logging
@@ -52,6 +53,8 @@ from pydantic import BaseModel, HttpUrl
 
 MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
+MAX_CACHE_BYTES = 300 * 1024 * 1024
+CACHE_DIR = Path(os.getenv("AUDIO_CACHE_DIR", tempfile.gettempdir())) / "nightcore_audio_cache"
 COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
 
 # Commit publicado (o Render define RENDER_GIT_COMMIT em cada deploy).
@@ -73,6 +76,68 @@ ALLOWED_HOSTS = {
     "music.youtube.com",
     "youtu.be",
 }
+
+# Cache persists across requests in the same filesystem. /tmp is ephemeral on Render.
+# Protect files being transmitted against LRU eviction.
+_cache_lock = threading.RLock()
+_cache_readers: dict[str, int] = {}
+
+
+def _cached_audio(video_id: str) -> tuple[Path, str, str | None, str] | None:
+    with _cache_lock:
+        audio = CACHE_DIR / f"{video_id}.m4a"
+        meta = CACHE_DIR / f"{video_id}.json"
+        try:
+            if not audio.is_file() or not meta.is_file():
+                return None
+            info = json.loads(meta.read_text(encoding="utf-8"))
+            if audio.stat().st_size <= 0:
+                return None
+            os.utime(audio, None)  # atime/mtime tracks LRU reads.
+            return audio, info["title"], info.get("thumbnail"), ""
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+
+def _prune_audio_cache(protected: set[str] | None = None) -> None:
+    with _cache_lock:
+        if not CACHE_DIR.is_dir():
+            return
+        files = sorted(CACHE_DIR.glob("*.m4a"), key=lambda file: file.stat().st_mtime)
+        total = sum(file.stat().st_size for file in files)
+        for file in files:
+            if total <= MAX_CACHE_BYTES:
+                break
+            video_id = file.stem
+            if _cache_readers.get(video_id, 0) or (protected and video_id in protected):
+                continue
+            size = file.stat().st_size
+            with contextlib.suppress(OSError):
+                file.unlink()
+                (CACHE_DIR / f"{video_id}.json").unlink(missing_ok=True)
+                total -= size
+
+
+def _cache_extracted_audio(video_id: str, result: tuple[Path, str, str | None, str]):
+    audio, title, thumbnail, work_dir = result
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with _cache_lock:
+            target = CACHE_DIR / f"{video_id}.m4a"
+            metadata = CACHE_DIR / f"{video_id}.json"
+            # Atomic publish avoids serving a partially written file.
+            staged = CACHE_DIR / f"{video_id}.{threading.get_ident()}.tmp"
+            shutil.copyfile(audio, staged)
+            os.replace(staged, target)
+            staged_meta = CACHE_DIR / f"{video_id}.{threading.get_ident()}.json.tmp"
+            staged_meta.write_text(json.dumps({"title": title, "thumbnail": thumbnail}), encoding="utf-8")
+            os.replace(staged_meta, metadata)
+            _prune_audio_cache(protected={video_id})
+        return target, title, thumbnail, work_dir
+    except OSError:
+        log.exception("cache disk unavailable; returning temporary extraction")
+        return result
+
 
 download_semaphore = asyncio.Semaphore(min(MAX_CONCURRENT_DOWNLOADS, 2))
 
@@ -315,7 +380,6 @@ def _secret_file_names() -> list[str]:
 
 def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
     """Blocking yt-dlp work runs in a worker thread, never on the event loop."""
-    _sweep_stale_work_dirs()
     work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
     try:
         audio_path, title, thumbnail = _extract_m4a(url, work_dir)
@@ -330,7 +394,8 @@ async def _shared_extraction(url: str):
     # Do not cancel to_thread on client disconnect: the blocking worker cannot be killed.
     async with download_semaphore:
         try:
-            return await asyncio.to_thread(_run_extraction, url)
+            result = await asyncio.to_thread(_run_extraction, url)
+            return await asyncio.to_thread(_cache_extracted_audio, _youtube_video_id(url), result)
         finally:
             log.debug("yt-dlp worker finished or cancelled for %s", url)
 
@@ -351,7 +416,10 @@ def _release_download(video_id: str, entry: InFlightDownload,
             in_flight_downloads.pop(video_id, None)
         try:
             if not entry.task.cancelled() and entry.task.exception() is None:
-                shutil.rmtree(entry.task.result()[3], ignore_errors=True)
+                workspace = entry.task.result()[3]
+                if workspace:
+                    awaitable = asyncio.to_thread(shutil.rmtree, workspace, ignore_errors=True)
+                    asyncio.create_task(awaitable)
         except Exception:
             log.exception("failed to clean download workspace for %s", video_id)
 
@@ -366,6 +434,15 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     url = str(request.url)
     video_id = _youtube_video_id(url)
     entry = in_flight_downloads.get(video_id)
+    if entry is None:
+        hit = await asyncio.to_thread(_cached_audio, video_id)
+        entry = in_flight_downloads.get(video_id)
+        if entry is None and hit is not None:
+            audio_path, title, thumbnail, _ = hit
+            with _cache_lock:
+                _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
+            background_tasks.add_task(_release_cached_reader, video_id)
+            return _audio_response(audio_path, title, thumbnail, background_tasks)
     if entry is None:
         entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
         in_flight_downloads[video_id] = entry
@@ -398,6 +475,24 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     # Retain the file until this response has finished transmitting. Multiple
     # consumers share the same task but own independent response lifetimes.
     background_tasks.add_task(_release_response, video_id, entry)
+    if audio_path.parent == CACHE_DIR:
+        with _cache_lock:
+            _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
+        background_tasks.add_task(_release_cached_reader, video_id)
+    return _audio_response(audio_path, title, thumbnail, background_tasks)
+
+
+def _release_cached_reader(video_id: str) -> None:
+    with _cache_lock:
+        count = _cache_readers.get(video_id, 0) - 1
+        if count <= 0:
+            _cache_readers.pop(video_id, None)
+        else:
+            _cache_readers[video_id] = count
+
+
+def _audio_response(audio_path: Path, title: str, thumbnail: str | None,
+                    background_tasks: BackgroundTasks) -> FileResponse:
     headers = {"Cache-Control": "no-store"}
     if thumbnail:
         headers["X-Cover-Url"] = thumbnail
@@ -501,6 +596,7 @@ def _extract_with(url: str, work_dir: str, label: str,
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,
+        "concurrent_fragment_downloads": 4,  # only segmented DASH/HLS; no effect on single-file m4a
     }
     if clients:
         ydl_opts["extractor_args"] = {"youtube": {"player_client": clients}}
