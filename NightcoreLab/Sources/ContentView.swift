@@ -2,6 +2,23 @@ import SwiftUI
 import UniformTypeIdentifiers
 import SDWebImageSwiftUI
 
+@MainActor
+final class PlaybackQueue: ObservableObject {
+    @Published private(set) var tracks: [Track] = []
+
+    func replace(with candidates: [Track], excluding currentID: String) {
+        var seen = Set([currentID])
+        tracks = candidates.filter { seen.insert($0.id).inserted }
+    }
+
+    func takeNext() -> Track? {
+        guard !tracks.isEmpty else { return nil }
+        return tracks.removeFirst()
+    }
+
+    func clear() { tracks.removeAll() }
+}
+
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
 
@@ -22,6 +39,7 @@ struct ContentView: View {
 
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
+    @StateObject private var playbackQueue = PlaybackQueue()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
@@ -129,6 +147,9 @@ struct ContentView: View {
             startDownload(receivedLink)
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
+        .onChange(of: audio.playbackCompletionCount) { _, _ in
+            advanceQueue()
+        }
         .onChange(of: audio.isPlaying) { _, playing in
             if playing { prefetchUpcoming() }
         }
@@ -608,6 +629,7 @@ struct ContentView: View {
         guard !audio.isExporting else { return }
         resetRelatedVideos()
         relatedVideos = upcoming
+        playbackQueue.replace(with: upcoming, excluding: track.id)
         downloader.select(track) { localURL, downloadedCoverURL in
             do {
                 try audio.load(url: localURL)
@@ -628,7 +650,13 @@ struct ContentView: View {
 
     private func prefetchUpcoming() {
         guard audio.isPlaying, let playingTrackID else { return }
-        downloader.prefetch(relatedVideos, playing: playingTrackID)
+        downloader.prefetch(playbackQueue.tracks, playing: playingTrackID)
+    }
+
+    private func advanceQueue() {
+        guard !audio.isExporting, let next = playbackQueue.takeNext() else { return }
+        let rest = playbackQueue.tracks
+        playTrack(next, upcoming: rest)
     }
 
     private func resetRelatedVideos() {
@@ -647,6 +675,9 @@ struct ContentView: View {
         guard !Task.isCancelled, requestID == relatedRequestID,
               sourceURL == relatedSourceURL else { return }
         relatedVideos = videos
+        if let playingTrackID {
+            playbackQueue.replace(with: videos, excluding: playingTrackID)
+        }
         isLoadingRelated = false
         prefetchUpcoming()
     }

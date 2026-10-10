@@ -47,7 +47,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, HttpUrl
 
-MAX_DURATION_SECONDS = int(os.getenv("MAX_DURATION_SECONDS", "1200"))
+MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
 COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
 
@@ -130,7 +130,7 @@ def _related_entries(info: dict, seed_id: str) -> list[RelatedVideo]:
         if entry.get("is_live") or entry.get("availability") in {"private", "premium_only", "subscriber_only"}:
             continue
         duration = entry.get("duration")
-        if isinstance(duration, (int, float)) and duration > MAX_DURATION_SECONDS:
+        if isinstance(duration, (int, float)) and duration >= MAX_DURATION_SECONDS:
             continue
         seen.add(video_id)
         thumbnails = [entry.get("thumbnail")]
@@ -154,6 +154,7 @@ def related(url: HttpUrl):
         options = {
             "extract_flat": True,
             "skip_download": True,
+            "match_filter": yt_dlp.utils.match_filter_func("duration < 600"),
             "noplaylist": False,
             "playlistend": RELATED_SCAN_LIMIT,
             "lazy_playlist": True,
@@ -190,17 +191,38 @@ def search(query: str = Query(min_length=1, max_length=200)):
     if not _search_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.")
     try:
-        # argv, never a shell: punctuation in a search cannot become executable code.
-        arguments = [f"ytsearch15:{query}", "--dump-json", "--flat-playlist"]
-        result = subprocess.run(
-            [sys.executable, "-m", "yt_dlp", *arguments,
-             "--ignore-config", "--no-cache-dir", "--socket-timeout", "15", "--retries", "1"],
-            capture_output=True, text=True, encoding="utf-8", timeout=75, check=False,
-        )
-        if result.returncode:
-            log.warning("yt-dlp search failed: %s", result.stderr[:500])
+        # ytmsearch belongs to Lavalink on many deployments; yt-dlp may not
+        # provide this extractor. Try it first, then fall back without breaking search.
+        # argv, never a shell: punctuation cannot become executable code.
+        result = None
+        for prefix in ("ytmsearch15", "ytsearch15"):
+            arguments = [f"{prefix}:{query if prefix.startswith('ytm') else query + ' official audio'}",
+                         "--dump-json", "--flat-playlist"]
+            result = subprocess.run(
+                [sys.executable, "-m", "yt_dlp", *arguments,
+                 "--ignore-config", "--no-cache-dir", "--socket-timeout", "15", "--retries", "1"],
+                capture_output=True, text=True, encoding="utf-8", timeout=75, check=False,
+            )
+            if result.returncode == 0:
+                break
+        if result is None or result.returncode:
+            log.warning("yt-dlp search failed: %s", (result.stderr if result else "")[:500])
             raise HTTPException(status_code=502, detail="Busca temporariamente indisponível.")
-        return Response(content=result.stdout, media_type="application/x-ndjson",
+        # Flat metadata frequently omits duration. Reject known long/unknown-live
+        # results here; the download extraction enforces the hard duration cap.
+        accepted = []
+        for raw in result.stdout.splitlines():
+            try:
+                item = json.loads(raw)
+            except ValueError:
+                continue
+            duration = item.get("duration")
+            if (isinstance(duration, (int, float)) and duration >= MAX_DURATION_SECONDS
+                    or item.get("is_live") or item.get("live_status") in ("is_live", "is_upcoming")):
+                continue
+            accepted.append(raw)
+        return Response(content="\n".join(accepted) + ("\n" if accepted else ""),
+                        media_type="application/x-ndjson",
                         headers={"Cache-Control": "no-store"})
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="A busca demorou demais. Tente novamente.")
@@ -420,6 +442,7 @@ def _extract_with(url: str, work_dir: str, label: str,
         "format": "bestaudio[ext=m4a]/bestaudio/best[acodec!=none]" if has_ffmpeg else "bestaudio[ext=m4a]",
         "outtmpl": os.path.join(work_dir, "%(id)s.%(ext)s"),
         "noplaylist": True,          # link de música dentro de playlist → só a faixa
+        "match_filter": yt_dlp.utils.match_filter_func("duration < 600"),
         "quiet": True,
         "no_warnings": False,
         "logger": _YtdlpLog(label),
@@ -447,7 +470,7 @@ def _extract_with(url: str, work_dir: str, label: str,
         if info.get("is_live"):
             raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
         duration = info.get("duration") or 0
-        if duration > MAX_DURATION_SECONDS:
+        if duration >= MAX_DURATION_SECONDS:
             raise HTTPException(
                 status_code=413,
                 detail=f"Áudio longo demais ({duration // 60} min). Limite: {MAX_DURATION_SECONDS // 60} min.",

@@ -69,6 +69,7 @@ final class AudioEngineManager {
 
     // Estado observável pela UI
     private(set) var isPlaying = false
+    private(set) var playbackCompletionCount = 0
     private(set) var fileName: String?
     private(set) var duration: TimeInterval = 0
     private(set) var isExporting = false
@@ -284,6 +285,7 @@ final class AudioEngineManager {
         lastKnownTime = 0
         scheduledStartTime = 0
         setupNowPlaying()
+        playbackCompletionCount += 1
     }
 
     private func stopPlayback() {
