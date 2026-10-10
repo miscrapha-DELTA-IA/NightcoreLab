@@ -11,6 +11,9 @@ struct ContentView: View {
     @State private var keepOriginalPitch = false
     @State private var isVertical = false
 
+    /// Estilo do fundo do mini-player (botão de vinil): fosco → nítido → em movimento.
+    @State private var bgStyle: PlayerBackgroundStyle = .blurred
+
     @State private var showImporter = false
     @State private var exportFormat: ExportFormat = .m4a
     @State private var shareItem: ShareItem?
@@ -347,6 +350,12 @@ struct ContentView: View {
 
     // MARK: - Cartão da música (vidro)
 
+    /// Forma única do card: recorte do fundo, vidro e área de toque usam a mesma, para a
+    /// imagem nunca vazar dos cantos arredondados.
+    private var trackCardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+    }
+
     private var trackCard: some View {
         HStack(spacing: DS.Spacing.m) {
             Button {
@@ -364,11 +373,11 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(audio.fileName ?? "Nenhuma música")
                     .font(DS.Typography.trackTitle)
-                    .foregroundStyle(DS.Ink.primary)
+                    .foregroundStyle(.white)
                     .lineLimit(1)
                 Text(hasTrack ? durationText : "Toque em + ou cole um link")
                     .font(DS.Typography.subtitleNumeric)
-                    .foregroundStyle(DS.Ink.secondary)
+                    .foregroundStyle(hasTrack ? Color.white : DS.Ink.secondary)
                     .lineLimit(1)
                     .contentTransition(.numericText())
             }
@@ -377,12 +386,45 @@ struct ContentView: View {
 
             LevelBars(color: currentTheme.accent, isAnimating: audio.isPlaying)
                 .opacity(hasTrack ? 1 : 0)
+
+            bgStyleButton
         }
         .padding(DS.Spacing.m)
-        .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous),
-                      theme: currentTheme, isActive: audio.isPlaying)
-        .contentShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
+        // Fundo da capa: usa `.background` para ter exatamente o tamanho do card.
+        // Uma imagem `scaledToFill` ou um `GeometryReader` como irmão no ZStack esticariam a altura.
+        .background {
+            if let url = coverURL {
+                PlayerBackgroundView(style: bgStyle, imageURL: url)
+                    .id(url)
+            }
+        }
+        .clipShape(trackCardShape)
+        .glassSurface(trackCardShape, theme: currentTheme, isActive: audio.isPlaying)
+        .contentShape(trackCardShape)
         .onTapGesture { if !hasTrack { showImporter = true } }
+    }
+
+    /// Botão vinil: avança o fundo do player em ciclo fosco → nítido → em movimento.
+    /// Sem capa não há o que estilizar, então fica desativado.
+    private var bgStyleButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                bgStyle = bgStyle.next
+            }
+        } label: {
+            Image(systemName: "opticaldisc")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(currentTheme.accent)
+                .symbolEffect(.bounce, value: bgStyle)
+                .frame(width: 36, height: 36)
+                .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
+        }
+        .disabled(coverURL == nil)
+        .opacity(coverURL == nil ? 0.4 : 1)
+        .sensoryFeedback(.selection, trigger: bgStyle)
+        .accessibilityLabel("Estilo do fundo do player")
+        .accessibilityValue(bgStyle.displayName)
+        .accessibilityHint("Alterna entre fosco, nítido e em movimento")
     }
 
     private var relatedSection: some View {
@@ -1002,5 +1044,3 @@ struct ShareSheet: UIViewControllerRepresentable {
 #Preview {
     ContentView()
 }
-
-
