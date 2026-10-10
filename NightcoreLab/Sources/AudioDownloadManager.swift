@@ -111,11 +111,12 @@ final class AudioDownloadManager: ObservableObject {
                 self.tasks[existing.id]?.priority = URLSessionTask.highPriority
                 self.downloadProgress = existing.fractionCompleted
                 switch existing.status {
-                case .downloading, .finished:
-                    break // Never restart an already running or completing transfer.
-                case .idle, .paused, .failed:
-                    // Idle has not begun; paused/failed require a fresh task.
-                    // updateQueue() is triggered by resume() when needed.
+                case .idle, .downloading, .finished:
+                    // Removing the speculative blocker already calls updateQueue()
+                    // in DownloadKit. Never replace an idle/running task unnecessarily.
+                    break
+                case .paused, .failed:
+                    // Only explicitly paused or failed downloads need a fresh task.
                     await self.transfers.resume(existing)
                 }
             } else {
