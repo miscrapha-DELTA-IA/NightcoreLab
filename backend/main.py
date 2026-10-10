@@ -29,6 +29,8 @@ Variáveis de ambiente opcionais:
 from __future__ import annotations
 
 import importlib.util
+import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -72,7 +74,14 @@ ALLOWED_HOSTS = {
     "youtu.be",
 }
 
-_download_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
+download_semaphore = asyncio.Semaphore(min(MAX_CONCURRENT_DOWNLOADS, 2))
+
+@dataclass
+class InFlightDownload:
+    task: asyncio.Task
+    consumers: int = 0
+
+in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
 _search_slots = threading.BoundedSemaphore(1)
 RELATED_LIMIT = 10
@@ -234,10 +243,10 @@ def search(query: str = Query(min_length=1, max_length=200)):
 
 
 @app.get("/download")
-def background_download(url: HttpUrl, background_tasks: BackgroundTasks):
-    """Body-free equivalent of POST /download, usable by iOS background URLSession."""
+async def background_download(url: HttpUrl, background_tasks: BackgroundTasks):
+    """Background URLSession compatible GET, sharing the POST extraction."""
     _youtube_video_id(str(url))
-    return download(DownloadRequest(url=url), background_tasks)
+    return await download(DownloadRequest(url=url), background_tasks)
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -304,60 +313,70 @@ def _secret_file_names() -> list[str]:
         return []
 
 
-@app.post("/download")
-def download(request: DownloadRequest, background_tasks: BackgroundTasks):
-    # Função síncrona de propósito: o FastAPI a executa num thread pool,
-    # então o yt-dlp (bloqueante) não trava o servidor para outros pedidos.
-    url = str(request.url)
-    _youtube_video_id(url)
-
+def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
+    """Blocking yt-dlp work runs in a worker thread, never on the event loop."""
     _sweep_stale_work_dirs()
-
-    if not _download_slots.acquire(blocking=False):
-        raise HTTPException(status_code=429, detail="Servidor ocupado com outros downloads. Tente em alguns segundos.")
-
     work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
-    started = time.monotonic()
-
-    def cleanup() -> None:
-        shutil.rmtree(work_dir, ignore_errors=True)
-
     try:
         audio_path, title, thumbnail = _extract_m4a(url, work_dir)
-    except HTTPException:
-        cleanup()
+        return audio_path, title, thumbnail, work_dir
+    except BaseException:
+        shutil.rmtree(work_dir, ignore_errors=True)
         raise
+
+
+async def _shared_extraction(url: str):
+    async with download_semaphore:
+        return await asyncio.to_thread(_run_extraction, url)
+
+
+def _release_download(video_id: str, entry: InFlightDownload) -> None:
+    entry.consumers -= 1
+    if entry.consumers == 0 and entry.task.done():
+        if in_flight_downloads.get(video_id) is entry:
+            del in_flight_downloads[video_id]
+        if not entry.task.cancelled() and entry.task.exception() is None:
+            shutil.rmtree(entry.task.result()[3], ignore_errors=True)
+
+
+@app.post("/download")
+async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
+    url = str(request.url)
+    video_id = _youtube_video_id(url)
+    entry = in_flight_downloads.get(video_id)
+    if entry is None:
+        entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
+        in_flight_downloads[video_id] = entry
+    entry.consumers += 1
+    try:
+        # A disconnected consumer must not cancel the extraction for other clients.
+        audio_path, title, thumbnail, _ = await asyncio.shield(entry.task)
     except yt_dlp.utils.DownloadError as error:
-        cleanup()
-        # Mensagem completa só no log do servidor; o app recebe a versão amigável.
-        log.warning("download falhou (%s): %s", url, str(error)[:600])
+        _release_download(video_id, entry)
+        log.warning("download falhou (%s): %s", video_id, str(error)[:600])
         raise HTTPException(status_code=422, detail=_friendly_error(str(error)))
+    except HTTPException:
+        _release_download(video_id, entry)
+        raise
+    except asyncio.CancelledError:
+        # Keep the shared extraction alive; its cleanup callback handles orphaned tasks.
+        _release_download(video_id, entry)
+        raise
     except Exception:
-        cleanup()
-        log.exception("erro inesperado no download (%s)", url)
+        _release_download(video_id, entry)
+        log.exception("falha ao processar áudio %s", video_id)
         raise HTTPException(status_code=500, detail="Erro inesperado ao processar o áudio.")
-    finally:
-        # A vaga é liberada assim que a extração (parte pesada) termina;
-        # o envio do arquivo em si é leve e não precisa segurar a vaga.
-        _download_slots.release()
 
-    log.info("download ok: %s · %.1f MB · %.1f s",
-             audio_path.name, audio_path.stat().st_size / 1_048_576, time.monotonic() - started)
-
-    # Auto-limpeza: roda só depois que o FileResponse terminou de enviar o arquivo.
-    # Apaga a pasta inteira (inclui .part e restos do yt-dlp), não só o .m4a.
-    background_tasks.add_task(cleanup)
-
+    # Retain the file until this response has finished transmitting. Multiple
+    # consumers share the same task but own independent response lifetimes.
+    background_tasks.add_task(_release_download, video_id, entry)
     headers = {"Cache-Control": "no-store"}
     if thumbnail:
         headers["X-Cover-Url"] = thumbnail
-
     return FileResponse(
-        path=audio_path,
-        media_type="audio/mp4",           # MIME correto para .m4a (AAC em contêiner MP4)
+        path=audio_path, media_type="audio/mp4",
         filename=f"{_safe_filename(title)}.m4a",
-        headers=headers,
-        background=background_tasks,
+        headers=headers, background=background_tasks,
     )
 
 
