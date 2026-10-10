@@ -330,8 +330,17 @@ async def _shared_extraction(url: str):
         return await asyncio.to_thread(_run_extraction, url)
 
 
-def _release_download(video_id: str, entry: InFlightDownload) -> None:
-    entry.consumers -= 1
+def _cleanup_orphan(video_id: str, entry: InFlightDownload) -> None:
+    # A client can disconnect before extraction finishes. Clean up once the
+    # worker returns, even when no FileResponse was ever created.
+    if entry.consumers == 0:
+        _release_download(video_id, entry, decrement=False)
+
+
+def _release_download(video_id: str, entry: InFlightDownload,
+                      decrement: bool = True) -> None:
+    if decrement:
+        entry.consumers -= 1
     if entry.consumers == 0 and entry.task.done():
         if in_flight_downloads.get(video_id) is entry:
             del in_flight_downloads[video_id]
@@ -347,6 +356,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     if entry is None:
         entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
         in_flight_downloads[video_id] = entry
+        entry.task.add_done_callback(lambda _, vid=video_id, item=entry: _cleanup_orphan(vid, item))
     entry.consumers += 1
     try:
         # A disconnected consumer must not cancel the extraction for other clients.
