@@ -411,15 +411,15 @@ async def _shared_extraction(url: str):
             log.debug("yt-dlp worker finished or cancelled for %s", url)
 
 
-def _cleanup_orphan(video_id: str, entry: InFlightDownload) -> None:
+async def _cleanup_orphan(video_id: str, entry: InFlightDownload) -> None:
     # A client can disconnect before extraction finishes. Clean up once the
     # worker returns, even when no FileResponse was ever created.
     if entry.consumers == 0:
-        _release_download(video_id, entry, decrement=False)
+        await _release_download(video_id, entry, decrement=False)
 
 
-def _release_download(video_id: str, entry: InFlightDownload,
-                      decrement: bool = True) -> None:
+async def _release_download(video_id: str, entry: InFlightDownload,
+                            decrement: bool = True) -> None:
     if decrement:
         entry.consumers -= 1
     if entry.consumers == 0 and entry.task.done():
@@ -429,15 +429,14 @@ def _release_download(video_id: str, entry: InFlightDownload,
             if not entry.task.cancelled() and entry.task.exception() is None:
                 workspace = entry.task.result()[3]
                 if workspace:
-                    # Work directory is small after publishing the cached audio.
-                    shutil.rmtree(workspace, ignore_errors=True)
+                    await asyncio.to_thread(shutil.rmtree, workspace, ignore_errors=True)
         except Exception:
             log.exception("failed to clean download workspace for %s", video_id)
 
 
 async def _release_response(video_id: str, entry: InFlightDownload) -> None:
     # Starlette runs async background callbacks on the owning event loop.
-    _release_download(video_id, entry)
+    await _release_download(video_id, entry)
 
 
 @app.post("/download")
@@ -458,7 +457,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     if entry is None:
         entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
         in_flight_downloads[video_id] = entry
-        entry.task.add_done_callback(lambda _, vid=video_id, item=entry: _cleanup_orphan(vid, item))
+        entry.task.add_done_callback(lambda _, vid=video_id, item=entry: asyncio.create_task(_cleanup_orphan(vid, item)))
     entry.consumers += 1
     try:
         # A disconnected consumer must not cancel the extraction for other clients.
@@ -466,21 +465,21 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
             asyncio.shield(entry.task), timeout=240
         )
     except asyncio.TimeoutError:
-        _release_download(video_id, entry)
+        await _release_download(video_id, entry)
         raise HTTPException(status_code=504, detail="Tempo limite de extração excedido.")
     except yt_dlp.utils.DownloadError as error:
-        _release_download(video_id, entry)
+        await _release_download(video_id, entry)
         log.warning("download falhou (%s): %s", video_id, str(error)[:600])
         raise HTTPException(status_code=422, detail=_friendly_error(str(error)))
     except HTTPException:
-        _release_download(video_id, entry)
+        await _release_download(video_id, entry)
         raise
     except asyncio.CancelledError:
         # Keep the shared extraction alive; its cleanup callback handles orphaned tasks.
-        _release_download(video_id, entry)
+        await _release_download(video_id, entry)
         raise
     except Exception:
-        _release_download(video_id, entry)
+        await _release_download(video_id, entry)
         log.exception("falha ao processar áudio %s", video_id)
         raise HTTPException(status_code=500, detail="Erro inesperado ao processar o áudio.")
 
