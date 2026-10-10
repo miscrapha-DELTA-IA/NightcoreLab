@@ -391,6 +391,7 @@ def _secret_file_names() -> list[str]:
 
 def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
     """Blocking yt-dlp work runs in a worker thread, never on the event loop."""
+    _sweep_stale_work_dirs()  # Runs in asyncio.to_thread, not on the event loop.
     work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
     try:
         audio_path, title, thumbnail = _extract_m4a(url, work_dir)
@@ -661,6 +662,8 @@ def _sweep_stale_work_dirs() -> None:
     temp_root = Path(tempfile.gettempdir())
     cutoff = time.time() - STALE_AFTER_SECONDS
     for path in temp_root.glob(f"{WORK_DIR_PREFIX}*"):
+        if path == CACHE_DIR or path.name == CACHE_DIR.name:
+            continue
         try:
             if path.is_dir() and path.stat().st_mtime < cutoff:
                 shutil.rmtree(path, ignore_errors=True)
