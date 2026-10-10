@@ -74,36 +74,163 @@ enum LyricsService {
     }
 }
 
+/// The moving mask is isolated from the scrolling list. Only the active row
+/// reads the audio clock at display cadence.
+private struct ProgressiveLyricLine: View {
+    let text: String
+    let start: TimeInterval
+    let end: TimeInterval
+    let accent: Color
+    let audio: AudioEngineManager
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !audio.isPlaying)) { _ in
+            let span = max(end - start, 0.05)
+            let fraction = min(max((audio.playbackTime - start) / span, 0), 1)
+            Text(text)
+                .font(.title.bold())
+                .foregroundStyle(.white.opacity(0.4))
+                .overlay(alignment: .leading) {
+                    Text(text)
+                        .font(.title.bold())
+                        .foregroundStyle(accent)
+                        .mask(alignment: .leading) {
+                            GeometryReader { geometry in
+                                Rectangle()
+                                    .frame(width: geometry.size.width * fraction)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct LyricsBackdrop: View {
+    let track: Track
+
+    var body: some View {
+        GeometryReader { geometry in
+            // Prefer the high-resolution artwork, falling back to the track thumbnail.
+            AsyncImage(url: URL(string: "https://i.ytimg.com/vi/\(track.id)/maxresdefault.jpg")) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFill()
+                } else if case .failure = phase {
+                    AsyncImage(url: track.thumbnailURL) { fallback in
+                        if let image = fallback.image {
+                            image.resizable().scaledToFill()
+                        } else {
+                            Color.black
+                        }
+                    }
+                } else {
+                    Color.black
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
+            .blur(radius: 50, opaque: true)
+            .overlay(Color.black.opacity(0.6))
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 struct LyricsView: View {
     let track: Track
-    let playbackTime: TimeInterval
-    let isPlaying: Bool
+    let audio: AudioEngineManager
+    let theme: AppTheme
     let dismiss: () -> Void
 
     @State private var record: LyricsRecord?
+    @State private var parsedLines: [LyricLine] = []
+    @State private var activeIndex: Int?
     @State private var loading = true
     @State private var errorMessage: String?
 
-    private var lines: [LyricLine] { LRCParser.parse(record?.syncedLyrics ?? "") }
-    private var currentIndex: Int? {
-        lines.indices.last { lines[$0].time <= playbackTime }
+    private func lineIndex(at time: TimeInterval) -> Int? {
+        // Binary search: O(log n) per clock tick, without reparsing the lyrics.
+        var lower = 0
+        var upper = parsedLines.count
+        while lower < upper {
+            let middle = (lower + upper) / 2
+            if parsedLines[middle].time <= time {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower > 0 ? lower - 1 : nil
+    }
+
+    private var synchronizedLyrics: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    ForEach(parsedLines.indices, id: \.self) { index in
+                        let line = parsedLines[index]
+                        let text = line.text.isEmpty ? "♪" : line.text
+                        if index == activeIndex {
+                            ProgressiveLyricLine(
+                                text: text,
+                                start: line.time,
+                                end: index + 1 < parsedLines.count
+                                    ? parsedLines[index + 1].time
+                                    : max(audio.duration, line.time + 1),
+                                accent: theme.accent,
+                                audio: audio
+                            )
+                            .id(index)
+                            .accessibilityAddTraits(.isSelected)
+                        } else {
+                            Text(text)
+                                .font(.title2.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .blur(radius: 0.6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(index)
+                        }
+                    }
+                }
+                .padding(.horizontal, 25)
+                .padding(.vertical, 90)
+            }
+            // This small timeline drives only line changes. The scroll position
+            // and the whole list are not re-evaluated on each animation frame.
+            .overlay(alignment: .topLeading) {
+                TimelineView(.periodic(from: .now, by: 0.12)) { _ in
+                    Color.clear.frame(width: 1, height: 1)
+                        .onChange(of: lineIndex(at: audio.playbackTime), initial: true) { _, index in
+                            guard activeIndex != index else { return }
+                            activeIndex = index
+                        }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+            .onChange(of: activeIndex) { _, index in
+                guard let index else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    proxy.scrollTo(index, anchor: .center)
+                }
+            }
+            .onAppear {
+                activeIndex = lineIndex(at: audio.playbackTime)
+                if let activeIndex {
+                    proxy.scrollTo(activeIndex, anchor: .center)
+                }
+            }
+        }
     }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let cover = track.thumbnailURL {
-                GeometryReader { geometry in
-                    WebImage(url: cover)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .blur(radius: 55)
-                        .overlay(.black.opacity(0.55))
-                }
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-            }
+            LyricsBackdrop(track: track)
+
             VStack(spacing: 18) {
                 HStack(spacing: 12) {
                     if let cover = track.thumbnailURL {
@@ -125,39 +252,18 @@ struct LyricsView: View {
                     }
                     .accessibilityLabel("Fechar letras")
                 }
-                .padding(.horizontal, 20)
+                .padding(14)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .padding(.horizontal, 16)
 
                 if loading {
                     Spacer()
-                    ProgressView("Buscando letras…").tint(.white).foregroundStyle(.white)
+                    ProgressView("Buscando letras…")
+                        .tint(theme.accent)
+                        .foregroundStyle(.white)
                     Spacer()
-                } else if !lines.isEmpty {
-                    ScrollViewReader { reader in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 26) {
-                                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                                    Text(line.text.isEmpty ? "♪" : line.text)
-                                        .font(index == currentIndex ? .title.bold() : .title2.weight(.semibold))
-                                        .foregroundStyle(.white.opacity(index == currentIndex ? 1 : 0.48))
-                                        .blur(radius: index == currentIndex ? 0 : 0.7)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .id(index)
-                                        .accessibilityAddTraits(index == currentIndex ? [.isSelected] : [])
-                                }
-                            }
-                            .padding(.horizontal, 25)
-                            .padding(.vertical, 90)
-                        }
-                        .onChange(of: currentIndex) { _, next in
-                            guard let next else { return }
-                            withAnimation(.easeInOut(duration: 0.4)) {
-                                reader.scrollTo(next, anchor: .center)
-                            }
-                        }
-                        .onAppear {
-                            if let currentIndex { reader.scrollTo(currentIndex, anchor: .center) }
-                        }
-                    }
+                } else if !parsedLines.isEmpty {
+                    synchronizedLyrics
                 } else if let text = record?.plainLyrics, !text.isEmpty {
                     ScrollView {
                         Text(text)
@@ -183,8 +289,14 @@ struct LyricsView: View {
             loading = true
             errorMessage = nil
             record = nil
+            parsedLines = []
+            activeIndex = nil
             do {
-                record = try await LyricsService.fetch(for: track)
+                let fetched = try await LyricsService.fetch(for: track)
+                try Task.checkCancellation()
+                record = fetched
+                parsedLines = LRCParser.parse(fetched?.syncedLyrics ?? "")
+                activeIndex = lineIndex(at: audio.playbackTime)
             } catch {
                 guard !Task.isCancelled else { return }
                 errorMessage = "Não foi possível consultar o LRCLIB."
