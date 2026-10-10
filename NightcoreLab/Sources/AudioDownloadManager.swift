@@ -177,6 +177,7 @@ final class AudioDownloadManager: ObservableObject {
 
     func cancel() {
         selectionGeneration = UUID()
+        let generation = selectionGeneration
         retryTask?.cancel()
         selectedID = nil
         onReady = nil
@@ -185,6 +186,9 @@ final class AudioDownloadManager: ObservableObject {
         isRetrying = false
         downloadProgress = 0
         serialize {
+            // A new track may have been selected while this cancellation waited
+            // for older queue mutations. Never erase its download.
+            guard generation == self.selectionGeneration else { return }
             self.transfers.setMaxConcurrentDownloads(0)
             let downloads = self.transfers.downloads
             self.tracks.removeAll()
