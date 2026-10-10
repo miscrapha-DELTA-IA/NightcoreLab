@@ -26,6 +26,15 @@ jobs:
       TEST_VIDEO: https://www.youtube.com/watch?v=jNQXAC9IVRw
 
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Testar contratos offline de busca e sugestões
+        run: |
+          pip install -r backend/requirements.txt httpx
+          python -m unittest discover -s backend -p 'test_*.py'
+
       - name: Esperar o Render publicar este commit
         # Num push, o Render faz um deploy novo; só testa quando a versão nova estiver no ar.
         if: github.event_name == 'push'

@@ -28,15 +28,15 @@ settings:
     Release:
       SWIFT_COMPILATION_MODE: wholemodule
 
-# Swift Package Manager
-# Para adicionar uma dependência, descomente um exemplo abaixo e
-# liste o pacote em targets.NightcoreLab.dependencies.
-packages: {}
-#  TelemetryDeck:
-#    url: https://github.com/TelemetryDeck/SwiftSDK
-#    from: 2.0.0
-#  LocalPackage:
-#    path: Packages/LocalPackage
+# Pinned revisions: DownloadKit is the async/await module from lcharlick.
+# Requires Xcode 26 / Swift 6.2 (CI selects latest-stable).
+packages:
+  DownloadManager:
+    url: https://github.com/lcharlick/DownloadManager.git
+    revision: 1564ef2471f30278c3b286a52e2ed7c981439053
+  SDWebImageSwiftUI:
+    url: https://github.com/SDWebImage/SDWebImageSwiftUI.git
+    revision: d1f7b2b48ef9dfbcea42c27dccff55f3eac5a28f
 
 targets:
   NightcoreLab:
@@ -71,9 +71,11 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""                  # preencha (ou injete no CI) para assinar/arquivar
 
-    dependencies: []
-    #  - package: TelemetryDeck
-    #    product: TelemetryDeck
+    dependencies:
+      - package: DownloadManager
+        product: DownloadKit
+      - package: SDWebImageSwiftUI
+        product: SDWebImageSwiftUI
 
   NightcoreLabTests:
     type: bundle.unit-test

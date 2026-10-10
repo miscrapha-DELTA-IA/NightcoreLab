@@ -2,18 +2,18 @@ import SwiftUI
 
 /// Tela "Servidor": troca o endereço do microserviço sem recompilar o app.
 struct ServerSettingsView: View {
-    @ObservedObject var downloader: DownloadManager
+    @ObservedObject var downloader: AudioDownloadManager
     var accent: Color
 
-    @AppStorage(DownloadManager.serverURLKey) private var serverURL = DownloadManager.defaultServerURL
+    @AppStorage(AudioDownloadManager.serverURLKey) private var serverURL = AudioDownloadManager.defaultServerURL
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = ""
     @State private var isTesting = false
     @State private var testResult: (ok: Bool, message: String)?
 
-    private var normalizedDraft: String { DownloadManager.normalizedServerURL(draft) }
-    private var hasChanges: Bool { normalizedDraft != DownloadManager.normalizedServerURL(serverURL) }
+    private var normalizedDraft: String { AudioDownloadManager.normalizedServerURL(draft) }
+    private var hasChanges: Bool { normalizedDraft != AudioDownloadManager.normalizedServerURL(serverURL) }
 
     var body: some View {
         NavigationStack {
@@ -55,7 +55,7 @@ struct ServerSettingsView: View {
                         .disabled(isTesting || normalizedDraft.isEmpty)
 
                         Button("Padrão") {
-                            draft = DownloadManager.defaultServerURL
+                            draft = AudioDownloadManager.defaultServerURL
                         }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)

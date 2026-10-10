@@ -33,6 +33,8 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -41,8 +43,8 @@ from itertools import islice
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
-from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, HttpUrl
 
 MAX_DURATION_SECONDS = int(os.getenv("MAX_DURATION_SECONDS", "1200"))
@@ -71,13 +73,14 @@ ALLOWED_HOSTS = {
 
 _download_slots = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
 _related_slots = threading.BoundedSemaphore(1)
+_search_slots = threading.BoundedSemaphore(1)
 RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
 
 app = FastAPI(
     title="Nightcore Lab Bridge",
     description="Extrai o áudio de um link do YouTube em .m4a e o envia direto, sem armazenar.",
-    version="1.3.0",
+    version="1.4.0",
 )
 
 
@@ -178,6 +181,40 @@ def related(url: HttpUrl):
         _related_slots.release()
 
 
+@app.get("/search")
+def search(query: str = Query(min_length=1, max_length=200)):
+    """Flat yt-dlp NDJSON for the native Swift search view; no audio extraction."""
+    query = query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Digite uma busca.")
+    if not _search_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.")
+    try:
+        # argv, never a shell: punctuation in a search cannot become executable code.
+        arguments = [f"ytsearch15:{query}", "--dump-json", "--flat-playlist"]
+        result = subprocess.run(
+            [sys.executable, "-m", "yt_dlp", *arguments,
+             "--ignore-config", "--no-cache-dir", "--socket-timeout", "15", "--retries", "1"],
+            capture_output=True, text=True, encoding="utf-8", timeout=75, check=False,
+        )
+        if result.returncode:
+            log.warning("yt-dlp search failed: %s", result.stderr[:500])
+            raise HTTPException(status_code=502, detail="Busca temporariamente indisponível.")
+        return Response(content=result.stdout, media_type="application/x-ndjson",
+                        headers={"Cache-Control": "no-store"})
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="A busca demorou demais. Tente novamente.")
+    finally:
+        _search_slots.release()
+
+
+@app.get("/download")
+def background_download(url: HttpUrl, background_tasks: BackgroundTasks):
+    """Body-free equivalent of POST /download, usable by iOS background URLSession."""
+    _youtube_video_id(str(url))
+    return download(DownloadRequest(url=url), background_tasks)
+
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def health():
     """Health check. Aceita HEAD para monitores de uptime; também 'acorda' o Render."""
@@ -247,9 +284,7 @@ def download(request: DownloadRequest, background_tasks: BackgroundTasks):
     # Função síncrona de propósito: o FastAPI a executa num thread pool,
     # então o yt-dlp (bloqueante) não trava o servidor para outros pedidos.
     url = str(request.url)
-    host = (urlparse(url).hostname or "").lower()
-    if host not in ALLOWED_HOSTS:
-        raise HTTPException(status_code=400, detail="Apenas links do YouTube são aceitos.")
+    _youtube_video_id(url)
 
     _sweep_stale_work_dirs()
 

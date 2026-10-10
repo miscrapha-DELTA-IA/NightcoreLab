@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import SDWebImageSwiftUI
 
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
@@ -16,10 +17,11 @@ struct ContentView: View {
     @State private var errorMessage: String?
 
     // Download por link do YouTube (via microserviço)
-    @StateObject private var downloader = DownloadManager()
+    @StateObject private var downloader = AudioDownloadManager.shared
     @State private var youtubeLink = ""
     @State private var coverURL: URL?
-    @State private var relatedVideos: [RelatedVideo] = []
+    @State private var relatedVideos: [Track] = []
+    @State private var playingTrackID: String?
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
@@ -54,6 +56,10 @@ struct ContentView: View {
                     header
                     youtubeField
                         .disabled(audio.isExporting)
+                    SearchView(downloader: downloader, theme: currentTheme,
+                               isEnabled: !audio.isExporting) { track, upcoming in
+                        playTrack(track, upcoming: upcoming)
+                    }
                     trackCard
                     relatedSection
                     presets
@@ -95,6 +101,9 @@ struct ContentView: View {
             isLinkFieldFocused = !downloader.isDownloading && !audio.isExporting
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
+        .onChange(of: audio.isPlaying) { _, playing in
+            if playing { prefetchUpcoming() }
+        }
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, _ in
             applyPitch()
@@ -401,11 +410,10 @@ struct ContentView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 12) {
                         ForEach(relatedVideos) { video in
-                            RelatedVideoCard(video: video, theme: currentTheme,
-                                             isEnabled: !downloader.isDownloading && !audio.isExporting) {
-                                guard !downloader.isDownloading, !audio.isExporting else { return }
-                                youtubeLink = video.url.absoluteString
-                                startDownload()
+                            RelatedVideoCard(video: downloader.cachedTrack(video), theme: currentTheme,
+                                             isEnabled: !audio.isExporting) {
+                                let index = relatedVideos.firstIndex(where: { $0.id == video.id }) ?? 0
+                                playTrack(video, upcoming: Array(relatedVideos.dropFirst(index + 1)))
                             }
                         }
                     }
@@ -606,26 +614,41 @@ struct ContentView: View {
 
     /// Ponte rede → DSP: baixa o .m4a e injeta no mesmo motor de áudio que a tela usa.
     private func startDownload() {
-        guard !downloader.isDownloading, !audio.isExporting else { return }
-        let sourceURL = trimmedLink
-        guard DownloadManager.looksLikeYouTube(sourceURL) else {
+        guard !audio.isExporting else { return }
+        guard let track = Track.from(url: trimmedLink) else {
             downloader.errorMessage = "Cole o link de um vídeo do YouTube."
             return
         }
+        playTrack(track, upcoming: [])
+    }
+
+    private func playTrack(_ track: Track, upcoming: [Track]) {
+        guard !audio.isExporting else { return }
         isLinkFieldFocused = false
         resetRelatedVideos()
-        downloader.downloadAudio(youtubeURL: sourceURL) { localURL, downloadedCoverURL in
+        relatedVideos = upcoming
+        downloader.select(track) { localURL, downloadedCoverURL in
             do {
                 try audio.load(url: localURL)
                 coverURL = downloadedCoverURL
                 applyPitch()
-                if youtubeLink == sourceURL { youtubeLink = "" }
-                relatedSourceURL = sourceURL
-                relatedRequestID = UUID()
+                youtubeLink = ""
+                playingTrackID = track.id
+                audio.play()
+                if upcoming.isEmpty {
+                    relatedSourceURL = track.url.absoluteString
+                    relatedRequestID = UUID()
+                }
+                prefetchUpcoming()
             } catch {
                 errorMessage = "Não foi possível abrir o áudio baixado: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func prefetchUpcoming() {
+        guard audio.isPlaying, let playingTrackID else { return }
+        downloader.prefetch(relatedVideos, playing: playingTrackID)
     }
 
     private func resetRelatedVideos() {
@@ -645,13 +668,14 @@ struct ContentView: View {
               sourceURL == relatedSourceURL else { return }
         relatedVideos = videos
         isLoadingRelated = false
+        prefetchUpcoming()
     }
 
     /// Colar com um toque: se o texto for um link do YouTube, já inicia o download.
     private func pasteAndDownload(_ text: String) {
         let link = text.trimmingCharacters(in: .whitespacesAndNewlines)
         youtubeLink = link
-        if DownloadManager.looksLikeYouTube(link) {
+        if AudioDownloadManager.looksLikeYouTube(link) {
             startDownload()
         } else {
             downloader.errorMessage = "O texto colado não é um link do YouTube."
@@ -674,6 +698,8 @@ struct ContentView: View {
             try audio.load(url: destination)
             imported = true
             coverURL = nil
+            playingTrackID = nil
+            downloader.cancel()
             resetRelatedVideos()
             applyPitch()
         } catch {
@@ -705,7 +731,7 @@ struct ContentView: View {
 // MARK: - Cartão de sugestão
 
 private struct RelatedVideoCard: View {
-    let video: RelatedVideo
+    let video: Track
     let theme: AppTheme
     let isEnabled: Bool
     let action: () -> Void
@@ -715,11 +741,10 @@ private struct RelatedVideoCard: View {
         Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial)
-                AsyncImage(url: video.thumbnail) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    theme.accent.opacity(0.12)
-                }
+                WebImage(url: video.thumbnailURL)
+                    .resizable()
+                    .transition(.fade(duration: 0.2))
+                    .scaledToFill()
                 .frame(width: 152, height: 120)
                 .opacity(0.55)
 
@@ -728,7 +753,7 @@ private struct RelatedVideoCard: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Spacer()
-                        Image(systemName: "arrow.down.circle.fill")
+                        Image(systemName: video.isCached ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                             .font(.system(size: 24, weight: .semibold))
                             .foregroundStyle(theme.accent)
                             .symbolEffect(.pulse, options: .repeating,
@@ -753,7 +778,7 @@ private struct RelatedVideoCard: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
-        .accessibilityLabel("Baixar \(video.title)")
+        .accessibilityLabel("\(video.isCached ? "Tocar" : "Baixar e tocar") \(video.title)")
     }
 }
 
