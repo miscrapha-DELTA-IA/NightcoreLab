@@ -22,14 +22,12 @@ struct ContentView: View {
 
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
-    @State private var youtubeLink = ""
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
-    @FocusState private var isLinkFieldFocused: Bool
     @State private var showServerSettings = false
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
@@ -41,7 +39,6 @@ struct ContentView: View {
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
     private var hasTrack: Bool { audio.fileName != nil }
-    private var trimmedLink: String { youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// Tom resultante: 0 se "Manter o tom original", senão acompanha a velocidade (efeito vinil).
     private var computedPitch: Float {
@@ -58,11 +55,21 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: DS.Spacing.l) {
                     header
-                    youtubeField
-                        .disabled(audio.isExporting)
-                    SearchView(downloader: downloader, theme: currentTheme,
-                               isEnabled: !audio.isExporting) { track, upcoming in
-                        playTrack(track, upcoming: upcoming)
+                    SearchView(
+                        downloader: downloader, theme: currentTheme,
+                        isEnabled: !audio.isExporting,
+                        onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
+                        onLink: { link in startDownload(link) },
+                        onServerSettings: { showServerSettings = true }
+                    )
+                    if downloader.isDownloading {
+                        Text(downloadStatusText)
+                            .font(DS.Typography.captionNumeric)
+                            .foregroundStyle(DS.Ink.secondary)
+                    } else if let message = downloader.errorMessage {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(DS.Typography.caption)
+                            .foregroundStyle(DS.Ink.error)
                     }
                     trackCard
                     relatedSection
@@ -98,13 +105,11 @@ struct ContentView: View {
             }
             guard !receivedLink.isEmpty else {
                 downloader.errorMessage = "O Atalho abriu o app, mas enviou o link vazio. Verifique a URL compartilhada no Atalho ou cole o link nesta caixa."
-                isLinkFieldFocused = !downloader.isDownloading && !audio.isExporting
                 return
             }
 
             downloader.errorMessage = nil
-            youtubeLink = receivedLink
-            isLinkFieldFocused = !downloader.isDownloading && !audio.isExporting
+            startDownload(receivedLink)
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
         .onChange(of: audio.isPlaying) { _, playing in
@@ -123,9 +128,6 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { TelemetryManager.shared.flush() }
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
-        }
-        .onChange(of: isLinkFieldFocused) { _, focused in
-            if focused { downloader.warmUp() }            // cold start enquanto o usuário cola o link
         }
         .task { downloader.warmUp() }
         .sheet(isPresented: $showServerSettings) {
@@ -241,105 +243,6 @@ struct ContentView: View {
         }
         .disabled(audio.isExporting || downloader.isDownloading)
         .accessibilityLabel("Importar música MP3, M4A, WAV ou AIFF")
-    }
-
-    // MARK: - Campo do link (vidro)
-
-    /// [servidor] [link…] [colar | baixar | cancelar]
-    private var youtubeField: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    showServerSettings = true
-                } label: {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(currentTheme.accent.opacity(0.75))
-                        .frame(width: 28, height: 36)
-                }
-                .disabled(downloader.isDownloading)
-                .accessibilityLabel("Configurar servidor")
-
-                TextField("", text: $youtubeLink,
-                          prompt: Text("Cole um link do YouTube").foregroundColor(DS.Ink.tertiary))
-                    .font(DS.Typography.body)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .submitLabel(.go)
-                    .foregroundStyle(DS.Ink.primary)
-                    .focused($isLinkFieldFocused)
-                    .onSubmit(startDownload)
-                    .disabled(downloader.isDownloading)
-                    .opacity(downloader.isDownloading ? 0.5 : 1)
-
-                linkAction
-                    .frame(width: 36, height: 36)
-            }
-            .padding(.leading, 10)
-            .padding(.trailing, 6)
-            .padding(.vertical, 6)
-            .glassSurface(Capsule(), theme: currentTheme,
-                          isActive: isLinkFieldFocused || downloader.isDownloading,
-                          depth: 0.7)
-
-            if downloader.isDownloading {
-                Text(downloadStatusText)
-                    .font(DS.Typography.captionNumeric)
-                    .foregroundStyle(DS.Ink.secondary)
-                    .padding(.leading, 16)
-                    .contentTransition(.numericText())
-            } else if let message = downloader.errorMessage {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Ink.error)
-                    .padding(.leading, 16)
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: downloader.isDownloading)
-        .animation(.easeInOut(duration: 0.2), value: isLinkFieldFocused)
-        .animation(.easeInOut(duration: 0.2), value: trimmedLink.isEmpty)
-    }
-
-    @ViewBuilder
-    private var linkAction: some View {
-        if downloader.isDownloading {
-            // Toque no indicador para cancelar
-            Button {
-                downloader.cancel()
-            } label: {
-                ZStack {
-                    ProgressView()
-                        .tint(currentTheme.accent)
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .heavy))
-                        .foregroundStyle(currentTheme.accent.opacity(0.85))
-                }
-            }
-            .accessibilityLabel("Cancelar download")
-        } else if trimmedLink.isEmpty {
-            // Botão de colar do sistema: não dispara o aviso de privacidade da área de transferência
-            PasteButton(payloadType: String.self) { strings in
-                guard let text = strings.first else { return }
-                Task { @MainActor in pasteAndDownload(text) }
-            }
-            .labelStyle(.iconOnly)
-            .buttonBorderShape(.circle)
-            .controlSize(.small)
-            .tint(currentTheme.accent)
-            .foregroundStyle(currentTheme.onAccent)
-        } else {
-            // Link pronto: o botão pulsa chamando para o download
-            Button(action: startDownload) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(currentTheme.accent)
-                    .background {
-                        GlowPulse(shape: Circle(), color: currentTheme.accent, isActive: true, blur: 8)
-                    }
-            }
-            .accessibilityLabel("Baixar áudio do link")
-        }
     }
 
     private var downloadStatusText: String {
@@ -658,18 +561,18 @@ struct ContentView: View {
     }
 
     /// Ponte rede → DSP: baixa o .m4a e injeta no mesmo motor de áudio que a tela usa.
-    private func startDownload() {
+    private func startDownload(_ link: String) {
         guard !audio.isExporting else { return }
-        guard let track = Track.from(url: trimmedLink) else {
-            downloader.errorMessage = "Cole o link de um vídeo do YouTube."
+        guard let track = Track.from(url: link.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            downloader.errorMessage = "Cole um link válido de vídeo do YouTube."
             return
         }
+        downloader.errorMessage = nil
         playTrack(track, upcoming: [])
     }
 
     private func playTrack(_ track: Track, upcoming: [Track]) {
         guard !audio.isExporting else { return }
-        isLinkFieldFocused = false
         resetRelatedVideos()
         relatedVideos = upcoming
         downloader.select(track) { localURL, downloadedCoverURL in
@@ -677,7 +580,6 @@ struct ContentView: View {
                 try audio.load(url: localURL)
                 coverURL = downloadedCoverURL
                 applyPitch()
-                youtubeLink = ""
                 playingTrackID = track.id
                 audio.play()
                 if upcoming.isEmpty {
@@ -714,17 +616,6 @@ struct ContentView: View {
         relatedVideos = videos
         isLoadingRelated = false
         prefetchUpcoming()
-    }
-
-    /// Colar com um toque: se o texto for um link do YouTube, já inicia o download.
-    private func pasteAndDownload(_ text: String) {
-        let link = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        youtubeLink = link
-        if AudioDownloadManager.looksLikeYouTube(link) {
-            startDownload()
-        } else {
-            downloader.errorMessage = "O texto colado não é um link do YouTube."
-        }
     }
 
     private func importFile(_ url: URL) {
