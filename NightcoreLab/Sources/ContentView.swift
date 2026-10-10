@@ -183,10 +183,8 @@ struct ContentView: View {
         .task { downloader.warmUp() }
         .sheet(isPresented: $showLyrics) {
             if let currentTrack {
-                TimelineView(.periodic(from: .now, by: 0.15)) { _ in
-                    LyricsView(track: currentTrack, playbackTime: audio.playbackTime,
-                               isPlaying: audio.isPlaying, dismiss: { showLyrics = false })
-                }
+                LyricsView(track: currentTrack, audio: audio, theme: currentTheme,
+                           dismiss: { showLyrics = false })
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
