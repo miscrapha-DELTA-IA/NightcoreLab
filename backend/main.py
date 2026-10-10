@@ -470,11 +470,11 @@ def _extract_with(url: str, work_dir: str, label: str,
 
         if info.get("is_live"):
             raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
-        duration = info.get("duration") or 0
-        if duration >= MAX_DURATION_SECONDS:
+        duration = info.get("duration")
+        if not isinstance(duration, (int, float)) or duration >= MAX_DURATION_SECONDS:
             raise HTTPException(
                 status_code=413,
-                detail=f"Áudio longo demais ({duration // 60} min). Limite: {MAX_DURATION_SECONDS // 60} min.",
+                detail="Duração desconhecida ou faixa de 10 minutos ou mais. Download bloqueado.",
             )
 
         ydl.process_ie_result(info, download=True)
