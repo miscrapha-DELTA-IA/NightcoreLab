@@ -462,7 +462,8 @@ struct ContentView: View {
                         .font(DS.Typography.caption)
                         .foregroundStyle(DS.Ink.secondary)
                 } else {
-                    ForEach(Array(playbackQueue.upNextQueue.prefix(3).enumerated()), id: \.element.id) { index, track in
+                    ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
+                        let track = playbackQueue.upNextQueue[index]
                         Button {
                             playTrack(track, upcoming: Array(playbackQueue.upNextQueue.dropFirst(index + 1)))
                         } label: {
