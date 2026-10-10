@@ -135,7 +135,10 @@ def _cache_extracted_audio(video_id: str, result: tuple[Path, str, str | None, s
             metadata = CACHE_DIR / f"{video_id}.json"
             # Atomic publish avoids serving a partially written file.
             staged = CACHE_DIR / f"{video_id}.{threading.get_ident()}.tmp"
-            shutil.copyfile(audio, staged)
+            try:
+                os.replace(audio, staged)  # same /tmp filesystem: no duplicate I/O
+            except OSError:
+                shutil.copyfile(audio, staged)
             os.replace(staged, target)
             staged_meta = CACHE_DIR / f"{video_id}.{threading.get_ident()}.json.tmp"
             staged_meta.write_text(json.dumps({"title": title, "thumbnail": thumbnail}), encoding="utf-8")
