@@ -223,7 +223,7 @@ struct LyricsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(mode == .artwork ? "Usar cor da capa" :
-                            "Usar cor do tema \\(theme.displayName)")
+                            "Usar cor do tema \(theme.displayName)")
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
@@ -373,7 +373,12 @@ struct LyricsView: View {
             .padding(.top, 20)
         }
         .task(id: track.id) {
-            artworkTint = await ArtworkTintExtractor.fetch(for: track)
+            artworkTint = nil
+            let sampled = await ArtworkTintExtractor.fetch(for: track)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.42)) {
+                artworkTint = sampled
+            }
         }
         .task(id: track.id) {
             loading = true
