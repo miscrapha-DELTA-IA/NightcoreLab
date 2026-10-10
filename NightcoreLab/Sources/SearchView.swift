@@ -9,7 +9,7 @@ struct SearchView: View {
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
     @State private var query = ""
-    @State private var results: [Track] = []
+    @State private var searchResults: [Track] = []
     @State private var isSearching = false
     @State private var errorMessage: String?
     @State private var hasSearched = false
@@ -27,7 +27,7 @@ struct SearchView: View {
         guard !value.isEmpty, isEnabled else { return }
         isFocused = false
         errorMessage = nil
-        results = []
+        searchResults = []
         hasSearched = false
         if value.lowercased().hasPrefix("http") ||
             value.lowercased().contains("youtu.be") ||
@@ -69,18 +69,31 @@ struct SearchView: View {
 
             if let errorMessage {
                 Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-            } else if hasSearched && results.isEmpty && !isSearching {
+            } else if hasSearched && searchResults.isEmpty && !isSearching {
                 Text("Nenhuma música encontrada.").font(.caption).foregroundStyle(.secondary)
             }
-            if !results.isEmpty {
+            if !searchResults.isEmpty {
+                HStack {
+                    Label("RESULTADOS DA BUSCA", systemImage: "magnifyingglass")
+                        .font(.caption.weight(.heavy))
+                        .tracking(1.4)
+                        .foregroundStyle(theme.accent)
+                    Spacer()
+                    Text("\(searchResults.count) músicas")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Toque numa música para reproduzir agora")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 12) {
-                        ForEach(results) { result in
+                        ForEach(searchResults) { result in
                             let track = downloader.cachedTrack(result)
                             Button {
                                 isFocused = false
-                                let index = results.firstIndex(where: { $0.id == track.id }) ?? 0
-                                onSelect(track, Array(results.dropFirst(index + 1)))
+                                // Play now: other search hits never become the playback queue.
+                                onSelect(track, [])
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     WebImage(url: track.thumbnailURL)
@@ -118,7 +131,7 @@ struct SearchView: View {
                 let found = try await YouTubeSearchService().search(
                     query: requested, serverURL: AudioDownloadManager.apiBaseURL)
                 try Task.checkCancellation()
-                results = found
+                searchResults = found
                 hasSearched = true
                 isSearching = false
             } catch {

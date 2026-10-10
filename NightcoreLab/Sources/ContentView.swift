@@ -4,19 +4,20 @@ import SDWebImageSwiftUI
 
 @MainActor
 final class PlaybackQueue: ObservableObject {
-    @Published private(set) var tracks: [Track] = []
+    @Published private(set) var upNextQueue: [Track] = []
+    var tracks: [Track] { upNextQueue }
 
     func replace(with candidates: [Track], excluding currentID: String) {
         var seen = Set([currentID])
-        tracks = candidates.filter { seen.insert($0.id).inserted }
+        upNextQueue = candidates.filter { seen.insert($0.id).inserted }
     }
 
     func takeNext() -> Track? {
-        guard !tracks.isEmpty else { return nil }
-        return tracks.removeFirst()
+        guard !upNextQueue.isEmpty else { return nil }
+        return upNextQueue.removeFirst()
     }
 
-    func clear() { tracks.removeAll() }
+    func clear() { upNextQueue.removeAll() }
 }
 
 struct ContentView: View {
@@ -45,6 +46,7 @@ struct ContentView: View {
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
+    @State private var currentTrack: Track?
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
@@ -440,62 +442,96 @@ struct ContentView: View {
         .accessibilityHint("Alterna entre fosco, nítido e em movimento")
     }
 
+    // Discovery and play-next are deliberately separate surfaces and data sources.
     private var relatedSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("PRÓXIMAS FAIXAS")
-                    .font(.caption.weight(.heavy))
-                    .tracking(2)
-                    .foregroundStyle(currentTheme.accent)
-                Spacer()
-                if isLoadingRelated {
-                    ProgressView().tint(currentTheme.accent)
-                        .accessibilityLabel("Carregando sugestões")
-                } else if relatedSourceURL != nil {
-                    Button {
-                        relatedRequestID = UUID()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("A SEGUIR", systemImage: "text.line.first.and.arrowtriangle.forward")
+                        .font(.caption.weight(.heavy))
+                        .tracking(1.5)
+                        .foregroundStyle(currentTheme.accent)
+                    Spacer()
+                    Text("\(playbackQueue.upNextQueue.count) na fila")
+                        .font(.caption2)
+                        .foregroundStyle(DS.Ink.secondary)
+                }
+                if playbackQueue.upNextQueue.isEmpty {
+                    Text(hasTrack ? "A fila está vazia. As próximas músicas aparecerão aqui." :
+                         "Escolha uma música para começar.")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Ink.secondary)
+                } else {
+                    ForEach(Array(playbackQueue.upNextQueue.prefix(3).enumerated()), id: \.element.id) { index, track in
+                        Button {
+                            playTrack(track, upcoming: Array(playbackQueue.upNextQueue.dropFirst(index + 1)))
+                        } label: {
+                            HStack(spacing: 10) {
+                                Text(String(format: "%02d", index + 1))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(currentTheme.accent)
+                                WebImage(url: track.thumbnailURL)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 42, height: 42)
+                                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(track.title)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(1)
+                                    Text(downloader.cachedTrack(track).isCached ? "Disponível offline" : "Na fila · pré-carregamento")
+                                        .font(.caption2)
+                                        .foregroundStyle(DS.Ink.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "play.fill")
+                                    .foregroundStyle(currentTheme.accent)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(audio.isExporting)
                     }
-                    .accessibilityLabel("Atualizar sugestões")
                 }
             }
+            .padding(14)
+            .glassSurface(RoundedRectangle(cornerRadius: 16), theme: currentTheme, depth: 0.6)
 
             if !relatedVideos.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(relatedVideos) { video in
-                            RelatedVideoCard(video: downloader.cachedTrack(video), theme: currentTheme,
-                                             isEnabled: !audio.isExporting) {
-                                let index = relatedVideos.firstIndex(where: { $0.id == video.id }) ?? 0
-                                playTrack(video, upcoming: Array(relatedVideos.dropFirst(index + 1)))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("DESCOBRIR MAIS", systemImage: "sparkles")
+                            .font(.caption.weight(.heavy))
+                            .tracking(1.5)
+                            .foregroundStyle(currentTheme.accent)
+                        Spacer()
+                        if isLoadingRelated {
+                            ProgressView().tint(currentTheme.accent)
+                        } else if relatedSourceURL != nil {
+                            Button { relatedRequestID = UUID() } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .accessibilityLabel("Atualizar sugestões")
+                        }
+                    }
+                    Text("Sugestões relacionadas · toque para reproduzir agora")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Ink.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 12) {
+                            ForEach(relatedVideos) { video in
+                                RelatedVideoCard(video: downloader.cachedTrack(video),
+                                                 theme: currentTheme, isEnabled: !audio.isExporting) {
+                                    playTrack(video, upcoming: [])
+                                }
                             }
                         }
-                    }
-                    .padding(.vertical, 4)
-                }
-            } else if relatedSourceURL == nil {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(.ultraThinMaterial)
-                                .overlay(Image(systemName: "music.note")
-                                    .foregroundStyle(currentTheme.accent.opacity(0.4)))
-                                .frame(width: 152, height: 120)
-                                .accessibilityHidden(true)
-                        }
+                        .padding(.vertical, 4)
                     }
                 }
-                Text("Baixe uma música do YouTube para carregar as próximas faixas.")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Ink.secondary)
             } else if isLoadingRelated {
-                Text("Buscando músicas para continuar…")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Ink.secondary)
-            } else {
-                Text(downloader.relatedErrorMessage ?? "Nenhuma sugestão disponível para esta faixa.")
+                Text("Buscando sugestões relacionadas…")
                     .font(DS.Typography.caption)
                     .foregroundStyle(DS.Ink.secondary)
             }
@@ -689,6 +725,7 @@ struct ContentView: View {
                 coverURL = downloadedCoverURL
                 applyPitch()
                 playingTrackID = track.id
+                currentTrack = track
                 audio.play()
                 if upcoming.isEmpty {
                     relatedSourceURL = track.url.absoluteString
@@ -752,6 +789,8 @@ struct ContentView: View {
             imported = true
             coverURL = nil
             playingTrackID = nil
+            currentTrack = nil
+            playbackQueue.clear()
             downloader.cancel()
             resetRelatedVideos()
             applyPitch()
