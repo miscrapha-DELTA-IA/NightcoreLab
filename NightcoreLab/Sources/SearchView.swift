@@ -20,6 +20,8 @@ struct SearchView: View {
     let onSelect: (Track, [Track]) -> Void
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
+    @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
+    @State private var hasRestoredQuery = false
     @State private var query = ""
     @State private var searchResults: [Track] = []
     @State private var isSearching = false
@@ -36,6 +38,7 @@ struct SearchView: View {
     }
 
     private func showSuggestions() {
+        lastSearchQuery = ""
         query = ""
         searchResults = []
         submittedQuery = nil
@@ -66,6 +69,7 @@ struct SearchView: View {
             query = ""
             onLink(value)
         } else {
+            lastSearchQuery = value
             submittedQuery = value
             searchRequestID = UUID()
         }
@@ -138,6 +142,7 @@ struct SearchView: View {
                     LazyHStack(spacing: 12) {
                         ForEach(displayedTracks) { result in
                             let track = downloader.cachedTrack(result)
+                            let status = downloader.status(for: result)
                             Button {
                                 isFocused = false
                                 // Search/discovery never append all results to the playback queue.
@@ -156,9 +161,13 @@ struct SearchView: View {
                                         .lineLimit(2)
                                         .multilineTextAlignment(.leading)
                                         .frame(height: 34, alignment: .topLeading)
-                                    Label(track.isCached ? "Pronta para tocar" : "Tocar agora",
-                                          systemImage: track.isCached ? "checkmark.circle.fill" : "play.circle")
-                                        .font(.caption2).foregroundStyle(theme.accent)
+                                    HStack(spacing: 5) {
+                                        TrackStatusIndicator(status: status, accent: theme.accent)
+                                        Text(status.shortDescription)
+                                            .font(.caption2)
+                                            .foregroundStyle(status == .downloaded
+                                                ? Color.green.opacity(0.85) : theme.accent)
+                                    }
                                 }
                                 .frame(width: 152)
                             }
@@ -169,6 +178,16 @@ struct SearchView: View {
                     .padding(.vertical, 3)
                 }
             }
+        }
+        .onAppear {
+            guard !hasRestoredQuery else { return }
+            hasRestoredQuery = true
+            let previous = lastSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !previous.isEmpty, submittedQuery == nil, searchResults.isEmpty else { return }
+            // A deliberate saved text search is restored once, never on every keystroke.
+            query = previous
+            submittedQuery = previous
+            searchRequestID = UUID()
         }
         .task(id: searchRequestID) {
             guard let requested = submittedQuery else {
