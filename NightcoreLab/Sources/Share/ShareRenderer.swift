@@ -29,7 +29,7 @@ enum ShareRenderer {
     }
 
     /// Limit network bytes and downsample before decoding into a full-sized bitmap.
-    private static func loadArtwork(_ url: URL?) async -> UIImage? {
+    static func loadArtwork(_ url: URL?) async -> UIImage? {
         guard let url else { return nil }
         let data: Data
         do {

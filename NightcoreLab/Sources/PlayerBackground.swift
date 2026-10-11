@@ -4,7 +4,7 @@ import SDWebImageSwiftUI
 // MARK: - Estilo do fundo
 
 /// Estilos visíveis no menu de fundo do cartão principal.
-enum PlayerBackgroundStyle: Int, CaseIterable {
+enum PlayerBackgroundStyle: Int, CaseIterable, Sendable {
     /// Fosco: capa desfocada.
     case blurred
     /// Nítido: capa sem blur, com overlay mais forte para manter o texto legível.

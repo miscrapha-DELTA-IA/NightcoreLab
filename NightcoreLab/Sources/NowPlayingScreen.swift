@@ -70,6 +70,7 @@ struct TrackInfo: Equatable {
 struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>: View {
     let track: TrackInfo
     let clock: PlaybackClock
+    let audio: AudioEngineManager
     let isPlaying: Bool
     let isTrackLoaded: Bool
     let canShowKaraoke: Bool
@@ -93,6 +94,11 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
     @State private var isBuildingShare = false
     @State private var shareResult: ShareExportPayload?
     @State private var showShareError = false
+    @State private var shareErrorDetails: String?
+    @State private var storyProgress = 0.0
+    @State private var storyPreview: StoryVideoPayload?
+    @State private var storyTask: Task<Void, Never>?
+    @AppStorage("story.lyricTypography") private var storyTypography: StoryLyricTypography = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
     private var motion: Animation {
@@ -175,7 +181,16 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
         .overlay(alignment: .topTrailing) {
             if isTrackLoaded {
                 HStack(spacing: 8) {
-                    ShareButton(isWorking: isBuildingShare, action: shareCurrentTrack)
+                    ShareButton(
+                        isWorking: isBuildingShare,
+                        canExportLyrics: lyricsStore.trackID == track.id &&
+                            lyricsStore.status == .ready && !lyricsStore.lines.isEmpty,
+                        typography: $storyTypography,
+                        onImage: shareCurrentTrack,
+                        onVideo: { mode, includeAudio in
+                            shareVideo(mode: mode, includeAudio: includeAudio)
+                        }
+                    )
                     if canShowKaraoke {
                         micButton
                     }
@@ -187,10 +202,34 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
         .sheet(item: $shareResult) { payload in
             ShareExportService(image: payload.image)
         }
+        .sheet(item: $storyPreview) { payload in
+            StoryVideoPreview(url: payload.url)
+        }
+        .overlay(alignment: .bottom) {
+            if isBuildingShare && storyTask != nil {
+                VStack(spacing: 10) {
+                    ProgressView(value: storyProgress)
+                        .tint(appTheme.accent)
+                    HStack {
+                        Text("Gerando Story · \(Int(storyProgress * 100))%")
+                            .font(.caption.weight(.semibold))
+                        Spacer()
+                        Button("Cancelar") { storyTask?.cancel() }
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+                .padding(16)
+                .background(.regularMaterial,
+                            in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, 24)
+                .padding(.bottom, 22)
+            }
+        }
         .alert("Não foi possível criar o cartão", isPresented: $showShareError) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Tente compartilhar novamente. A reprodução continua normalmente.")
+            Text(shareErrorDetails ??
+                 "Tente compartilhar novamente. A reprodução continua normalmente.")
         }
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
@@ -253,8 +292,53 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                 try Task.checkCancellation()
                 shareResult = ShareExportPayload(image: image)
             } catch {
+                shareErrorDetails = error.localizedDescription
                 showShareError = true
             }
+        }
+    }
+
+    /// Capture timing, DSP and lyrics before the first suspension point.
+    private func shareVideo(mode: StoryMode, includeAudio: Bool) {
+        guard isTrackLoaded, !isBuildingShare else { return }
+        let matchedLyrics = lyricsStore.trackID == track.id &&
+            lyricsStore.status == .ready ? lyricsStore.lines : []
+        do {
+            let capturedAt = Date()
+            let frame = try StoryRequestBuilder.make(
+                mode: mode, track: track, theme: appTheme,
+                playerStyle: playerBackgroundStyle, karaokeBackground: backgroundStyle,
+                marblePhase: Float(max(0, capturedAt.timeIntervalSince(marbleStartedAt)) *
+                                   (showsKaraoke ? 0.8 : 0.6)),
+                playbackTime: audio.playbackTime, sourceDuration: audio.duration,
+                speed: audio.speed, lines: matchedLyrics,
+                lyricOffset: lyricsStore.userOffset, typography: storyTypography,
+                includeAudio: includeAudio
+            )
+            let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
+            storyProgress = 0
+            isBuildingShare = true
+            storyTask = Task { @MainActor in
+                defer {
+                    isBuildingShare = false
+                    storyTask = nil
+                }
+                do {
+                    let url = try await StoryVideoExporter.export(
+                        frame, audioSource: frozenAudio,
+                        progress: { storyProgress = $0 })
+                    try Task.checkCancellation()
+                    storyPreview = StoryVideoPayload(url: url)
+                } catch is CancellationError {
+                    // Cancellation is user-initiated; no interruption to playback.
+                } catch {
+                    shareErrorDetails = error.localizedDescription
+                    showShareError = true
+                }
+            }
+        } catch {
+            shareErrorDetails = error.localizedDescription
+            showShareError = true
         }
     }
 

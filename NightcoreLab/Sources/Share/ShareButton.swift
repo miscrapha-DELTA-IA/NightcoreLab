@@ -1,12 +1,42 @@
 import SwiftUI
 
-/// UI only: no knowledge of playback, Metal or exporting.
+/// The still card remains available; videos use the same share entry point.
 struct ShareButton: View {
     let isWorking: Bool
-    let action: () -> Void
+    let canExportLyrics: Bool
+    @Binding var typography: StoryLyricTypography
+    let onImage: () -> Void
+    let onVideo: (StoryMode, Bool) -> Void
 
     var body: some View {
-        Button(action: action) {
+        Menu {
+            Button { onImage() } label: {
+                Label("Imagem estática", systemImage: "photo")
+            }
+            Section("Vídeo · Story de até 15 s") {
+                Button { onVideo(.player, true) } label: {
+                    Label("Player com áudio", systemImage: "play.rectangle")
+                }
+                Button { onVideo(.lyrics, true) } label: {
+                    Label("Letras com áudio", systemImage: "text.bubble")
+                }
+                .disabled(!canExportLyrics)
+                Button { onVideo(.player, false) } label: {
+                    Label("Player sem áudio", systemImage: "speaker.slash")
+                }
+                Button { onVideo(.lyrics, false) } label: {
+                    Label("Letras sem áudio", systemImage: "text.quote")
+                }
+                .disabled(!canExportLyrics)
+            }
+            Section("Fonte do Story de letras") {
+                Picker("Tipografia", selection: $typography) {
+                    ForEach(StoryLyricTypography.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+            }
+        } label: {
             Group {
                 if isWorking {
                     ProgressView().tint(.white)
@@ -19,10 +49,8 @@ struct ShareButton: View {
             .background(Color.white.opacity(0.10), in: Circle())
             .foregroundStyle(.white)
         }
-        .buttonStyle(.plain)
         .disabled(isWorking)
-        .accessibilityLabel("Compartilhar a música atual")
-        .accessibilityHint("Cria uma imagem com a capa e o tema do player")
-        .accessibilityAddTraits(isWorking ? [] : .isButton)
+        .accessibilityLabel("Compartilhar imagem ou vídeo da música atual")
+        .accessibilityHint("Escolha a imagem ou um Story em vídeo do player ou das letras.")
     }
 }

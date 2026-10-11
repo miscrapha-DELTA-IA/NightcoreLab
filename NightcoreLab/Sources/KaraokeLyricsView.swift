@@ -323,12 +323,12 @@ private struct KaraokeWordView: View {
 
 // MARK: - FlowLayout (quebra de linha por palavra; sílabas coladas não quebram)
 
-private struct GapAfter: LayoutValueKey { static let defaultValue: CGFloat = 0 }
-private extension View {
+struct GapAfter: LayoutValueKey { static let defaultValue: CGFloat = 0 }
+extension View {
     func gapAfter(_ v: CGFloat) -> some View { layoutValue(key: GapAfter.self, value: v) }
 }
 
-private struct FlowLayout: Layout {
+struct FlowLayout: Layout {
     var lineSpacing: CGFloat = 6
 
     private struct Row { var items: [(index: Int, size: CGSize)] = []; var width: CGFloat = 0; var height: CGFloat = 0 }

@@ -187,6 +187,7 @@ struct ContentView: View {
         NowPlayingScreen(
             track: TrackInfo(track: currentTrack, fileName: audio.fileName, coverURL: coverURL),
             clock: audio.lyricsClock,
+            audio: audio,
             isPlaying: audio.isPlaying,
             isTrackLoaded: hasTrack,
             canShowKaraoke: currentTrack != nil,

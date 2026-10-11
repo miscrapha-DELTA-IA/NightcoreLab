@@ -44,6 +44,11 @@ struct RenderSettings: Sendable {
     let reverbPresetRaw: Int
 }
 
+struct StoryAudioSource: Sendable {
+    let url: URL
+    let settings: RenderSettings
+}
+
 // MARK: - AudioEngineManager
 
 @MainActor
@@ -270,6 +275,26 @@ final class AudioEngineManager {
 
         exportProgress = 1
         return url
+    }
+
+    /// Capture the source and DSP values synchronously when the user taps Share.
+    /// A later track change cannot alter the sound of an in-flight Story.
+    func storyAudioSource() throws -> StoryAudioSource {
+        guard let sourceURL else { throw AudioEngineError.noFileLoaded }
+        let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb, bass: bass,
+                                      reverbPresetRaw: Self.defaultReverbPreset.rawValue)
+        return StoryAudioSource(url: sourceURL, settings: settings)
+    }
+
+    /// Standalone offline graph. Does not seek, pause or replace the live player.
+    nonisolated static func exportStorySegment(source: StoryAudioSource,
+                                               startTime: TimeInterval,
+                                               duration: TimeInterval) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try Self.renderOffline(source: source.url, settings: source.settings,
+                                   format: .m4a, progress: { _ in },
+                                   startTime: startTime, maxDuration: duration)
+        }.value
     }
 
     // MARK: - Privado: playback
@@ -548,7 +573,9 @@ final class AudioEngineManager {
     nonisolated static func renderOffline(source: URL,
                                                   settings: RenderSettings,
                                                   format: ExportFormat,
-                                                  progress: @Sendable (Double) -> Void) throws -> URL {
+                                                  progress: @Sendable (Double) -> Void,
+                                                  startTime: TimeInterval = 0,
+                                                  maxDuration: TimeInterval? = nil) throws -> URL {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let sourceRate = file.processingFormat.sampleRate
         guard file.length > 0, sourceRate > 0, (1...2).contains(file.processingFormat.channelCount),
@@ -584,7 +611,18 @@ final class AudioEngineManager {
 
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
         try engine.start()
-        player.scheduleFile(file, at: nil)
+        if let maxDuration {
+            let startFrame = AVAudioFramePosition(min(max(startTime, 0) * sourceRate,
+                                                      Double(file.length)))
+            let frames = min(file.length - startFrame,
+                             AVAudioFramePosition(maxDuration * Double(settings.speed) * sourceRate))
+            guard frames > 0 else { throw AudioEngineError.unsupportedAudio }
+            player.scheduleSegment(file, startingFrame: startFrame,
+                                   frameCount: AVAudioFrameCount(min(frames, Int64(UInt32.max))),
+                                   at: nil)
+        } else {
+            player.scheduleFile(file, at: nil)
+        }
         player.play()
         defer {
             player.stop()
@@ -593,8 +631,12 @@ final class AudioEngineManager {
 
         // Duração final = duração original / speed + cauda do reverb.
         let sourceSeconds = Double(file.length) / sourceRate
-        let tailSeconds = settings.reverb > 0 ? 3.0 : 0.1
-        let totalFrames = AVAudioFramePosition((sourceSeconds / Double(settings.speed) + tailSeconds) * outputRate)
+        let tailSeconds = maxDuration == nil ? (settings.reverb > 0 ? 3.0 : 0.1) : 0.0
+        let available = max(0, sourceSeconds - min(max(startTime, 0), sourceSeconds))
+                        / Double(settings.speed)
+        let selectedSeconds = min(maxDuration ?? available, available)
+        guard selectedSeconds > 0 else { throw AudioEngineError.unsupportedAudio }
+        let totalFrames = AVAudioFramePosition((selectedSeconds + tailSeconds) * outputRate)
 
         // Arquivo de saída
         let baseName = source.deletingPathExtension().lastPathComponent
