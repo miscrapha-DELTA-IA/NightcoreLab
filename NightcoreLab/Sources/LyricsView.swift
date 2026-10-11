@@ -93,6 +93,7 @@ struct LyricsView: View {
     let theme: AppTheme
     let dismiss: () -> Void
     var inline = false
+    var prefetcher: LyricsPrefetcher?
 
     @Environment(LyricsStore.self) private var lyricStore
     @State private var record: LyricsRecord?
@@ -117,10 +118,14 @@ struct LyricsView: View {
         }
     }
 
-    private func apply(_ selected: LyricsRecord) {
+    private func apply(_ selected: LyricsRecord, pin: Bool = false) {
         record = selected
-        lyricStore.load(trackID: "\(track.id):\(selected.id)",
-                        rawLRC: selected.syncedLyrics ?? "")
+        lyricStore.load(trackID: track.id, rawLRC: selected.syncedLyrics ?? "",
+                        needsReview: false, force: true)
+        if pin, let prefetcher {
+            let choice = LRCLIBRecord(legacy: selected)
+            Task { await prefetcher.pin(choice, for: track.id) }
+        }
         errorMessage = nil
     }
 
@@ -225,7 +230,7 @@ struct LyricsView: View {
                 if let record {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("LETRA ENCONTRADA")
+                            Text(lyricStore.needsReview ? "CONFERIR LETRA" : "LETRA ENCONTRADA")
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white.opacity(0.65))
                             Text("\(record.artistName) — \(record.trackName)")
@@ -341,9 +346,26 @@ struct LyricsView: View {
             errorMessage = nil
             record = nil
             candidates = []
-            if !(lyricStore.trackID?.hasPrefix("\(track.id):") ?? false) {
-                lyricStore.clear()
+            if let prefetcher {
+                // Reutiliza a busca que começou durante a reprodução.
+                let cached = await prefetcher.awaitChoice(for: track.id)
+                guard !Task.isCancelled else { return }
+                if let cached {
+                    candidates = cached.alternatives.map(\.asLegacyRecord)
+                    if let selected = cached.selected {
+                        record = selected.asLegacyRecord
+                        lyricStore.load(trackID: track.id,
+                                        rawLRC: selected.syncedLyrics ?? "",
+                                        needsReview: cached.needsReview, force: cached.pinned)
+                    } else {
+                        errorMessage = "Não foi encontrada letra sincronizada com confiança. Pesquise manualmente."
+                    }
+                    loading = false
+                    return
+                }
             }
+            // Compatibilidade com faixa aberta antes do prefetcher existir.
+            if lyricStore.trackID != track.id { lyricStore.clear() }
             do {
                 let lookup = try await LyricsService.search(for: track,
                                                              audioDuration: audio.duration)
@@ -390,7 +412,7 @@ struct LyricsView: View {
                     }
                     List(candidates.prefix(20)) { candidate in
                         Button {
-                            apply(candidate)
+                            apply(candidate, pin: true)
                             isChoosingLyrics = false
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
