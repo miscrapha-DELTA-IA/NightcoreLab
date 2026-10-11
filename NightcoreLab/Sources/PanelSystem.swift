@@ -5,8 +5,8 @@ import Observation
 // Ocultar/exibir "janelas" sem mexer no visual delas.
 //
 //  • Cada painel ganha UMA linha:  .hideablePanel(.lyrics, edge: .bottom)
-//  • Um botão de olho no canto: toque = modo Zen (esconde tudo e deixa só o fundo);
-//    segurar = menu com um toggle por painel + "Mostrar tudo".
+//  • Um botão de olho no canto abre o menu com um toque simples.
+//  • O menu oferece "Mostrar tudo", modo Zen e toggles por painel.
 //  • Zen NÃO altera a escolha individual: ao sair, cada painel volta como estava.
 //  • Nada de alças/badges nos painéis: a estética original fica intacta.
 // =============================================================================
@@ -115,6 +115,11 @@ final class PanelStore {
     func isVisible(_ id: PanelID) -> Bool { !isZen && !hidden.contains(id) }
     func isHidden(_ id: PanelID) -> Bool { hidden.contains(id) }
 
+    /// Visible recovery affordance counts only the panels relevant to this screen.
+    func hiddenCount(in ids: [PanelID]) -> Int {
+        ids.filter { hidden.contains($0) }.count
+    }
+
     func toggle(_ id: PanelID) { setVisible(isHidden(id), for: id) }
 
     func setVisible(_ visible: Bool, for id: PanelID) {
@@ -206,7 +211,7 @@ extension AnyTransition {
     }
 }
 
-// MARK: - Botão de olho (toque = Zen · segurar = menu por painel)
+// MARK: - Botão de olho (toque = menu de painéis e restauração)
 
 struct PanelsMenuButton: View {
     let panels: [PanelID]                       // só os painéis que existem na tela atual
@@ -214,6 +219,7 @@ struct PanelsMenuButton: View {
 
     var body: some View {
         Menu {
+            Button("Mostrar tudo", systemImage: "eye") { store.showAll() }
             Button(store.isZen ? "Sair do modo Zen" : "Entrar no modo Zen", systemImage: "eye.slash") {
                 store.toggleZen()
             }
@@ -229,20 +235,17 @@ struct PanelsMenuButton: View {
                     }
                 }
             }
-            Button("Mostrar tudo", systemImage: "eye") { store.showAll() }
         } label: {
             Image(systemName: store.isZen ? "eye.slash.fill" : "eye")
                 .font(.system(size: 18, weight: .semibold))
                 .contentTransition(.symbolEffect(.replace))
                 .environmentButtonSurface()
                 .foregroundStyle(.white)
-        } primaryAction: {
-            store.toggleZen()
         }
-        .accessibilityLabel("Visibilidade dos painéis")
+        .accessibilityLabel("Gerenciar painéis")
         .accessibilityValue(store.isZen ? "Modo Zen ativado" : "Modo Zen desativado")
         .accessibilityAction(named: Text("Alternar modo Zen")) { store.toggleZen() }
         .accessibilityAction(named: Text("Mostrar tudo")) { store.showAll() }
-        .accessibilityHint("Toque para ocultar ou mostrar tudo. Mantenha pressionado para escolher janelas.")
+        .accessibilityHint("Toque para abrir o menu, mostrar painéis ocultos ou escolher o modo Zen.")
     }
 }

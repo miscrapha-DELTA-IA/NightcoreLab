@@ -151,6 +151,7 @@ struct ContentView: View {
     @AppStorage("showExport") private var isExportExpanded = true
 
     @Environment(LyricsStore.self) private var lyricsStore
+    @Environment(PanelStore.self) private var panels
     @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -159,6 +160,7 @@ struct ContentView: View {
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
     private var hasTrack: Bool { audio.fileName != nil }
+    private var hiddenMainPanelCount: Int { panels.hiddenCount(in: PanelID.mainPanels) }
 
     /// Migrates the preference from the previous standalone Discover toggle.
     private func restoreDiscoverExpansionPreference() {
@@ -399,6 +401,24 @@ struct ContentView: View {
                         isDiscoverExpanded: $isDiscoverExpanded,
                         isPresented: !(hasTrack && currentTrack != nil && showLyrics)
                     )
+                    if hiddenMainPanelCount > 0 {
+                        HStack(spacing: 10) {
+                            Image(systemName: "eye.slash")
+                                .foregroundStyle(currentTheme.accent)
+                            Text(hiddenMainPanelCount == 1
+                                 ? "1 painel oculto"
+                                 : "\(hiddenMainPanelCount) painéis ocultos")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(DS.Ink.secondary)
+                            Spacer(minLength: 8)
+                            Button("Mostrar tudo") { panels.showAll() }
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(currentTheme.accent)
+                        }
+                        .padding(12)
+                        .glassSurface(RoundedRectangle(cornerRadius: 14),
+                                      theme: currentTheme, depth: 0.4)
+                    }
                     resumeSection
                     if downloader.isDownloading {
                         Text(downloadStatusText)

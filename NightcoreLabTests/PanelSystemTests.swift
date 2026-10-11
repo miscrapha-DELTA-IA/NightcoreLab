@@ -124,6 +124,23 @@ final class PanelSystemTests: XCTestCase {
     }
 
     @MainActor
+    func testHiddenPanelsOfferARecoverableCountWithoutChangingUnrelatedState() {
+        withDefaults { defaults in
+            let store = PanelStore(defaults: defaults)
+            defaults.set("keep-playing", forKey: "lastSearchQuery")
+            store.setVisible(false, for: .presets)
+            store.setVisible(false, for: .export)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.mainPanels), 2)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.karaokePanels), 0)
+
+            store.showAll()
+            XCTAssertEqual(store.hiddenCount(in: PanelID.mainPanels), 0)
+            XCTAssertEqual(defaults.string(forKey: "lastSearchQuery"), "keep-playing")
+            XCTAssertTrue(PanelStore(defaults: defaults).hidden.isEmpty)
+        }
+    }
+
+    @MainActor
     func testSearchRevealIsTemporaryAndNeverWritesPreferences() {
         withDefaults { defaults in
             let store = PanelStore(defaults: defaults)
