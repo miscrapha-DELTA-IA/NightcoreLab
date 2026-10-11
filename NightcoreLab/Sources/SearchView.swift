@@ -113,10 +113,10 @@ struct SearchView: View {
             if isDiscoverVisible {
                 CollapsibleGlassSection(
                     title: "DESCOBRIR",
-                icon: "sparkles",
-                isExpanded: $isDiscoverExpanded,
-                tint: theme.accent
-            ) {
+                    icon: "sparkles",
+                    isExpanded: $isDiscoverExpanded,
+                    tint: theme.accent
+                ) {
                 VStack(alignment: .leading, spacing: 12) {
                     if isSearchMode {
                         Button("Sugestões") { showSuggestions() }
@@ -190,8 +190,8 @@ struct SearchView: View {
                         }
                     }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
         .animation(.spring(duration: 0.5), value: isDiscoverVisible)
