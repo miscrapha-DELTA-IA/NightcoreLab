@@ -165,34 +165,7 @@ struct ContentView: View {
                         onLink: { link in startDownload(link) },
                         onServerSettings: { showServerSettings = true }
                     )
-                    if let resumeTrack, !hasTrack {
-                        Button {
-                            playTrack(resumeTrack, upcoming: [])
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .foregroundStyle(currentTheme.accent)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("ÚLTIMA MÚSICA")
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundStyle(DS.Ink.secondary)
-                                    Text(resumeTrack.title)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.white)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Text("Retomar")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(currentTheme.accent)
-                            }
-                            .padding(14)
-                            .glassSurface(RoundedRectangle(cornerRadius: 16),
-                                          theme: currentTheme, depth: 0.6)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Retomar última música: \(resumeTrack.title)")
-                    }
+                    resumeSection
                     if downloader.isDownloading {
                         Text(downloadStatusText)
                             .font(DS.Typography.captionNumeric)
@@ -403,6 +376,39 @@ struct ContentView: View {
         }
         .disabled(audio.isExporting || downloader.isDownloading)
         .accessibilityLabel("Importar música MP3, M4A, WAV ou AIFF")
+    }
+
+    // Kept outside the main body to avoid SwiftUI's expression type-check explosion.
+    @ViewBuilder
+    private var resumeSection: some View {
+        if let resumeTrack, !hasTrack {
+            Button {
+                playTrack(resumeTrack, upcoming: [])
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(currentTheme.accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("ÚLTIMA MÚSICA")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(DS.Ink.secondary)
+                        Text(resumeTrack.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Text("Retomar")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(currentTheme.accent)
+                }
+                .padding(14)
+                .glassSurface(RoundedRectangle(cornerRadius: 16),
+                              theme: currentTheme, depth: 0.6)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retomar última música: \(resumeTrack.title)")
+        }
     }
 
     private var downloadStatusText: String {
