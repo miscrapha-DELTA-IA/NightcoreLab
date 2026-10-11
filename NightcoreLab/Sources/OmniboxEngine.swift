@@ -119,6 +119,8 @@ final class OmniboxEngine {
     private(set) var suggestions: [String] = []
     private(set) var directVideoID: String?          // link/ID colado: o app resolve direto
     private(set) var isSearching = false
+    private(set) var lastRequestFailed = false
+    private(set) var hasSearched = false
 
     /// O app mantém isto atualizado (videoID -> reproduções/última vez).
     @ObservationIgnored var history: [String: HistoryEntry] = [:]
@@ -172,6 +174,8 @@ final class OmniboxEngine {
     func queryChanged(_ raw: String) {
         task?.cancel()
         directVideoID = nil
+        lastRequestFailed = false
+        hasSearched = false
 
         switch OmniboxIntent.classify(raw) {
         case .empty:
@@ -185,7 +189,7 @@ final class OmniboxEngine {
             let key = MetadataCleaner.key(q) as NSString
             if let cached = cache.object(forKey: key) {
                 results = OmniboxRanker.rank(query: q, remote: cached.hits, history: history)
-                suggestions = cached.sugg; isSearching = false
+                suggestions = cached.sugg; isSearching = false; hasSearched = true
                 return
             }
             isSearching = true
@@ -201,9 +205,12 @@ final class OmniboxEngine {
                     self.results = OmniboxRanker.rank(query: q, remote: h, history: self.history)
                     self.suggestions = s
                     self.isSearching = false
+                    self.hasSearched = true
                 } catch {
                     if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
-                    self.isSearching = false          // falha de rede: mantém o que já está na tela (histórico)
+                    self.isSearching = false
+                    self.lastRequestFailed = true
+                    self.hasSearched = true  // falha: preserva histórico
                 }
             }
         }
