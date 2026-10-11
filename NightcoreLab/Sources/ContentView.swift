@@ -151,45 +151,7 @@ struct ContentView: View {
                 .transition(.opacity)
             }
 
-            ScrollView {
-                VStack(spacing: DS.Spacing.l) {
-                    header
-                    SearchView(
-                        downloader: downloader, theme: currentTheme,
-                        isEnabled: !audio.isExporting,
-                        suggestedTracks: relatedVideos,
-                        isLoadingSuggestions: isLoadingRelated,
-                        canRefreshSuggestions: relatedSourceURL != nil,
-                        onRefreshSuggestions: { relatedRequestID = UUID() },
-                        onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
-                        onLink: { link in startDownload(link) },
-                        onServerSettings: { showServerSettings = true }
-                    )
-                    resumeSection
-                    if downloader.isDownloading {
-                        Text(downloadStatusText)
-                            .font(DS.Typography.captionNumeric)
-                            .foregroundStyle(DS.Ink.secondary)
-                            .transition(.opacity)
-                    } else if let message = downloader.errorMessage {
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .font(DS.Typography.caption)
-                            .foregroundStyle(DS.Ink.error)
-                    }
-                    trackCard
-                    relatedSection
-                    presets
-                    controls
-                    exportSection
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 32)
-                .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollDisabled(isAdjustingSlider)
-.onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
+            mainScrollContent
         }
         .animation(.easeInOut(duration: 0.8), value: coverURL)
         .tint(currentTheme.accent)
@@ -376,6 +338,49 @@ struct ContentView: View {
         }
         .disabled(audio.isExporting || downloader.isDownloading)
         .accessibilityLabel("Importar música MP3, M4A, WAV ou AIFF")
+    }
+
+    // Pull the long list out of body, keeping the view hierarchy unchanged.
+    private var mainScrollContent: some View {
+            ScrollView {
+                VStack(spacing: DS.Spacing.l) {
+                    header
+                    SearchView(
+                        downloader: downloader, theme: currentTheme,
+                        isEnabled: !audio.isExporting,
+                        suggestedTracks: relatedVideos,
+                        isLoadingSuggestions: isLoadingRelated,
+                        canRefreshSuggestions: relatedSourceURL != nil,
+                        onRefreshSuggestions: { relatedRequestID = UUID() },
+                        onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
+                        onLink: { link in startDownload(link) },
+                        onServerSettings: { showServerSettings = true }
+                    )
+                    resumeSection
+                    if downloader.isDownloading {
+                        Text(downloadStatusText)
+                            .font(DS.Typography.captionNumeric)
+                            .foregroundStyle(DS.Ink.secondary)
+                            .transition(.opacity)
+                    } else if let message = downloader.errorMessage {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(DS.Typography.caption)
+                            .foregroundStyle(DS.Ink.error)
+                    }
+                    trackCard
+                    relatedSection
+                    presets
+                    controls
+                    exportSection
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
+                .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollDisabled(isAdjustingSlider)
+            .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
     }
 
     // Kept outside the main body to avoid SwiftUI's expression type-check explosion.
