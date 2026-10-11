@@ -1,0 +1,222 @@
+import SwiftUI
+
+// MARK: - Temas
+
+struct KaraokeTheme: Equatable {
+    var inactive: Color      // texto ainda não cantado
+    var fill: Color          // cor do preenchimento
+    var glow: Color          // brilho da palavra ativa
+    var pastOpacity: Double  // linhas já cantadas
+    var font: Font
+
+    private static let base = Font.system(size: 30, weight: .heavy, design: .rounded)
+
+    static let acid = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.71, green: 1.00, blue: 0.00),
+        glow: Color(red: 0.71, green: 1.00, blue: 0.00).opacity(0.75),
+        pastOpacity: 0.55, font: base)
+
+    static let cyber = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.00, green: 0.94, blue: 1.00),
+        glow: Color(red: 1.00, green: 0.00, blue: 0.80).opacity(0.65),
+        pastOpacity: 0.55, font: base)
+
+    static let crimson = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.16, blue: 0.30),
+        glow: Color(red: 1.00, green: 0.16, blue: 0.30).opacity(0.7),
+        pastOpacity: 0.55, font: base)
+}
+
+extension KaraokeTheme {
+    static func forAppTheme(_ appTheme: AppTheme) -> KaraokeTheme {
+        switch appTheme {
+        case .acid: return .acid
+        case .cyber: return .cyber
+        case .crimson: return .crimson
+        }
+    }
+}
+
+// MARK: - View raiz
+
+struct KaraokeLyricsView: View {
+    @Environment(LyricsStore.self) private var store
+    let clock: PlaybackClock
+    var theme: KaraokeTheme = .acid
+    var accent: Color? = nil
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 22) {
+                    ForEach(store.lines) { line in
+                        KaraokeLineView(
+                            line: line,
+                            status: status(of: line),
+                            isPlaying: store.isPlaying,
+                            offset: store.userOffset,
+                            clock: clock,
+                            theme: theme,
+                            accent: accent
+                        )
+                        .id(line.id)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.seekHandler?(line.start) }
+                    }
+                }
+                .padding(.horizontal, 24)
+            }
+            .contentMargins(.vertical, 180, for: .scrollContent)
+            .onChange(of: store.activeLineIndex) { _, new in
+                guard let new else { return }
+                withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(new, anchor: .center) }
+            }
+        }
+        .onAppear {
+            store.startTracking()
+            if let index = store.activeLineIndex {
+                proxy.scrollTo(index, anchor: .center)
+            }
+        }
+        .onDisappear { store.stopTracking() }
+    }
+
+    private func status(of line: TimedLyricLine) -> KaraokeLineView.Status {
+        guard let a = store.activeLineIndex else { return .upcoming }
+        return line.id < a ? .past : (line.id == a ? .active : .upcoming)
+    }
+}
+
+// MARK: - Linha
+
+/// Só a linha ATIVA (modo .word) contém TimelineView. As demais são estáticas,
+/// então por frame só ~5-10 palavras recalculam, não a letra inteira.
+private struct KaraokeLineView: View {
+    enum Status: Equatable { case past, active, upcoming }
+
+    let line: TimedLyricLine
+    let status: Status
+    let isPlaying: Bool
+    let offset: TimeInterval
+    let clock: PlaybackClock
+    let theme: KaraokeTheme
+    let accent: Color?
+
+    var body: some View {
+        if line.words.isEmpty {
+            Color.clear.frame(height: 14)                   // pausa instrumental
+        } else if status == .active && line.precision == .word {
+            TimelineView(.animation(paused: !isPlaying)) { _ in
+                let t = clock.lyricTime + offset            // lido direto do engine, a cada frame
+                layout { $0.progress(at: t) }
+            }
+        } else {
+            layout { _ in
+                switch status {
+                case .past: return 1
+                case .active: return 1        // .line precision: acende a linha inteira, sem fingir
+                case .upcoming: return 0
+                }
+            }
+            .scaleEffect(status == .upcoming ? 0.96 : 1.0)
+            .animation(.smooth(duration: 0.3), value: status)
+        }
+    }
+
+    private func layout(fill: @escaping (WordSync) -> Double) -> some View {
+        FlowLayout(lineSpacing: 6) {
+            ForEach(line.words) { w in
+                KaraokeWordView(
+                    word: w,
+                    fill: fill(w),
+                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
+                    glow: status == .active,
+                    theme: theme
+                )
+                .gapAfter(w.spaceAfter ? 9 : 0)
+            }
+        }
+    }
+}
+
+// MARK: - Palavra: máscara exata da esquerda p/ direita
+
+private struct KaraokeWordView: View {
+    let word: WordSync
+    let fill: Double          // 0...1, calculado de start/end reais
+    let fillColor: Color
+    let glow: Bool
+    let theme: KaraokeTheme
+
+    var body: some View {
+        Text(word.text)
+            .font(theme.font)
+            .foregroundStyle(theme.inactive)
+            .fixedSize()
+            .overlay(alignment: .leading) {
+                if fill > 0 {
+                    Text(word.text)
+                        .font(theme.font)
+                        .foregroundStyle(fillColor)
+                        .fixedSize()
+                        .mask(alignment: .leading) {
+                            Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                        }
+                        .shadow(color: glow ? theme.glow : .clear, radius: glow ? 10 : 0)
+                }
+            }
+    }
+}
+
+// MARK: - FlowLayout (quebra de linha por palavra; sílabas coladas não quebram)
+
+private struct GapAfter: LayoutValueKey { static let defaultValue: CGFloat = 0 }
+private extension View {
+    func gapAfter(_ v: CGFloat) -> some View { layoutValue(key: GapAfter.self, value: v) }
+}
+
+private struct FlowLayout: Layout {
+    var lineSpacing: CGFloat = 6
+
+    private struct Row { var items: [(index: Int, size: CGSize)] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func rows(maxWidth: CGFloat, _ subviews: Subviews) -> [Row] {
+        var rows = [Row()]
+        var cursor: CGFloat = 0
+        for (i, sub) in subviews.enumerated() {
+            let size = sub.sizeThatFits(.unspecified)
+            let canBreak = i == 0 || subviews[i - 1][GapAfter.self] > 0
+            if canBreak, !rows[rows.count - 1].items.isEmpty, cursor + size.width > maxWidth {
+                rows.append(Row()); cursor = 0
+            }
+            rows[rows.count - 1].items.append((i, size))
+            rows[rows.count - 1].width = cursor + size.width
+            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
+            cursor += size.width + sub[GapAfter.self]
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let r = rows(maxWidth: proposal.width ?? .infinity, subviews)
+        let h = r.reduce(0) { $0 + $1.height } + CGFloat(max(r.count - 1, 0)) * lineSpacing
+        return CGSize(width: proposal.width ?? (r.map(\.width).max() ?? 0), height: h)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(maxWidth: bounds.width, subviews) {
+            var x = bounds.minX + (bounds.width - row.width) / 2      // centralizado
+            for item in row.items {
+                subviews[item.index].place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                                           proposal: ProposedViewSize(item.size))
+                x += item.size.width + subviews[item.index][GapAfter.self]
+            }
+            y += row.height + lineSpacing
+        }
+    }
+}

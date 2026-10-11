@@ -46,56 +46,6 @@ enum LyricsColorMode: String, CaseIterable {
     case theme
 }
 
-private struct ProgressiveLyricLine: View {
-    let text: String
-    let start: TimeInterval
-    let end: TimeInterval
-    let accent: Color
-    let audio: AudioEngineManager
-    let syncOffset: TimeInterval
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !audio.isPlaying)) { _ in
-            let span = max(end - start, 0.05)
-            let fraction = min(max((audio.playbackTime + syncOffset - start) / span, 0), 1)
-            Text(text)
-                .font(.title.bold())
-                // The selected palette is visible even at progress 0 and while paused.
-                .foregroundStyle(accent.opacity(0.38))
-                .animation(.easeInOut(duration: 0.28), value: accent)
-                .overlay(alignment: .leading) {
-                    Text(text)
-                        .font(.title.bold())
-                        .foregroundStyle(accent)
-                        // SwiftUI interpolates between the cover tint and Acid/Cyber/Crimson.
-                        .animation(.easeInOut(duration: 0.28), value: accent)
-                        .mask(alignment: .leading) {
-                            GeometryReader { geometry in
-                                let width = geometry.size.width
-                                let revealed = width * fraction
-                                // A subtle feathered edge inspired by KaraokeText's
-                                // per-glyph sweep, without its iOS 18 dependency.
-                                let feather = max(0, min(18, revealed, width - revealed))
-                                HStack(spacing: 0) {
-                                    Rectangle()
-                                        .fill(.white)
-                                        .frame(width: max(0, revealed - feather))
-                                    LinearGradient(
-                                        colors: [.white, .clear],
-                                        startPoint: .leading, endPoint: .trailing
-                                    )
-                                    .frame(width: feather)
-                                    Spacer(minLength: 0)
-                                }
-                            }
-                        }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .shadow(color: .black.opacity(0.62), radius: 5, y: 2)
-        }
-    }
-}
-
 private struct LyricsBackdrop: View {
     let track: Track
 
@@ -143,9 +93,8 @@ struct LyricsView: View {
     let theme: AppTheme
     let dismiss: () -> Void
 
+    @Environment(LyricsStore.self) private var lyricStore
     @State private var record: LyricsRecord?
-    @State private var parsedLines: [LyricLine] = []
-    @State private var activeIndex: Int?
     @State private var candidates: [LyricsRecord] = []
     @State private var isChoosingLyrics = false
     @State private var manualQuery = ""
@@ -155,7 +104,6 @@ struct LyricsView: View {
     @State private var loading = true
     @State private var errorMessage: String?
     @State private var artworkTint: ArtworkTint?
-    @State private var syncOffset: TimeInterval = 0
     @AppStorage("lyricsColorMode") private var colorMode: LyricsColorMode = .artwork
 
     private var lyricAccent: Color {
@@ -167,15 +115,10 @@ struct LyricsView: View {
         }
     }
 
-    private var synchronizedTime: TimeInterval {
-        audio.playbackTime + syncOffset
-    }
-
     private func apply(_ selected: LyricsRecord) {
         record = selected
-        parsedLines = LRCParser.parse(selected.syncedLyrics ?? "")
-        syncOffset = 0
-        activeIndex = lineIndex(at: synchronizedTime)
+        lyricStore.load(trackID: "\(track.id):\(selected.id)",
+                        rawLRC: selected.syncedLyrics ?? "")
         errorMessage = nil
     }
 
@@ -215,86 +158,10 @@ struct LyricsView: View {
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
-    private func lineIndex(at time: TimeInterval) -> Int? {
-        // Binary search: O(log n) per clock tick, without reparsing the lyrics.
-        var lower = 0
-        var upper = parsedLines.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if parsedLines[middle].time <= time {
-                lower = middle + 1
-            } else {
-                upper = middle
-            }
-        }
-        return lower > 0 ? lower - 1 : nil
-    }
-
     private var synchronizedLyrics: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 26) {
-                    ForEach(parsedLines.indices, id: \.self) { index in
-                        let line = parsedLines[index]
-                        let text = line.text.isEmpty ? "♪" : line.text
-                        if index == activeIndex {
-                            ProgressiveLyricLine(
-                                text: text,
-                                start: line.time,
-                                end: index + 1 < parsedLines.count
-                                    ? parsedLines[index + 1].time
-                                    : max(audio.duration, line.time + 1),
-                                accent: lyricAccent,
-                                audio: audio,
-                                syncOffset: syncOffset
-                            )
-                            .id(index)
-                            .accessibilityAddTraits(.isSelected)
-                        } else {
-                            Text(text)
-                                .font(.title2.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .blur(radius: 0.6)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .id(index)
-                        }
-                    }
-                }
-                .padding(.horizontal, 25)
-                .padding(.vertical, 90)
-            }
-            // Only the line index (not the whole lyrics list) is checked at 8 Hz.
-            // Keeping this separate from the active row's 30 Hz fill avoids frame drops.
-            .overlay(alignment: .topLeading) {
-                TimelineView(.periodic(from: .now, by: 0.12)) { _ in
-                    Color.clear.frame(width: 1, height: 1)
-                        .onChange(of: lineIndex(at: synchronizedTime), initial: true) { _, index in
-                            guard activeIndex != index else { return }
-                            activeIndex = index
-                        }
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-            .onChange(of: syncOffset) { _, _ in
-                activeIndex = lineIndex(at: synchronizedTime)
-            }
-            .onChange(of: parsedLines) { _, _ in
-                activeIndex = lineIndex(at: synchronizedTime)
-            }
-            .onChange(of: activeIndex) { _, index in
-                guard let index else { return }
-                withAnimation(.easeInOut(duration: 0.35)) {
-                    proxy.scrollTo(index, anchor: .center)
-                }
-            }
-            .onAppear {
-                activeIndex = lineIndex(at: synchronizedTime)
-                if let activeIndex {
-                    proxy.scrollTo(activeIndex, anchor: .center)
-                }
-            }
-        }
+        KaraokeLyricsView(clock: audio.lyricsClock,
+                          theme: .forAppTheme(theme),
+                          accent: lyricAccent)
     }
 
     var body: some View {
@@ -373,31 +240,31 @@ struct LyricsView: View {
                     .padding(.horizontal, 22)
                 }
 
-                if !parsedLines.isEmpty {
+                if !lyricStore.lines.isEmpty {
                     HStack(spacing: 10) {
                         Text("SINCRONIA")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.white.opacity(0.7))
                         Button {
-                            syncOffset -= 0.5
+                            lyricStore.userOffset -= 0.5
                         } label: {
                             Label("Atrasar", systemImage: "minus.circle")
                                 .labelStyle(.iconOnly)
                         }
                         .accessibilityLabel("Atrasar a legenda meio segundo")
-                        Text(String(format: "%+.1fs", syncOffset))
+                        Text(String(format: "%+.1fs", lyricStore.userOffset))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.white)
                             .frame(minWidth: 44)
                         Button {
-                            syncOffset += 0.5
+                            lyricStore.userOffset += 0.5
                         } label: {
                             Label("Adiantar", systemImage: "plus.circle")
                                 .labelStyle(.iconOnly)
                         }
                         .accessibilityLabel("Adiantar a legenda meio segundo")
-                        if syncOffset != 0 {
-                            Button("Zerar") { syncOffset = 0 }
+                        if lyricStore.userOffset != 0 {
+                            Button("Zerar") { lyricStore.userOffset = 0 }
                                 .font(.caption2)
                         }
                         Spacer(minLength: 0)
@@ -413,7 +280,7 @@ struct LyricsView: View {
                         .tint(theme.accent)
                         .foregroundStyle(.white)
                     Spacer()
-                } else if !parsedLines.isEmpty {
+                } else if !lyricStore.lines.isEmpty {
                     synchronizedLyrics
                 } else if let text = record?.plainLyrics, !text.isEmpty {
                     ScrollView {
@@ -442,6 +309,13 @@ struct LyricsView: View {
             }
             .padding(.top, 20)
         }
+        .onAppear {
+            lyricStore.attach(clock: audio.lyricsClock)
+            lyricStore.seekHandler = { position in audio.seek(to: position) }
+        }
+        .onDisappear {
+            lyricStore.seekHandler = nil
+        }
         .task(id: track.id) {
             artworkTint = nil
             let sampled = await ArtworkTintExtractor.fetch(for: track)
@@ -454,10 +328,10 @@ struct LyricsView: View {
             loading = true
             errorMessage = nil
             record = nil
-            parsedLines = []
             candidates = []
-            activeIndex = nil
-            syncOffset = 0
+            if !(lyricStore.trackID?.hasPrefix("\(track.id):") ?? false) {
+                lyricStore.clear()
+            }
             do {
                 let lookup = try await LyricsService.search(for: track,
                                                              audioDuration: audio.duration)

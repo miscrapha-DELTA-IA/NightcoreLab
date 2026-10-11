@@ -4,6 +4,7 @@ import SDWebImageSwiftUI
 @main
 struct NightcoreLabApp: App {
     @UIApplicationDelegateAdaptor(NightcoreAppDelegate.self) private var appDelegate
+    @State private var lyricsStore = LyricsStore()
 
     init() {
         SDImageCache.shared.config.maxMemoryCost = 64 * 1024 * 1024
@@ -12,7 +13,9 @@ struct NightcoreLabApp: App {
     }
 
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup {
+            ContentView().environment(lyricsStore)
+        }
     }
 }
 
