@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Temas
 
 /// Temas do Nightcore Lab: um único acento neon por tema sobre base preta OLED.
-enum AppTheme: String, CaseIterable, Identifiable {
+enum AppTheme: String, CaseIterable, Identifiable, Sendable {
     case acid, crimson, cyber
     // Os novos temas precisam compartilhar o rawValue com MarbleTheme.
     case ultraviolet, solar, orchid, sapphire
