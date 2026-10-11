@@ -145,6 +145,14 @@ struct ContentView: View {
     @AppStorage("showPresets") private var showPresets = true
     @AppStorage("showAudioControls") private var showAudioControls = true
     @AppStorage("showExport") private var showExport = true
+
+    // Visibilidade é independente do estado de expansão do acordeão.
+    @AppStorage("visibleDiscover") private var visibleDiscover = true
+    @AppStorage("visibleQueue") private var visibleQueue = true
+    @AppStorage("visiblePlayback") private var visiblePlayback = true
+    @AppStorage("visiblePresets") private var visiblePresets = true
+    @AppStorage("visibleControls") private var visibleControls = true
+    @AppStorage("visibleExport") private var visibleExport = true
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -180,6 +188,12 @@ struct ContentView: View {
             canSkipNext: !playbackQueue.upNextQueue.isEmpty,
             appTheme: $currentTheme,
             isKaraokeMode: $showLyrics,
+            visibleDiscover: $visibleDiscover,
+            visibleQueue: $visibleQueue,
+            visiblePlayback: $visiblePlayback,
+            visiblePresets: $visiblePresets,
+            visibleControls: $visibleControls,
+            visibleExport: $visibleExport,
             onPlayPause: { audio.togglePlayback() },
             onPrevious: { audio.seek(to: 0) },
             onNext: {
@@ -401,7 +415,8 @@ struct ContentView: View {
                         onSelect: { track, _ in playTrack(track) },
                         onLink: { link in startDownload(link) },
                         onServerSettings: { showServerSettings = true },
-                        isDiscoverExpanded: $showDiscover
+                        isDiscoverExpanded: $showDiscover,
+                        isDiscoverVisible: $visibleDiscover
                     )
                     resumeSection
                     if downloader.isDownloading {
@@ -414,37 +429,56 @@ struct ContentView: View {
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
                     }
-                    if hasTrack {
+                    if hasTrack && visiblePlayback {
                         CollapsibleGlassSection(
                             title: "REPRODUÇÃO", icon: "waveform",
                             isExpanded: $showPlaybackDetails, tint: currentTheme.accent
                         ) {
                             playbackDetails
                         }
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
-                    relatedSection
-                    CollapsibleGlassSection(
-                        title: "PRESETS", icon: "slider.horizontal.3",
-                        isExpanded: $showPresets, tint: currentTheme.accent
-                    ) {
-                        presets
+                    if visibleQueue {
+                        relatedSection
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
-                    CollapsibleGlassSection(
-                        title: "CONTROLES", icon: "dial.high",
-                        isExpanded: $showAudioControls, tint: currentTheme.accent
-                    ) {
-                        controls
+                    if visiblePresets {
+                        CollapsibleGlassSection(
+                            title: "PRESETS", icon: "slider.horizontal.3",
+                            isExpanded: $showPresets, tint: currentTheme.accent
+                        ) {
+                            presets
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
-                    CollapsibleGlassSection(
-                        title: "EXPORTAR", icon: "square.and.arrow.up",
-                        isExpanded: $showExport, tint: currentTheme.accent
-                    ) {
-                        exportSection
+                    if visibleControls {
+                        CollapsibleGlassSection(
+                            title: "CONTROLES", icon: "dial.high",
+                            isExpanded: $showAudioControls, tint: currentTheme.accent
+                        ) {
+                            controls
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    }
+                    if visibleExport {
+                        CollapsibleGlassSection(
+                            title: "EXPORTAR", icon: "square.and.arrow.up",
+                            isExpanded: $showExport, tint: currentTheme.accent
+                        ) {
+                            exportSection
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 32)
+                .animation(.spring(duration: 0.5), value: visibleDiscover)
+                .animation(.spring(duration: 0.5), value: visibleQueue)
+                .animation(.spring(duration: 0.5), value: visiblePlayback)
+                .animation(.spring(duration: 0.5), value: visiblePresets)
+                .animation(.spring(duration: 0.5), value: visibleControls)
+                .animation(.spring(duration: 0.5), value: visibleExport)
                 .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
             }
             .scrollDismissesKeyboard(.interactively)
