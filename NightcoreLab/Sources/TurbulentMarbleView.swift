@@ -6,6 +6,7 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
     case acid, cyber, crimson
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
+    case ultrapink, ultraorange, purewhite, ultrablack
     var id: String { rawValue }
 
     /// deep = veios/sombras · body = corpo do líquido · glow = brilho/acento
@@ -63,6 +64,22 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
             return (Color(red: 0.00, green: 0.00, blue: 0.00),
                     Color(red: 0.85, green: 0.04, blue: 0.06),
                     Color(red: 0.74, green: 0.74, blue: 0.77))
+        case .ultrapink:   // magenta quase preto / rosa choque / rosa claro
+            return (Color(red: 0.07, green: 0.00, blue: 0.05),
+                    Color(red: 1.00, green: 0.08, blue: 0.58),
+                    Color(red: 0.98, green: 0.60, blue: 0.85))
+        case .ultraorange: // preto / laranja neon / branco azulado
+            return (Color(red: 0.00, green: 0.00, blue: 0.00),
+                    Color(red: 0.98, green: 0.27, blue: 0.08),
+                    Color(red: 0.72, green: 0.78, blue: 0.90))
+        case .purewhite:   // preto / prata / branco (brilho limitado para leitura)
+            return (Color(red: 0.00, green: 0.00, blue: 0.00),
+                    Color(red: 0.52, green: 0.54, blue: 0.58),
+                    Color(red: 0.74, green: 0.75, blue: 0.79))
+        case .ultrablack:  // preto OLED / grafite quase imperceptível
+            return (Color(red: 0.00, green: 0.00, blue: 0.00),
+                    Color(red: 0.07, green: 0.07, blue: 0.09),
+                    Color(red: 0.28, green: 0.29, blue: 0.34))
         }
     }
 }

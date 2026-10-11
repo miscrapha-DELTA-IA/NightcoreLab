@@ -89,6 +89,31 @@ struct KaraokeTheme: Equatable {
         fill: .white,
         glow: Color(red: 1.00, green: 0.15, blue: 0.15).opacity(0.75),
         pastOpacity: 0.55, font: base)
+
+    static let ultrapink = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.62, blue: 0.86),
+        glow: Color(red: 1.00, green: 0.18, blue: 0.65).opacity(0.75),
+        pastOpacity: 0.55, font: base)
+
+    /// Preenchimento pêssego para legibilidade sobre o branco azulado.
+    static let ultraorange = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.78, blue: 0.62),
+        glow: Color(red: 1.00, green: 0.29, blue: 0.10).opacity(0.80),
+        pastOpacity: 0.55, font: base)
+
+    static let purewhite = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: .white,
+        glow: Color.white.opacity(0.55),
+        pastOpacity: 0.55, font: base)
+
+    static let ultrablack = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: .white,
+        glow: Color(red: 0.62, green: 0.64, blue: 0.69).opacity(0.45),
+        pastOpacity: 0.55, font: base)
 }
 
 extension KaraokeTheme {
@@ -107,6 +132,10 @@ extension KaraokeTheme {
         case .prism: return .prism
         case .magma: return .magma
         case .noir: return .noir
+        case .ultrapink: return .ultrapink
+        case .ultraorange: return .ultraorange
+        case .purewhite: return .purewhite
+        case .ultrablack: return .ultrablack
         }
     }
 }

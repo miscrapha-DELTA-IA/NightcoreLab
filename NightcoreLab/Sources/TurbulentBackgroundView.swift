@@ -113,6 +113,34 @@ enum TurbulentPalette {
                 Color(red: 0.35, green: 0.00, blue: 0.03),
                 Color(red: 0.40, green: 0.40, blue: 0.44)
             ]
+        case .ultrapink:
+            return [
+                Color(red: 1.00, green: 0.08, blue: 0.58), // hot pink
+                Color(red: 1.00, green: 0.55, blue: 0.82), // light pink
+                Color(red: 0.55, green: 0.00, blue: 0.35), // deep magenta
+                Color(red: 0.30, green: 0.00, blue: 0.20)
+            ]
+        case .ultraorange:
+            return [
+                Color(red: 0.98, green: 0.27, blue: 0.08), // neon orange
+                Color(red: 0.85, green: 0.90, blue: 0.97), // ice white
+                Color(red: 0.45, green: 0.08, blue: 0.02), // dark red
+                Color(red: 0.60, green: 0.66, blue: 0.78)
+            ]
+        case .purewhite:
+            return [
+                Color(red: 0.80, green: 0.82, blue: 0.86), // silver
+                Color(red: 0.95, green: 0.96, blue: 0.98), // white
+                Color(red: 0.45, green: 0.47, blue: 0.52), // grey
+                Color(red: 0.12, green: 0.12, blue: 0.15)
+            ]
+        case .ultrablack:
+            return [
+                Color(red: 0.10, green: 0.10, blue: 0.12),
+                Color(red: 0.18, green: 0.19, blue: 0.23),
+                Color(red: 0.05, green: 0.05, blue: 0.07),
+                Color(red: 0.28, green: 0.29, blue: 0.34)
+            ]
         }
     }
 }
