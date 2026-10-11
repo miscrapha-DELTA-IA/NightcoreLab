@@ -68,6 +68,7 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
     @AppStorage(KaraokePrefs.background) private var backgroundStyle: BackgroundStyle = .marble
+    @AppStorage("isZenMode") private var isZenMode = false
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -122,10 +123,20 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                     KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle)
                         .padding(.bottom, 12)
                         .transition(.barRise)
-                } else {
+                } else if !isZenMode {
+                    // Somente o conteúdo inferior sai da hierarquia; artwork,
+                    // transporte e fundo Metal permanecem intactos.
                     normalExtras()
-                        .transition(.opacity.animation(.easeOut(duration: 0.2)))
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if !isKaraokeMode {
+                zenButton
+                    .padding(.top, 16)
+                    .padding(.leading, 16)
+                    .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -134,6 +145,26 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
+    }
+
+    /// Contraponto do botão do karaokê: mantém-se acessível mesmo sem faixa.
+    private var zenButton: some View {
+        Button {
+            withAnimation(motion) { isZenMode.toggle() }
+        } label: {
+            Image(systemName: isZenMode ? "moon.stars.fill" : "moon.zzz")
+                .font(.system(size: 18, weight: .semibold))
+                .symbolEffect(.bounce, value: isZenMode)
+                .frame(width: 44, height: 44)
+                .background(isZenMode
+                            ? MarbleTheme(appTheme: appTheme).palette.body.opacity(0.28)
+                            : Color.white.opacity(0.10), in: Circle())
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isZenMode ? "Desativar modo Zen" : "Ativar modo Zen")
+        .accessibilityValue(isZenMode ? "Ativado" : "Desativado")
+        .accessibilityHint("Oculta ou mostra os painéis abaixo do player")
     }
 
     private var micButton: some View {
