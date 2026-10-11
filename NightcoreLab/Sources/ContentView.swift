@@ -277,8 +277,6 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 if let currentTrack {
-                    playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
-                                              replacing: pendingSkip)
                     downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
                 }
                 TelemetryManager.shared.flush()
