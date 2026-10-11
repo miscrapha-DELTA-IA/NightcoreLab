@@ -154,10 +154,10 @@ struct ContentView: View {
     // avoiding a single giant generic expression in the SwiftUI type checker.
     private var playerCanvas: some View {
         ZStack {
-            // Luz ambiente na cor do tema: troca com crossfade.
-            AmbientBackground(theme: currentTheme)
-                .id(currentTheme)
-                .transition(.opacity)
+            // Fundo fluido em movimento leve, sempre atrás dos controles.
+            // Mantemos uma opacidade discreta para preservar a hierarquia do player.
+            TurbulentBackgroundView(theme: currentTheme)
+                .opacity(0.6)
 
             if let artwork = coverURL {
                 GeometryReader { geometry in
@@ -167,7 +167,10 @@ struct ContentView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
                         .blur(radius: 50)
-                        .overlay(Color.black.opacity(0.65))
+                        // A capa ampliada vira uma textura translúcida sobre a
+                        // turbulência, sem esconder a thumbnail nítida do player.
+                        .opacity(0.27)
+                        .overlay(Color.black.opacity(0.29))
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
