@@ -10,3 +10,5 @@ deno
 certifi>=2024.0.0
 # Separate metadata search from yt-dlp download/extraction.
 ytmusicapi>=1.7,<2
+# TTL cache for /v1/search and /v1/suggest
+cachetools>=5.5,<7
