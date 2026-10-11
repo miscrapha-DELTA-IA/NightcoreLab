@@ -339,7 +339,6 @@ struct ContentView: View {
                     }
                     .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
 
-                    themeButton
                     importButton
                 }
             }
@@ -356,38 +355,6 @@ struct ContentView: View {
                 .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
         }
         .accessibilityLabel(label)
-    }
-
-    /// Toque cicla pelos 17 temas em AppTheme.allCases; toque longo abre o
-    /// menu para escolher diretamente pelo nome e cor dominante.
-    private var themeButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.45)) {
-                currentTheme = currentTheme.next
-            }
-        } label: {
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(currentTheme.accent)
-                .symbolEffect(.bounce, value: currentTheme)
-                .frame(width: 40, height: 40)
-                .glassSurface(Circle(), theme: currentTheme, isActive: true, pulses: false,
-                              glowIntensity: 0.6, depth: 0.4)
-        }
-        .contextMenu {
-            ForEach(AppTheme.allCases) { theme in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.45)) { currentTheme = theme }
-                } label: {
-                    Label("\(theme.displayName) · \(theme.dominantColorName)",
-                          systemImage: theme == currentTheme ? "checkmark.circle.fill" : "circle")
-                }
-            }
-        }
-        .sensoryFeedback(.impact(weight: .heavy), trigger: currentTheme)
-        .accessibilityLabel("Trocar tema")
-        .accessibilityValue("\(currentTheme.displayName), \(currentTheme.dominantColorName)")
-        .accessibilityHint("Alterna entre os temas. Toque e segure para escolher um.")
     }
 
     /// Ação principal: pulsa enquanto não há música carregada, para guiar o primeiro uso.

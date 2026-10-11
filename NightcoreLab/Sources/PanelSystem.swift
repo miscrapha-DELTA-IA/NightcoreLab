@@ -234,8 +234,7 @@ struct PanelsMenuButton: View {
             Image(systemName: store.isZen ? "eye.slash.fill" : "eye")
                 .font(.system(size: 18, weight: .semibold))
                 .contentTransition(.symbolEffect(.replace))
-                .frame(width: 44, height: 44)
-                .background(Color.white.opacity(0.10), in: Circle())
+                .environmentButtonSurface()
                 .foregroundStyle(.white)
         } primaryAction: {
             store.toggleZen()

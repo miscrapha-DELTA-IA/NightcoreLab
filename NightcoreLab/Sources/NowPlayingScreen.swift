@@ -173,7 +173,8 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            PanelsMenuButton(panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels)
+            EnvironmentBar(theme: $appTheme,
+                           panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels)
                 .padding(.top, 16)
                 .padding(.leading, 16)
         }
