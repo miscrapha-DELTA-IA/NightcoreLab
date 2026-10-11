@@ -218,10 +218,7 @@ struct SearchView: View {
                                     let status = downloader.status(for: result)
                                     Button {
                                         isFocused = false
-                                        // Store frecency for instant local suggestions next time.
-                                        if let hit = omnibox.results.first(where: { $0.id == track.id }) {
-                                            omnibox.recordPlay(hit)
-                                        }
+                                        // History counts only after the audio engine confirms playback.
                                         onSelect(track, [])
                                     } label: {
                                         VStack(alignment: .leading, spacing: 6) {

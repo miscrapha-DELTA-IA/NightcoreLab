@@ -144,8 +144,6 @@ final class OmniboxEngine {
         isSearching = false
     }
 
-    func recordPlay(_ hit: TrackHit) { historyStore?.recordStart(hit) }
-
     /// Chame em `.onChange(of: text)`.
     func queryChanged(_ raw: String) {
         task?.cancel()

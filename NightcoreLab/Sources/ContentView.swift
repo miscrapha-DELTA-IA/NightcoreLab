@@ -151,6 +151,7 @@ struct ContentView: View {
     @AppStorage("showExport") private var isExportExpanded = true
 
     @Environment(LyricsStore.self) private var lyricsStore
+    @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -249,10 +250,14 @@ struct ContentView: View {
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
         .onChange(of: audio.playbackCompletionCount) { _, _ in
+            if let currentTrack { playHistory.completePlayback(trackID: currentTrack.id) }
             advanceQueue()
         }
         .onChange(of: audio.isPlaying) { _, playing in
             if playing {
+                if let currentTrack {
+                    playHistory.resumePlaybackIfNeeded(currentTrack, sourceDuration: audio.duration)
+                }
                 // A manual play/pause is not a request to start radio.
                 prefetchUpcoming()
             } else if let currentTrack {
@@ -272,6 +277,8 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 if let currentTrack {
+                    playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
+                                              replacing: pendingSkip)
                     downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
                 }
                 TelemetryManager.shared.flush()
@@ -869,6 +876,8 @@ struct ContentView: View {
         if !automaticAdvance {
             autoplayWhenRadioReady = false
         }
+        let pendingSkip = playHistory.pendingSkip(position: audio.playbackTime,
+            duration: audio.duration, automaticAdvance: automaticAdvance)
         let resumingPrevious = resumeTrack?.id == track.id
         let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
         resumeTrack = nil
@@ -897,6 +906,8 @@ struct ContentView: View {
                 playingTrackID = track.id
                 currentTrack = downloader.cachedTrack(track)
                 if let currentTrack {
+                    playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
+                                              replacing: pendingSkip)
                     downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
                     startLyricsPrefetch(for: currentTrack)
                 }
@@ -1039,6 +1050,7 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
+            playHistory.endSession()
             lyricsStore.clear()
             if let lyricsPrefetcher { Task { await lyricsPrefetcher.cancel() } }
             showLyrics = false
