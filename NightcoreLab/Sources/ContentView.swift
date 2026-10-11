@@ -821,17 +821,23 @@ struct ContentView: View {
 
     private func playTrack(_ track: Track, upcoming: [Track], preservingQueue: Bool = false) {
         guard !audio.isExporting else { return }
+        let resumingPrevious = resumeTrack?.id == track.id
+        let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
         resumeTrack = nil
         let token = playbackTransition.begin(trackID: track.id)
         downloader.select(track, onReady: { localURL, downloadedCoverURL in
             guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
             do {
                 try audio.load(url: localURL)
+                if let resumeAt, resumeAt > 0, resumeAt < audio.duration {
+                    audio.seek(to: resumeAt)
+                }
                 applyPitch()
                 audio.play()
                 guard audio.isPlaying else {
                     if playbackTransition.didFail(token, trackID: track.id) {
                         errorMessage = "Não foi possível iniciar a reprodução. A fila foi preservada."
+                        if resumingPrevious { resumeTrack = track }
                     }
                     return
                 }
@@ -847,7 +853,7 @@ struct ContentView: View {
                 playingTrackID = track.id
                 currentTrack = downloader.cachedTrack(track)
                 if let currentTrack {
-                    downloader.saveLastTrack(currentTrack, at: 0)
+                    downloader.saveLastTrack(currentTrack, at: audio.currentTime)
                 }
                 // Only fetch new suggestions when there is no queued successor.
                 if playbackQueue.upNextQueue.isEmpty {
@@ -858,10 +864,12 @@ struct ContentView: View {
             } catch {
                 guard playbackTransition.didFail(token, trackID: track.id) else { return }
                 errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                if resumingPrevious { resumeTrack = track }
             }
         }, onFailure: { message in
             guard playbackTransition.didFail(token, trackID: track.id) else { return }
             errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+            if resumingPrevious { resumeTrack = track }
         })
     }
 
