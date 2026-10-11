@@ -175,11 +175,17 @@ _search_slots = threading.BoundedSemaphore(1)
 RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
 
+from backend_search import router as music_search_router
+
 app = FastAPI(
     title="Nightcore Lab Bridge",
     description="Extrai o áudio de um link do YouTube em .m4a e o envia direto, sem armazenar.",
     version="1.4.0",
 )
+
+
+# JSON metadata API for the SwiftUI Omnibox; /search NDJSON remains backward compatible.
+app.include_router(music_search_router)
 
 
 class DownloadRequest(BaseModel):

@@ -14,6 +14,8 @@ protocol PlaybackClock: AnyObject, Sendable {
 
 // MARK: - Store
 
+enum LyricsStatus: Equatable, Sendable { case idle, searching, ready, unavailable }
+
 /// Vive no root do app (@State no App) e é injetado via .environment.
 /// A sheet de karaokê só LÊ; fechar a sheet não destrói nada.
 ///
@@ -28,6 +30,8 @@ final class LyricsStore {
     private(set) var trackID: String?
     private(set) var lines: [TimedLyricLine] = []
     private(set) var hasWordSync = false
+    private(set) var status: LyricsStatus = .idle
+    private(set) var needsReview = false
     private(set) var activeLineIndex: Int?
     private(set) var isPlaying = false
 
@@ -45,22 +49,51 @@ final class LyricsStore {
 
     func attach(clock: PlaybackClock) { self.clock = clock }
 
-    /// Idempotente por trackID: reabrir a sheet ou re-render não reparseia.
-    func load(trackID: String, rawLRC: String) {
-        guard trackID != self.trackID else { syncNow(); return }
+    /// O prefetcher começa o trabalho antes do utilizador entrar em Karaokê.
+    func beginLoading(trackID: String) {
+        loadTask?.cancel()
+        if trackID != self.trackID {
+            self.trackID = trackID
+            lines = []
+            activeLineIndex = nil
+            hasWordSync = false
+        }
+        status = .searching
+        needsReview = false
+    }
+
+    func markUnavailable(trackID: String) {
+        guard self.trackID == trackID else { return }
+        status = .unavailable
+        lines = []
+        activeLineIndex = nil
+        hasWordSync = false
+        needsReview = false
+    }
+
+    /// force=true é usado pela seleção manual (pin); o automático não a substitui.
+    func load(trackID: String, rawLRC: String,
+              needsReview: Bool = false, force: Bool = false) {
+        guard force || trackID != self.trackID || status != .ready else {
+            syncNow()
+            return
+        }
         loadTask?.cancel()
         self.trackID = trackID
+        self.needsReview = needsReview
+        status = .searching
         lines = []
         activeLineIndex = nil
         hasWordSync = false
 
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let out = EnhancedLRCParser.parse(rawLRC)
+            let parsed = EnhancedLRCParser.parse(rawLRC)
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, self.trackID == trackID else { return }
-                self.lines = out.lines
-                self.hasWordSync = out.hasWordSync
+                self.lines = parsed.lines
+                self.hasWordSync = parsed.hasWordSync
+                self.status = parsed.lines.isEmpty ? .unavailable : .ready
                 self.syncNow()
             }
         }
@@ -68,7 +101,8 @@ final class LyricsStore {
 
     func clear() {
         loadTask?.cancel()
-        trackID = nil; lines = []; activeLineIndex = nil; hasWordSync = false; isPlaying = false
+        trackID = nil; lines = []; activeLineIndex = nil; hasWordSync = false
+        status = .idle; needsReview = false; isPlaying = false
     }
 
     /// Chamar em onAppear da sheet.

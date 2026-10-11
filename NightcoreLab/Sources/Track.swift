@@ -6,6 +6,13 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     let thumbnailURL: URL?
     var isCached = false
 
+    // Populados por resultados estruturados do YT Music; opcionais para links,
+    // playlists e sessões salvas de versões anteriores.
+    var cleanArtist: String? = nil
+    var cleanTitle: String? = nil
+    var album: String? = nil
+    var duration: TimeInterval? = nil
+
     var url: URL { URL(string: "https://www.youtube.com/watch?v=\(id)")! }
 
     static func from(url: String) -> Track? {

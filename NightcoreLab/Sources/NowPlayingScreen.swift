@@ -43,8 +43,9 @@ struct TrackInfo: Equatable {
 
     init(track: Track?, fileName: String?, coverURL: URL?) {
         id = track?.id ?? (fileName.map { "local:\($0)" } ?? "idle")
-        title = track?.title ?? fileName ?? "Nenhuma música"
-        artist = track.flatMap { LyricsMatcher.identity(from: $0.title)?.artist }
+        title = track?.cleanTitle ?? track?.title ?? fileName ?? "Nenhuma música"
+        artist = track?.cleanArtist
+            ?? track.flatMap { LyricsMatcher.identity(from: $0.title)?.artist }
             ?? (track == nil ? "Arquivo local" : "YouTube")
         self.coverURL = coverURL ?? track?.thumbnailURL
     }
@@ -76,6 +77,7 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     @AppStorage(KaraokePrefs.background) private var backgroundStyle: BackgroundStyle = .marble
     @AppStorage("isZenMode") private var isZenMode = false
     @Environment(LyricsStore.self) private var lyricsStore
+    @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
@@ -119,15 +121,18 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                     )
                     .padding(.horizontal, 20)
                     .padding(.top, showsKaraoke ? 12 : 22)
-                    .padding(.trailing, showsKaraoke ? 48 : 0)
+                    .padding(.trailing, showsKaraoke ? 98 : 0)
+                    .hideablePanel(.player, edge: .top, enabled: showsKaraoke)
                 }
 
                 if showsKaraoke {
                     karaokeContent()
                         .padding(.top, 8)
+                        .hideablePanel(.lyrics, edge: .bottom, keepsSpace: true)
                         .transition(.lyricsReveal)
                     KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle)
                         .padding(.bottom, 12)
+                        .hideablePanel(.themes, edge: .bottom)
                         .transition(.barRise)
                 } else if !isZenMode {
                     // Somente o conteúdo inferior sai da hierarquia; artwork,
@@ -135,6 +140,16 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                     normalExtras()
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+            }
+        }
+        .overlay {
+            if showsKaraoke && panels.isZen {
+                // Toque em qualquer área livre revela o layout; estados individuais
+                // de cada painel não mudam quando alternamos Zen no karaokê.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .ignoresSafeArea()
+                    .onTapGesture { panels.setZen(false) }
             }
         }
         .overlay(alignment: .topLeading) {
@@ -149,7 +164,16 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if isTrackLoaded && canShowKaraoke { micButton }
+            if isTrackLoaded && canShowKaraoke {
+                HStack(spacing: 8) {
+                    if showsKaraoke {
+                        PanelsMenuButton(panels: [.player, .lyrics, .themes])
+                    }
+                    micButton
+                }
+                .padding(.top, 16)
+                .padding(.trailing, 16)
+            }
         }
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
@@ -214,8 +238,6 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .padding(.top, 16)
-        .padding(.trailing, 16)
         .accessibilityLabel(showsKaraoke ? "Sair do modo karaokê" : "Entrar no modo karaokê")
     }
 }
