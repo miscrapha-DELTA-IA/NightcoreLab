@@ -76,12 +76,7 @@ struct KaraokeLyricsView: View {
                 withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(new, anchor: .center) }
             }
         }
-        .onAppear {
-            store.startTracking()
-            if let index = store.activeLineIndex {
-                proxy.scrollTo(index, anchor: .center)
-            }
-        }
+        .onAppear { store.startTracking() }
         .onDisappear { store.stopTracking() }
     }
 
