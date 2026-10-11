@@ -18,12 +18,31 @@ final class PlaybackQueue: ObservableObject {
         return Array(upNextQueue.dropFirst(index + 1))
     }
 
-    /// Commit only once the audio engine has reported a successful play.
+    func contains(_ track: Track) -> Bool {
+        upNextQueue.contains(where: { $0.id == track.id })
+    }
+
+    /// Smart Queue: preserve all other items, including items before the one
+    /// selected. Never mutate until the playback engine confirms success.
     @discardableResult
     func commitPlaying(_ track: Track) -> Bool {
         guard let index = upNextQueue.firstIndex(where: { $0.id == track.id }) else { return false }
-        upNextQueue.removeFirst(index + 1)
+        upNextQueue.remove(at: index)
         return true
+    }
+
+    /// Radio never replaces existing music, deduplicates against both the
+    /// playing track and everything already enqueued.
+    func append(_ candidates: [Track], excluding currentID: String) {
+        var seen = Set(upNextQueue.map(\.id))
+        seen.insert(currentID)
+        let fresh = candidates.filter { seen.insert($0.id).inserted }
+        guard !fresh.isEmpty else { return }
+        upNextQueue.append(contentsOf: fresh)
+    }
+
+    func shouldFetchRadio(afterAutomaticAdvance: Bool) -> Bool {
+        afterAutomaticAdvance && upNextQueue.count < 2
     }
 
     func clear() { upNextQueue.removeAll() }
@@ -111,6 +130,7 @@ struct ContentView: View {
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
+    @State private var autoplayWhenRadioReady = false
     @State private var showServerSettings = false
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
@@ -195,11 +215,7 @@ struct ContentView: View {
         }
         .onChange(of: audio.isPlaying) { _, playing in
             if playing {
-                // Restored offline tracks only load recommendations after user presses Play.
-                if relatedSourceURL == nil, let currentTrack {
-                    relatedSourceURL = currentTrack.url.absoluteString
-                    relatedRequestID = UUID()
-                }
+                // A manual play/pause is not a request to start radio.
                 prefetchUpcoming()
             } else if let currentTrack {
                 downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
@@ -362,9 +378,9 @@ struct ContentView: View {
                         isEnabled: !audio.isExporting,
                         suggestedTracks: relatedVideos,
                         isLoadingSuggestions: isLoadingRelated,
-                        canRefreshSuggestions: relatedSourceURL != nil,
-                        onRefreshSuggestions: { relatedRequestID = UUID() },
-                        onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
+                        canRefreshSuggestions: currentTrack != nil,
+                        onRefreshSuggestions: { startRadio() },
+                        onSelect: { track, _ in playTrack(track) },
                         onLink: { link in startDownload(link) },
                         onServerSettings: { showServerSettings = true }
                     )
@@ -400,7 +416,7 @@ struct ContentView: View {
     private var resumeSection: some View {
         if let resumeTrack, !hasTrack {
             Button {
-                playTrack(resumeTrack, upcoming: [])
+                playTrack(resumeTrack)
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "clock.arrow.circlepath")
@@ -598,6 +614,20 @@ struct ContentView: View {
         .accessibilityHint("Alterna entre fosco, nítido e em movimento")
     }
 
+    @ViewBuilder
+    private var radioButton: some View {
+        if currentTrack != nil {
+            Button(action: { startRadio() }) {
+                Label("Iniciar Rádio", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(currentTheme.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(audio.isExporting || isLoadingRelated)
+            .accessibilityHint("Busca e acrescenta músicas sem substituir a fila")
+        }
+    }
+
     // Discovery and play-next are deliberately separate surfaces and data sources.
     private var relatedSection: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -611,6 +641,7 @@ struct ContentView: View {
                     Text("\(playbackQueue.upNextQueue.count) na fila")
                         .font(.caption2)
                         .foregroundStyle(DS.Ink.secondary)
+                    radioButton
                 }
                 if playbackQueue.upNextQueue.isEmpty {
                     Text(hasTrack ? "A fila está vazia. As próximas músicas aparecerão aqui." :
@@ -832,18 +863,21 @@ struct ContentView: View {
             return
         }
         downloader.errorMessage = nil
-        playTrack(track, upcoming: [])
+        playTrack(track)
     }
 
-    private func playFromQueue(_ track: Track) {
-        guard !audio.isExporting,
-              let remaining = playbackQueue.remaining(after: track) else { return }
-        // The row must stay visible during transfer/loading, including on failure.
-        playTrack(track, upcoming: remaining, preservingQueue: true)
+    private func playFromQueue(_ track: Track, automatic: Bool = false) {
+        guard !audio.isExporting, playbackQueue.contains(track) else { return }
+        playTrack(track, automaticAdvance: automatic)
     }
 
-    private func playTrack(_ track: Track, upcoming: [Track], preservingQueue: Bool = false) {
+    /// Playback is deliberately independent from radio discovery and queue
+    /// replacement. All queue edits happen after play() really starts.
+    private func playTrack(_ track: Track, automaticAdvance: Bool = false) {
         guard !audio.isExporting else { return }
+        if !automaticAdvance {
+            autoplayWhenRadioReady = false
+        }
         let resumingPrevious = resumeTrack?.id == track.id
         let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
         resumeTrack = nil
@@ -865,25 +899,19 @@ struct ContentView: View {
                     return
                 }
                 guard playbackTransition.didStart(token, trackID: track.id) else { return }
-                // Commit the queue only AFTER actual playback has started.
-                if preservingQueue {
-                    playbackQueue.commitPlaying(track)
-                } else {
-                    resetRelatedVideos()
-                    playbackQueue.replace(with: upcoming, excluding: track.id)
-                }
+                // Commit only the selected entry. Search, URLs and queue taps
+                // never clear or reorder the remaining queue.
+                playbackQueue.commitPlaying(track)
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = downloader.cachedTrack(track)
                 if let currentTrack {
                     downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
                 }
-                // Only fetch new suggestions when there is no queued successor.
-                if playbackQueue.upNextQueue.isEmpty {
-                    relatedSourceURL = track.url.absoluteString
-                    relatedRequestID = UUID()
-                }
                 prefetchUpcoming()
+                if playbackQueue.shouldFetchRadio(afterAutomaticAdvance: automaticAdvance) {
+                    startRadio()
+                }
             } catch {
                 guard playbackTransition.didFail(token, trackID: track.id) else { return }
                 errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
@@ -927,13 +955,26 @@ struct ContentView: View {
     }
 
     private func advanceQueue() {
-        guard !audio.isExporting, !playbackTransition.isPreparing,
-              let next = playbackQueue.upNextQueue.first else { return }
-        playFromQueue(next)
+        guard !audio.isExporting, !playbackTransition.isPreparing else { return }
+        if let next = playbackQueue.upNextQueue.first {
+            playFromQueue(next, automatic: true)
+        } else if currentTrack != nil {
+            // Only the engine's completion event can trigger an automatic radio
+            // request when there is nothing left to advance to.
+            startRadio(autoplayWhenReady: true)
+        }
+    }
+
+    private func startRadio(autoplayWhenReady: Bool = false) {
+        guard let track = currentTrack, !audio.isExporting else { return }
+        autoplayWhenRadioReady = autoplayWhenReady
+        relatedSourceURL = track.url.absoluteString
+        relatedRequestID = UUID()
     }
 
     private func resetRelatedVideos() {
         relatedSourceURL = nil
+        autoplayWhenRadioReady = false
         relatedVideos = []
         isLoadingRelated = false
         relatedRequestID = UUID() // Cancela a consulta anterior vinculada à view.
@@ -947,14 +988,26 @@ struct ContentView: View {
         let videos = await downloader.fetchRelatedVideos(for: sourceURL)
         guard !Task.isCancelled, requestID == relatedRequestID,
               sourceURL == relatedSourceURL else { return }
-        relatedVideos = videos
-        // An in-flight recommendations request must never overwrite an active queue.
-        if let playingTrackID, playbackQueue.upNextQueue.isEmpty,
-           !playbackTransition.isPreparing {
-            playbackQueue.replace(with: videos, excluding: playingTrackID)
-        }
         isLoadingRelated = false
+        // A fetch started for a different playing track must not rewrite the
+        // new song's context or trigger an obsolete autoplay.
+        guard let playingTrackID, currentTrack?.url.absoluteString == sourceURL else {
+            autoplayWhenRadioReady = false
+            return
+        }
+        relatedVideos = videos
+        playbackQueue.append(videos, excluding: playingTrackID)
         prefetchUpcoming()
+        if autoplayWhenRadioReady {
+            autoplayWhenRadioReady = false
+            // Auto-advance only if the original track is still selected and
+            // the player has not been changed by a manual tap in the meantime.
+            if let currentTrack, currentTrack.id == playingTrackID,
+               !audio.isPlaying, !playbackTransition.isPreparing,
+               let next = playbackQueue.upNextQueue.first {
+                playFromQueue(next, automatic: true)
+            }
+        }
     }
 
     private func importFile(_ url: URL) {
