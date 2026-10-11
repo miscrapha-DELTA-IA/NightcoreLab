@@ -43,8 +43,9 @@ struct TrackInfo: Equatable {
 
     init(track: Track?, fileName: String?, coverURL: URL?) {
         id = track?.id ?? (fileName.map { "local:\($0)" } ?? "idle")
-        title = track?.title ?? fileName ?? "Nenhuma música"
-        artist = track.flatMap { LyricsMatcher.identity(from: $0.title)?.artist }
+        title = track?.cleanTitle ?? track?.title ?? fileName ?? "Nenhuma música"
+        artist = track?.cleanArtist
+            ?? track.flatMap { LyricsMatcher.identity(from: $0.title)?.artist }
             ?? (track == nil ? "Arquivo local" : "YouTube")
         self.coverURL = coverURL ?? track?.thumbnailURL
     }
