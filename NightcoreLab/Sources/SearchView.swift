@@ -23,6 +23,8 @@ struct SearchView: View {
     @Binding var isDiscoverExpanded: Bool
     @Binding var isDiscoverVisible: Bool
     @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
+    @AppStorage(AudioDownloadManager.serverURLKey) private var savedServerURL = AudioDownloadManager.defaultServerURL
+    @State private var omnibox = OmniboxEngine(baseURL: URL(string: AudioDownloadManager.defaultServerURL)!)
     @State private var hasRestoredQuery = false
     @State private var query = ""
     @State private var searchResults: [Track] = []
@@ -33,9 +35,18 @@ struct SearchView: View {
     @State private var searchRequestID = UUID()
     @FocusState private var isFocused: Bool
 
-    private var isSearchMode: Bool { submittedQuery != nil }
+    private var typedText: String? {
+        if case let .text(text) = OmniboxIntent.classify(query), text.count >= 2 { return text }
+        return nil
+    }
+    private var isSearchMode: Bool { submittedQuery != nil || typedText != nil }
     private var displayedTracks: [Track] {
-        DiscoveryPresentation.visibleTracks(searchQuery: submittedQuery,
+        if typedText != nil {
+            if !omnibox.results.isEmpty { return omnibox.results.map(\.asTrack) }
+            // Só usa o fallback da consulta que o usuário realmente submeteu.
+            return submittedQuery == query ? searchResults : []
+        }
+        return DiscoveryPresentation.visibleTracks(searchQuery: submittedQuery,
                                             searchResults: searchResults, suggestions: suggestedTracks)
     }
 
@@ -45,6 +56,7 @@ struct SearchView: View {
         }
         lastSearchQuery = ""
         query = ""
+        omnibox.queryChanged("")
         searchResults = []
         submittedQuery = nil
         hasSearched = false
@@ -66,6 +78,13 @@ struct SearchView: View {
         errorMessage = nil
         searchResults = []
         hasSearched = false
+        if case let .direct(videoID) = OmniboxIntent.classify(value) {
+            submittedQuery = nil
+            searchRequestID = UUID()
+            query = ""
+            onLink("https://www.youtube.com/watch?v=\(videoID)")
+            return
+        }
         if value.lowercased().hasPrefix("http") ||
             value.lowercased().contains("youtu.be") ||
             value.lowercased().contains("youtube.com") {
@@ -101,7 +120,9 @@ struct SearchView: View {
                     .focused($isFocused)
                     .onSubmit { handleInput(query) }
                     .disabled(!isEnabled)
-                if isSearching || downloader.isDownloading { ProgressView().tint(theme.accent) }
+                if isSearching || omnibox.isSearching || downloader.isDownloading {
+                    ProgressView().tint(theme.accent)
+                }
                 if !query.isEmpty {
                     Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
                         .accessibilityLabel("Limpar busca")
@@ -109,6 +130,27 @@ struct SearchView: View {
             }
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
+
+            if typedText != nil && !omnibox.suggestions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(omnibox.suggestions.prefix(5), id: \.self) { item in
+                            Button {
+                                query = item
+                                handleInput(item)
+                            } label: {
+                                Text(item)
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
 
             if isDiscoverVisible {
                 CollapsibleGlassSection(
@@ -133,14 +175,16 @@ struct SearchView: View {
                     }
                     if let errorMessage, isSearchMode {
                         Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-                    } else if isSearchMode && hasSearched && searchResults.isEmpty && !isSearching {
+                    } else if isSearchMode && (hasSearched || omnibox.hasSearched) &&
+                              displayedTracks.isEmpty && !isSearching && !omnibox.isSearching {
                         Text("Nenhuma música encontrada. Experimente outro termo.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
                         Text("Escolha uma música para descobrir faixas relacionadas.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if (isSearchMode && isSearching) || (!isSearchMode && isLoadingSuggestions) {
+                    if (isSearchMode && (isSearching || omnibox.isSearching)) ||
+                       (!isSearchMode && isLoadingSuggestions) {
                         ProgressView(isSearchMode ? "Procurando músicas…" : "Carregando sugestões…")
                             .tint(theme.accent)
                     }
@@ -156,7 +200,10 @@ struct SearchView: View {
                                     let status = downloader.status(for: result)
                                     Button {
                                         isFocused = false
-                                        // Search/discovery never append all results to the playback queue.
+                                        // Store frecency for instant local suggestions next time.
+                                        if let hit = omnibox.results.first(where: { $0.id == track.id }) {
+                                            omnibox.recordPlay(hit)
+                                        }
                                         onSelect(track, [])
                                     } label: {
                                         VStack(alignment: .leading, spacing: 6) {
@@ -196,17 +243,49 @@ struct SearchView: View {
         }
         .animation(.spring(duration: 0.5), value: isDiscoverVisible)
         .onAppear {
+            if let base = URL(string: AudioDownloadManager.apiBaseURL) { omnibox.useServer(base) }
             guard !hasRestoredQuery else { return }
             hasRestoredQuery = true
             let previous = lastSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !previous.isEmpty, submittedQuery == nil, searchResults.isEmpty else { return }
             // A deliberate saved text search is restored once, never on every keystroke.
             query = previous
+            omnibox.queryChanged(previous)
             submittedQuery = previous
             searchRequestID = UUID()
         }
+        .onChange(of: savedServerURL) { _, _ in
+            if let base = URL(string: AudioDownloadManager.apiBaseURL) {
+                omnibox.useServer(base)
+                omnibox.queryChanged(query)
+            }
+        }
+        .onChange(of: query) { _, value in
+            // Link/ID colado bypassa ambas as APIs de busca.
+            if case let .direct(id) = OmniboxIntent.classify(value), isEnabled {
+                query = ""
+                onLink("https://www.youtube.com/watch?v=\(id)")
+                return
+            }
+            omnibox.queryChanged(value)
+            if case let .text(value) = OmniboxIntent.classify(value), value.count >= 2 {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                    isDiscoverVisible = true
+                    isDiscoverExpanded = true
+                }
+            }
+        }
         .task(id: searchRequestID) {
             guard let requested = submittedQuery else {
+                isSearching = false
+                return
+            }
+            // V1 é a fonte principal. O /search NDJSON é fallback para Render ainda
+            // não atualizado, timeouts ou falta de resultados.
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled, requested == submittedQuery else { return }
+            if !omnibox.results.isEmpty {
+                hasSearched = true
                 isSearching = false
                 return
             }
