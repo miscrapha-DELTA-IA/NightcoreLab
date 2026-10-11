@@ -30,6 +30,10 @@ extension MarbleTheme {
         case .acid:    return .acid
         case .cyber:   return .cyber
         case .crimson: return .crimson
+        case .ultraviolet: return .ultraviolet
+        case .solar: return .solar
+        case .orchid: return .orchid
+        case .sapphire: return .sapphire
         }
     }
 }
@@ -422,14 +426,29 @@ private struct KaraokeBottomBar: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            HStack(spacing: 12) {
-                ForEach(AppTheme.allCases) { t in
-                    Button {
-                        withAnimation(.snappy(duration: 0.35)) { theme = t }
-                    } label: { swatch(t) }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(t.displayName)
-                    .accessibilityAddTraits(theme == t ? .isSelected : [])
+            // Sete temas não cabem na cápsula: rolagem e centralização da seleção.
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(AppTheme.allCases) { t in
+                            Button {
+                                withAnimation(.snappy(duration: 0.35)) { theme = t }
+                            } label: { swatch(t) }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(t.displayName)
+                            .accessibilityValue(t.dominantColorName)
+                            .accessibilityAddTraits(theme == t ? .isSelected : [])
+                            .id(t.id)  // necessário para scrollTo centralizar este botão
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .frame(maxWidth: 232)
+                .onAppear { proxy.scrollTo(theme.id, anchor: .center) }
+                .onChange(of: theme) { _, newTheme in
+                    withAnimation(.snappy(duration: 0.35)) {
+                        proxy.scrollTo(newTheme.id, anchor: .center)
+                    }
                 }
             }
 

@@ -4,6 +4,7 @@ import SwiftUI
 
 enum MarbleTheme: String, CaseIterable, Identifiable {
     case acid, cyber, crimson
+    case ultraviolet, solar, orchid, sapphire
     var id: String { rawValue }
 
     /// deep = veios/sombras · body = corpo do líquido · glow = brilho/acento
@@ -21,6 +22,22 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
             return (Color(red: 0.03, green: 0.00, blue: 0.00),
                     Color(red: 0.75, green: 0.03, blue: 0.08),
                     Color(red: 1.00, green: 0.45, blue: 0.05))
+        case .ultraviolet: // cromo líquido violeta, prata, preto
+            return (Color(red: 0.03, green: 0.02, blue: 0.10),
+                    Color(red: 0.46, green: 0.40, blue: 0.94),
+                    Color(red: 0.72, green: 0.74, blue: 0.88))
+        case .solar: // amarelo, roxo e azul-petróleo quase preto
+            return (Color(red: 0.06, green: 0.07, blue: 0.11),
+                    Color(red: 0.65, green: 0.25, blue: 1.00),
+                    Color(red: 1.00, green: 0.80, blue: 0.20))
+        case .orchid: // roxo, prata, branco e preto
+            return (Color(red: 0.02, green: 0.00, blue: 0.03),
+                    Color(red: 0.51, green: 0.18, blue: 0.53),
+                    Color(red: 0.74, green: 0.70, blue: 0.80))
+        case .sapphire: // azul royal, pervinca e preto
+            return (Color(red: 0.01, green: 0.02, blue: 0.09),
+                    Color(red: 0.12, green: 0.25, blue: 0.84),
+                    Color(red: 0.64, green: 0.70, blue: 0.95))
         }
     }
 }

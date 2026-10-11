@@ -364,7 +364,8 @@ struct ContentView: View {
         .accessibilityLabel(label)
     }
 
-    /// Cicla acid → crimson → cyber.
+    /// Toque cicla pelos sete temas (Acid, Crimson, Cyber, Ultraviolet, Solar, Orchid
+    /// e Sapphire); toque longo permite seleção direta.
     private var themeButton: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.45)) {
@@ -379,10 +380,20 @@ struct ContentView: View {
                 .glassSurface(Circle(), theme: currentTheme, isActive: true, pulses: false,
                               glowIntensity: 0.6, depth: 0.4)
         }
+        .contextMenu {
+            ForEach(AppTheme.allCases) { theme in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.45)) { currentTheme = theme }
+                } label: {
+                    Label("\(theme.displayName) · \(theme.dominantColorName)",
+                          systemImage: theme == currentTheme ? "checkmark.circle.fill" : "circle")
+                }
+            }
+        }
         .sensoryFeedback(.impact(weight: .heavy), trigger: currentTheme)
         .accessibilityLabel("Trocar tema")
-        .accessibilityValue(currentTheme.displayName)
-        .accessibilityHint("Alterna entre Acid, Crimson e Cyber")
+        .accessibilityValue("\(currentTheme.displayName), \(currentTheme.dominantColorName)")
+        .accessibilityHint("Alterna entre os temas. Toque e segure para escolher um.")
     }
 
     /// Ação principal: pulsa enquanto não há música carregada, para guiar o primeiro uso.

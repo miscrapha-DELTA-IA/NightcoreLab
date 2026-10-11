@@ -43,6 +43,34 @@ enum TurbulentPalette {
                 Color(red: 0.23, green: 0.01, blue: 0.07), // almost-black maroon
                 Color(red: 0.55, green: 0.04, blue: 0.13)
             ]
+        case .ultraviolet:
+            return [
+                Color(red: 0.45, green: 0.41, blue: 0.94),
+                Color(red: 0.70, green: 0.25, blue: 0.85),
+                Color(red: 0.62, green: 0.65, blue: 0.82),
+                Color(red: 0.10, green: 0.08, blue: 0.38)
+            ]
+        case .solar:
+            return [
+                Color(red: 1.00, green: 0.78, blue: 0.15),
+                Color(red: 0.98, green: 0.52, blue: 0.18),
+                Color(red: 0.60, green: 0.24, blue: 0.98),
+                Color(red: 0.25, green: 0.08, blue: 0.45)
+            ]
+        case .orchid:
+            return [
+                Color(red: 0.55, green: 0.20, blue: 0.58),
+                Color(red: 0.80, green: 0.45, blue: 0.85),
+                Color(red: 0.70, green: 0.68, blue: 0.76),
+                Color(red: 0.20, green: 0.04, blue: 0.24)
+            ]
+        case .sapphire:
+            return [
+                Color(red: 0.12, green: 0.25, blue: 0.84),
+                Color(red: 0.45, green: 0.52, blue: 0.92),
+                Color(red: 0.60, green: 0.66, blue: 0.90),
+                Color(red: 0.03, green: 0.07, blue: 0.38)
+            ]
         }
     }
 }
