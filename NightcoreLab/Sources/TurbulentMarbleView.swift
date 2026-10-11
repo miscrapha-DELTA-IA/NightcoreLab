@@ -110,29 +110,44 @@ struct TurbulentMarbleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let p = theme.palette
-        TimelineView(.animation(minimumInterval: 1.0 / max(maxFPS, 1.0),
-                                paused: frozenTime != nil || isPaused || reduceMotion || scenePhase != .active)) { ctx in
-            let t = frozenTime ?? Float((isPaused || reduceMotion ? 0 :
-                                        ctx.date.timeIntervalSince(startedAt ?? start)) * speed)
-            Rectangle()
-                .fill(.black)
-                .visualEffect { content, proxy in
-                    content.colorEffect(
-                        ShaderLibrary.liquidMarble(
-                            .float2(proxy.size),
-                            .float(t),
-                            .color(p.deep), .color(p.body), .color(p.glow)
-                        )
-                    )
+        Group {
+            if let frozenTime {
+                // Export: a single GPU frame, with no TimelineView or animation clock.
+                marbleFrame(time: frozenTime)
+            } else {
+                TimelineView(.animation(
+                    minimumInterval: 1.0 / max(maxFPS, 1.0),
+                    paused: isPaused || reduceMotion || scenePhase != .active
+                )) { context in
+                    let elapsed = isPaused || reduceMotion ? 0 :
+                        context.date.timeIntervalSince(startedAt ?? start)
+                    marbleFrame(time: Float(elapsed * speed))
                 }
+            }
         }
-        .id(theme)                                  // troca de tema = crossfade
+        .id(theme)
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.6), value: theme)
         .ignoresSafeArea(edges: extendIntoSafeArea ? .all : [])
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private func marbleFrame(time: Float) -> some View {
+        let palette = theme.palette
+        return Rectangle()
+            .fill(.black)
+            .visualEffect { content, proxy in
+                content.colorEffect(
+                    ShaderLibrary.liquidMarble(
+                        .float2(proxy.size),
+                        .float(time),
+                        .color(palette.deep),
+                        .color(palette.body),
+                        .color(palette.glow)
+                    )
+                )
+            }
     }
 }
 
