@@ -67,3 +67,11 @@ Verificação no aparelho:
 
 Compilação iOS, testes XCTest e desempenho de transições dependem de Xcode/aparelho;
 verificações estáticas em Linux não substituem esses passos.
+
+## Barra de ambiente
+
+`EnvironmentBar` mantém 👁 e ⚡ juntos no canto superior esquerdo nas duas telas, inclusive
+Zen e karaokê limpo. Ambos têm alvo de 44 pt e superfície circular compartilhada. O ⚡
+foi retirado do cabeçalho: toque avança entre os 17 temas, toque longo escolhe nome/cor,
+com o mesmo binding de `selectedTheme`, feedback tátil e rótulos de acessibilidade.
+Reduzir Movimento desativa a animação da troca. Não há segunda preferência de tema.
