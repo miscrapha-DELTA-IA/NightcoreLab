@@ -53,10 +53,15 @@ struct PlayerBackgroundView: View {
     var body: some View {
         ZStack {
             if style == .turbulent {
-                // Destaque no cartão: a textura agora é perceptível, mas os controles
-                // seguem legíveis. Blur menor que o de tela cheia devido à área menor.
-                TurbulentBackgroundView(theme: theme, blurRadius: 36)
-                    .overlay(Color.black.opacity(0.18))
+                // O modo fluido do cartão usa o mesmo shader Metal do fundo
+                // principal; 30 fps e scrim escuro preservam os controles.
+                TurbulentMarbleView(
+                    theme: MarbleTheme(appTheme: theme),
+                    speed: 0.6,
+                    maxFPS: 30,
+                    extendIntoSafeArea: false
+                )
+                .overlay(Color.black.opacity(0.4))
             } else if let imageURL {
                 switch style {
                 case .blurred:

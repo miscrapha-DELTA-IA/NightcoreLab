@@ -13,3 +13,11 @@ final class PlayerBackgroundStyleTests: XCTestCase {
         XCTAssertEqual(PlayerBackgroundStyle.turbulent.next, .blurred)
     }
 }
+
+final class MarbleThemeIntegrationTests: XCTestCase {
+    func testMetalPaletteFollowsAppThemes() {
+        XCTAssertEqual(MarbleTheme(appTheme: .acid), .acid)
+        XCTAssertEqual(MarbleTheme(appTheme: .cyber), .cyber)
+        XCTAssertEqual(MarbleTheme(appTheme: .crimson), .crimson)
+    }
+}
