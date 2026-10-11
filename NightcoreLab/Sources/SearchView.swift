@@ -20,8 +20,8 @@ struct SearchView: View {
     let onSelect: (Track, [Track]) -> Void
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
+    @Binding var isDiscoverExpanded: Bool
     @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
-    @AppStorage("isDiscoverExpanded") private var isDiscoverExpanded: Bool = true
     @State private var hasRestoredQuery = false
     @State private var query = ""
     @State private var searchResults: [Track] = []
@@ -108,44 +108,26 @@ struct SearchView: View {
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
 
-            HStack(spacing: 10) {
-                Button {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                        isDiscoverExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Label("DESCOBRIR", systemImage: "sparkles")
-                            .font(.caption.weight(.heavy))
-                            .tracking(1.4)
-                        Image(systemName: isDiscoverExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2.weight(.bold))
-                    }
-                    .foregroundStyle(theme.accent)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isDiscoverExpanded ? "Recolher Descobrir" : "Expandir Descobrir")
-                .accessibilityValue(isDiscoverExpanded ? "Expandida" : "Recolhida")
-                Spacer()
-                if isSearchMode {
-                    Button("Sugestões") { showSuggestions() }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(theme.accent)
-                        .accessibilityLabel("Voltar às sugestões")
-                } else if canRefreshSuggestions {
-                    Button(action: onRefreshSuggestions) {
-                        Label("Iniciar Rádio", systemImage: "dot.radiowaves.left.and.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(theme.accent)
-                    }
-                    .accessibilityLabel("Iniciar Rádio e acrescentar recomendações à fila")
-                }
-            }
-
-            if isDiscoverExpanded {
+            CollapsibleGlassSection(
+                title: "DESCOBRIR",
+                icon: "sparkles",
+                isExpanded: $isDiscoverExpanded,
+                tint: theme.accent
+            ) {
                 VStack(alignment: .leading, spacing: 12) {
+                    if isSearchMode {
+                        Button("Sugestões") { showSuggestions() }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(theme.accent)
+                            .accessibilityLabel("Voltar às sugestões")
+                    } else if canRefreshSuggestions {
+                        Button(action: onRefreshSuggestions) {
+                            Label("Iniciar Rádio", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(theme.accent)
+                        }
+                        .accessibilityLabel("Iniciar Rádio e acrescentar recomendações à fila")
+                    }
                     if let errorMessage, isSearchMode {
                         Text(errorMessage).font(.caption).foregroundStyle(.secondary)
                     } else if isSearchMode && hasSearched && searchResults.isEmpty && !isSearching {
@@ -205,8 +187,6 @@ struct SearchView: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .onAppear {

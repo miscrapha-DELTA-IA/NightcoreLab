@@ -87,7 +87,16 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                 )
                 .transition(.opacity)
             } else {
-                AmbientBackground(theme: appTheme)
+                // Keep the Liquid Marble visible when panels are collapsed.
+                // One full-screen shader is enough; it pauses with Reduce Motion
+                // and when the app moves out of the foreground.
+                TurbulentMarbleView(
+                    theme: MarbleTheme(appTheme: appTheme),
+                    speed: 0.6,
+                    maxFPS: 30
+                )
+                .overlay(Color.black.opacity(0.4))
+                .allowsHitTesting(false)
             }
 
             VStack(spacing: 0) {
