@@ -199,7 +199,7 @@ final class AudioDownloadManager: ObservableObject {
                 self.tasks[item.id] = nil
                 await self.transfers.remove(item)
             }
-            self.transfers.setMaxConcurrentDownloads(1)
+            self.transfers.setMaxConcurrentDownloads(2)
             self.persistPending()
         }
     }
@@ -224,7 +224,7 @@ final class AudioDownloadManager: ObservableObject {
             self.tracks.removeAll()
             self.tasks.removeAll()
             await self.transfers.remove(Set(downloads))
-            self.transfers.setMaxConcurrentDownloads(1)
+            self.transfers.setMaxConcurrentDownloads(2)
             self.persistPending()
         }
     }
