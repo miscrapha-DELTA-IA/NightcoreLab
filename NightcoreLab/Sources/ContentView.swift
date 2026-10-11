@@ -1017,8 +1017,11 @@ struct ContentView: View {
             autoplayWhenRadioReady = false
             return
         }
-        relatedVideos = videos
-        playbackQueue.append(videos, excluding: playingTrackID)
+        let ranked = RecommendationRanker.recommendations(
+            mix: videos, history: playHistory.entries, currentID: playingTrackID,
+            queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now))
+        relatedVideos = ranked
+        playbackQueue.append(ranked, excluding: playingTrackID)
         prefetchUpcoming()
         if autoplayWhenRadioReady {
             autoplayWhenRadioReady = false
