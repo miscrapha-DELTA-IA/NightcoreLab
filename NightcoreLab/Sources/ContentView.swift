@@ -140,6 +140,9 @@ struct ContentView: View {
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
     @AppStorage("selectedTheme") private var currentTheme: AppTheme = .acid
+    // Clean is a presentation preference, not a PanelStore visibility mask.
+    @AppStorage("lyricsCleanMode") private var lyricsCleanMode = true
+    @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var showDiscover = true
     @AppStorage("showQueue") private var showQueue = true
     @AppStorage("showPlaybackDetails") private var showPlaybackDetails = true
@@ -190,6 +193,8 @@ struct ContentView: View {
             canSkipNext: !playbackQueue.upNextQueue.isEmpty,
             appTheme: $currentTheme,
             isKaraokeMode: $showLyrics,
+            lyricsCleanMode: $lyricsCleanMode,
+            backgroundStyle: $karaokeBackgroundStyle,
             visibleDiscover: $visibleDiscover,
             visibleQueue: $visibleQueue,
             visiblePlayback: $visiblePlayback,
@@ -209,7 +214,9 @@ struct ContentView: View {
                     LyricsView(
                         track: currentTrack,
                         audio: audio,
-                        theme: currentTheme,
+                        theme: $currentTheme,
+                        backgroundStyle: $karaokeBackgroundStyle,
+                        lyricsCleanMode: $lyricsCleanMode,
                         dismiss: { withAnimation { showLyrics = false } },
                         inline: true,
                         prefetcher: lyricsPrefetcher

@@ -90,7 +90,9 @@ private struct LyricsBackdrop: View {
 struct LyricsView: View {
     let track: Track
     let audio: AudioEngineManager
-    let theme: AppTheme
+    @Binding var theme: AppTheme
+    @Binding var backgroundStyle: BackgroundStyle
+    @Binding var lyricsCleanMode: Bool
     let dismiss: () -> Void
     var inline = false
     var prefetcher: LyricsPrefetcher?
@@ -99,6 +101,8 @@ struct LyricsView: View {
     @State private var record: LyricsRecord?
     @State private var candidates: [LyricsRecord] = []
     @State private var isChoosingLyrics = false
+    @State private var showLyricsControlCenter = false
+    @State private var queuedManualPicker = false
     @State private var manualQuery = ""
     @State private var manualSearchID = UUID()
     @State private var manualSearching = false
@@ -109,7 +113,7 @@ struct LyricsView: View {
     @AppStorage("lyricsColorMode") private var colorMode: LyricsColorMode = .artwork
 
     private var lyricAccent: Color {
-        if inline { return theme.accent }
+        // A escolha do Control Center também afeta as letras no karaokê inline.
         switch colorMode {
         // If the artwork is grayscale/unavailable, use readable neutral white,
         // never the theme color; otherwise the two choices looked identical.
@@ -183,6 +187,28 @@ struct LyricsView: View {
             }
 
             VStack(spacing: inline ? 10 : 18) {
+                if inline {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button {
+                            showLyricsControlCenter = true
+                        } label: {
+                            Label("Legenda", systemImage: "slider.horizontal.3")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .frame(height: 36)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Configurações da legenda")
+                        .accessibilityHint("Abre os ajustes de aparência, sincronização e escolha da letra")
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                }
+
                 if !inline {
                 HStack(spacing: 12) {
                     if let cover = track.thumbnailURL {
@@ -227,7 +253,7 @@ struct LyricsView: View {
                 .padding(.horizontal, 22)
                 }
 
-                if let record {
+                if !inline, let record {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(lyricStore.needsReview ? "CONFERIR LETRA" : "LETRA ENCONTRADA")
@@ -244,7 +270,7 @@ struct LyricsView: View {
                             .foregroundStyle(lyricAccent)
                     }
                     .padding(.horizontal, 22)
-                } else if !loading {
+                } else if !inline && !loading {
                     HStack {
                         Text("Sem correspondência confirmada")
                             .font(.caption)
@@ -257,7 +283,7 @@ struct LyricsView: View {
                     .padding(.horizontal, 22)
                 }
 
-                if !lyricStore.lines.isEmpty {
+                if !inline && !lyricStore.lines.isEmpty {
                     HStack(spacing: 10) {
                         Text("SINCRONIA")
                             .font(.caption2.weight(.bold))
@@ -383,6 +409,28 @@ struct LyricsView: View {
                 errorMessage = "Não foi possível consultar o LRCLIB. Tente pesquisar a letra."
             }
             loading = false
+        }
+        .sheet(isPresented: $showLyricsControlCenter, onDismiss: {
+            if queuedManualPicker {
+                queuedManualPicker = false
+                isChoosingLyrics = true
+            }
+        }) {
+            LyricsControlCenter(
+                theme: $theme,
+                backgroundStyle: $backgroundStyle,
+                colorMode: $colorMode,
+                lyricsCleanMode: $lyricsCleanMode,
+                currentRecord: record,
+                needsReview: lyricStore.needsReview,
+                artworkTint: artworkTint,
+                hasSynchronizedLyrics: !lyricStore.lines.isEmpty,
+                onChooseLyrics: {
+                    queuedManualPicker = true
+                    showLyricsControlCenter = false
+                },
+                onDismiss: { showLyricsControlCenter = false }
+            )
         }
         .sheet(isPresented: $isChoosingLyrics) {
             NavigationStack {
