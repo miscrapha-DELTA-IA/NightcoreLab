@@ -34,6 +34,12 @@ extension MarbleTheme {
         case .solar: return .solar
         case .orchid: return .orchid
         case .sapphire: return .sapphire
+        case .atomic: return .atomic
+        case .lagoon: return .lagoon
+        case .volt: return .volt
+        case .prism: return .prism
+        case .magma: return .magma
+        case .noir: return .noir
         }
     }
 }
@@ -426,7 +432,7 @@ private struct KaraokeBottomBar: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            // Sete temas não cabem na cápsula: rolagem e centralização da seleção.
+            // Treze temas não cabem na cápsula: rolagem e centralização da seleção.
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {

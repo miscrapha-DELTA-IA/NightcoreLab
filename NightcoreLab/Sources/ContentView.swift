@@ -364,8 +364,8 @@ struct ContentView: View {
         .accessibilityLabel(label)
     }
 
-    /// Toque cicla pelos sete temas (Acid, Crimson, Cyber, Ultraviolet, Solar, Orchid
-    /// e Sapphire); toque longo permite seleção direta.
+    /// Toque cicla pelos 13 temas em AppTheme.allCases; toque longo abre o
+    /// menu para escolher diretamente pelo nome e cor dominante.
     private var themeButton: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.45)) {

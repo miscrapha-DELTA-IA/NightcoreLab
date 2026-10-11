@@ -23,6 +23,12 @@ final class MarbleThemeIntegrationTests: XCTestCase {
         XCTAssertEqual(MarbleTheme(appTheme: .solar), .solar)
         XCTAssertEqual(MarbleTheme(appTheme: .orchid), .orchid)
         XCTAssertEqual(MarbleTheme(appTheme: .sapphire), .sapphire)
+        XCTAssertEqual(MarbleTheme(appTheme: .atomic), .atomic)
+        XCTAssertEqual(MarbleTheme(appTheme: .lagoon), .lagoon)
+        XCTAssertEqual(MarbleTheme(appTheme: .volt), .volt)
+        XCTAssertEqual(MarbleTheme(appTheme: .prism), .prism)
+        XCTAssertEqual(MarbleTheme(appTheme: .magma), .magma)
+        XCTAssertEqual(MarbleTheme(appTheme: .noir), .noir)
     }
 
     /// Um novo AppTheme sem MarbleTheme correspondente voltaria silenciosamente ao Acid.

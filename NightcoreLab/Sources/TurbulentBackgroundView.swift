@@ -71,6 +71,48 @@ enum TurbulentPalette {
                 Color(red: 0.60, green: 0.66, blue: 0.90),
                 Color(red: 0.03, green: 0.07, blue: 0.38)
             ]
+        case .atomic:
+            return [
+                Color(red: 0.05, green: 0.58, blue: 0.58),
+                Color(red: 0.92, green: 0.24, blue: 0.14),
+                Color(red: 0.85, green: 0.80, blue: 0.68),
+                Color(red: 0.02, green: 0.20, blue: 0.22)
+            ]
+        case .lagoon:
+            return [
+                Color(red: 0.05, green: 0.42, blue: 0.66),
+                Color(red: 1.00, green: 0.76, blue: 0.15),
+                Color(red: 0.12, green: 0.58, blue: 0.82),
+                Color(red: 0.02, green: 0.18, blue: 0.38)
+            ]
+        case .volt:
+            return [
+                Color(red: 0.95, green: 0.85, blue: 0.02),
+                Color(red: 0.65, green: 0.66, blue: 0.72),
+                Color(red: 0.80, green: 0.70, blue: 0.00),
+                Color(red: 0.30, green: 0.27, blue: 0.00)
+            ]
+        case .prism:
+            return [
+                Color(red: 0.38, green: 0.30, blue: 0.66),
+                Color(red: 0.98, green: 0.52, blue: 0.10),
+                Color(red: 0.10, green: 0.70, blue: 0.95),
+                Color(red: 0.98, green: 0.76, blue: 0.05)
+            ]
+        case .magma:
+            return [
+                Color(red: 0.05, green: 0.17, blue: 0.52),
+                Color(red: 1.00, green: 0.45, blue: 0.06),
+                Color(red: 0.78, green: 0.80, blue: 0.92),
+                Color(red: 0.02, green: 0.05, blue: 0.25)
+            ]
+        case .noir:
+            return [
+                Color(red: 0.85, green: 0.04, blue: 0.06),
+                Color(red: 0.80, green: 0.80, blue: 0.84),
+                Color(red: 0.35, green: 0.00, blue: 0.03),
+                Color(red: 0.40, green: 0.40, blue: 0.44)
+            ]
         }
     }
 }
