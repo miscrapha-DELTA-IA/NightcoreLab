@@ -109,7 +109,7 @@ actor LyricsPrefetcher {
         let q = LyricsQuery(m)
         var pool: [LRCLIBRecord] = []
 
-        func confident() -> Bool { LyricsMatcher.rank(q, pool).first?.verdict == .confident }
+        func confident() -> Bool { RankedLyricsMatcher.rank(q, pool).first?.verdict == .confident }
 
         // 1) match exato
         if let artist = q.artist, !Task.isCancelled,
@@ -130,7 +130,7 @@ actor LyricsPrefetcher {
         }
         if Task.isCancelled { return }
 
-        let ranked = LyricsMatcher.rank(q, pool)
+        let ranked = RankedLyricsMatcher.rank(q, pool)
         let eligible = ranked.filter { $0.verdict != .rejected }
         var choice = CachedLyricsChoice(selected: nil, score: 0, needsReview: false, pinned: false,
                                         alternatives: ranked.prefix(5).map(\.record), savedAt: Date())
