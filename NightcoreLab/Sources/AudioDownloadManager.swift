@@ -49,7 +49,8 @@ final class AudioDownloadManager: ObservableObject {
         configuration.httpMaximumConnectionsPerHost = 2
         transfers = DownloadKit.DownloadManager(sessionConfiguration: configuration)
         transfers.setDelegate(self)
-        transfers.setMaxConcurrentDownloads(1)
+        // Foreground selection + one background prefetch at a time.
+        transfers.setMaxConcurrentDownloads(2)
         cachedIDs = Set(cache.entries.keys)
         serialize {
             await withCheckedContinuation { continuation in
@@ -128,17 +129,8 @@ final class AudioDownloadManager: ObservableObject {
         }
         serialize {
             guard generation == self.selectionGeneration else { return }
-            // The pinned DownloadKit starts idle entries in updateQueue() when another
-            // entry is removed. Do not reset concurrency or cancel the selected task:
-            // resume() creates a NEW URLSession task and used to orphan the old one.
-            let obsolete = self.transfers.downloads.filter { self.tracks[$0.id]?.id != track.id }
-            for item in obsolete {
-                self.tracks[item.id] = nil
-                self.tasks[item.id] = nil
-                await self.transfers.remove(item)
-                guard generation == self.selectionGeneration else { return }
-            }
-            // A speculative transfer may have finished while we removed obsolete work.
+            // Never remove speculative transfers on a manual playback selection:
+            // reuse the matching DownloadKit task and promote its priority.
             if let local = self.cache.localURL(for: track.id) {
                 self.deliver(local, track: self.cachedTrack(track))
             } else if let existing = self.transfers.downloads.first(where: { self.tracks[$0.id]?.id == track.id }) {
@@ -147,11 +139,8 @@ final class AudioDownloadManager: ObservableObject {
                 self.downloadProgress = existing.fractionCompleted
                 switch existing.status {
                 case .idle, .downloading, .finished:
-                    // Removing the speculative blocker already calls updateQueue()
-                    // in DownloadKit. Never replace an idle/running task unnecessarily.
-                    break
+                    break // Never restart an in-flight or completing transfer.
                 case .paused, .failed:
-                    // Only explicitly paused or failed downloads need a fresh task.
                     await self.transfers.resume(existing)
                 }
             } else {
@@ -170,10 +159,15 @@ final class AudioDownloadManager: ObservableObject {
         let next = Self.nextTracks(upcoming, excluding: id)
         serialize {
             guard generation == self.selectionGeneration, !self.isRateLimited else { return }
+            // Keep prior transfers alive, but cap speculative downloads at two
+            // distinct tracks, excluding the current foreground selection.
+            var speculativeIDs = Set(self.tracks.values.map(\.id).filter { $0 != self.selectedID })
             for track in next {
                 guard generation == self.selectionGeneration, !self.isRateLimited else { return }
                 guard self.cache.localURL(for: track.id) == nil,
-                      !self.tracks.values.contains(where: { $0.id == track.id }) else { continue }
+                      !self.tracks.values.contains(where: { $0.id == track.id }),
+                      speculativeIDs.count < 2 else { continue }
+                speculativeIDs.insert(track.id)
                 await self.append(track, priority: URLSessionTask.lowPriority)
             }
             self.persistPending()
