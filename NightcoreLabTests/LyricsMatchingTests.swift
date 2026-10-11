@@ -39,6 +39,24 @@ final class LyricsMatchingTests: XCTestCase {
                                         audioDuration: 257))
     }
 
+    func testAmbiguousTitleAcrossArtistsRequiresManualSelection() {
+        let one = record(1, title: "Hello", artist: "Adele", duration: 295)
+        let two = record(2, title: "Hello", artist: "Lionel Richie", duration: 295)
+        XCTAssertNil(LyricsMatcher.best([one, two], youtubeTitle: "Hello",
+                                        audioDuration: 295))
+    }
+
+    func testSyncedLyricsWinOverVerifiedPlainLyrics() {
+        let plain = LyricsRecord(id: 1, trackName: "Yellow", artistName: "Coldplay",
+                                 duration: 266, syncedLyrics: nil, plainLyrics: "Hello",
+                                 instrumental: false)
+        let synchronized = record(2, title: "Yellow", artist: "Coldplay",
+                                  duration: 267)
+        XCTAssertEqual(LyricsMatcher.best([plain, synchronized],
+                                          youtubeTitle: "Coldplay - Yellow",
+                                          audioDuration: 266)?.id, 2)
+    }
+
     func testBareYouTubeIDDoesNotTriggerWrongLyrics() {
         XCTAssertNil(LyricsMatcher.identity(from: "abcdefghijk"))
         XCTAssertNil(LyricsMatcher.best([record(1, title: "Hello", artist: "Adele",
