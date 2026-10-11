@@ -131,6 +131,7 @@ struct ContentView: View {
     @State private var resumeTrack: Track?
     @State private var didRestoreSession = false
     @State private var showLyrics = false
+    @State private var lyricsPrefetcher: LyricsPrefetcher?
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
     @State private var relatedRequestID = UUID()
@@ -153,6 +154,7 @@ struct ContentView: View {
     @AppStorage("visiblePresets") private var visiblePresets = true
     @AppStorage("visibleControls") private var visibleControls = true
     @AppStorage("visibleExport") private var visibleExport = true
+    @Environment(LyricsStore.self) private var lyricsStore
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -209,7 +211,8 @@ struct ContentView: View {
                         audio: audio,
                         theme: currentTheme,
                         dismiss: { withAnimation { showLyrics = false } },
-                        inline: true
+                        inline: true,
+                        prefetcher: lyricsPrefetcher
                     )
                     .id(currentTrack.id)
                 }
@@ -223,6 +226,7 @@ struct ContentView: View {
         playerCanvas
         .onAppear {
             restoreDiscoverVisibilityPreference()
+            if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
         }
         .onOpenURL { incomingURL in
@@ -937,6 +941,7 @@ struct ContentView: View {
                 currentTrack = downloader.cachedTrack(track)
                 if let currentTrack {
                     downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                    startLyricsPrefetch(for: currentTrack)
                 }
                 prefetchUpcoming()
                 if playbackQueue.shouldFetchRadio(afterAutomaticAdvance: automaticAdvance) {
@@ -979,9 +984,28 @@ struct ContentView: View {
         }
     }
 
+    private func lyricsMetadata(for track: Track, duration: TimeInterval?) -> TrackMetadata {
+        TrackMetadata(videoID: track.id, rawTitle: track.title, channel: nil,
+                      cleanArtist: track.cleanArtist, cleanTitle: track.cleanTitle,
+                      album: track.album, duration: duration)
+    }
+
+    /// A letra começa a ser procurada quando o áudio realmente tocou,
+    /// não quando o usuário abre o modo karaokê.
+    private func startLyricsPrefetch(for track: Track) {
+        let service = lyricsPrefetcher ?? LyricsPrefetcher(store: lyricsStore)
+        lyricsPrefetcher = service
+        let metadata = lyricsMetadata(for: track, duration: audio.duration)
+        Task { await service.start(metadata) }
+    }
+
     private func prefetchUpcoming() {
         guard audio.isPlaying, let playingTrackID else { return }
         downloader.prefetch(playbackQueue.tracks, playing: playingTrackID)
+        if let next = playbackQueue.upNextQueue.first, let lyricsPrefetcher {
+            let metadata = lyricsMetadata(for: next, duration: next.duration)
+            Task { await lyricsPrefetcher.warm(metadata) }
+        }
     }
 
     private func advanceQueue() {
@@ -1058,6 +1082,8 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
+            lyricStore.clear()
+            if let lyricsPrefetcher { Task { await lyricsPrefetcher.cancel() } }
             showLyrics = false
             resumeTrack = nil
             downloader.clearLastTrack()
