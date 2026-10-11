@@ -170,6 +170,7 @@ enum KaraokeLayoutMetrics {
 
 struct KaraokeLyricsView: View {
     @Environment(LyricsStore.self) private var store
+    @AppStorage("story.lyricTypography") private var typography: StoryLyricTypography = .classic
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
@@ -180,9 +181,8 @@ struct KaraokeLyricsView: View {
             let wordLimit = KaraokeLayoutMetrics.textWidth(for: viewport.size.width)
             let fittedTheme: KaraokeTheme = {
                 var adjusted = theme
-                adjusted.font = .system(
-                    size: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
-                    weight: .heavy, design: .rounded
+                adjusted.font = typography.font(
+                    size: KaraokeLayoutMetrics.fontSize(for: viewport.size.width)
                 )
                 return adjusted
             }()

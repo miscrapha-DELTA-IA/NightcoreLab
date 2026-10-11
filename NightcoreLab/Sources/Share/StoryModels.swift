@@ -18,15 +18,16 @@ enum StoryLyricTypography: String, CaseIterable, Identifiable, Sendable {
         case .typewriter: return "Máquina"
         }
     }
-    var font: Font {
+    func font(size: CGFloat) -> Font {
         switch self {
-        case .classic: return .system(size: 35, weight: .heavy, design: .rounded)
-        case .neon: return .system(size: 35, weight: .black, design: .rounded)
-        case .mono: return .system(size: 30, weight: .bold, design: .monospaced)
-        case .cinematic: return .system(size: 37, weight: .bold, design: .serif)
-        case .typewriter: return .system(size: 31, weight: .semibold, design: .monospaced)
+        case .classic: return .system(size: size, weight: .heavy, design: .rounded)
+        case .neon: return .system(size: size, weight: .black, design: .rounded)
+        case .mono: return .system(size: size * 0.90, weight: .bold, design: .monospaced)
+        case .cinematic: return .system(size: size * 1.06, weight: .bold, design: .serif)
+        case .typewriter: return .system(size: size * 0.90, weight: .semibold, design: .monospaced)
         }
     }
+    var font: Font { font(size: 35) }
     var tracking: CGFloat { self == .cinematic ? 0.6 : 0 }
 }
 
