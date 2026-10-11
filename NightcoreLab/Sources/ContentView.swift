@@ -139,6 +139,12 @@ struct ContentView: View {
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
     @AppStorage("selectedTheme") private var currentTheme: AppTheme = .acid
+    @AppStorage("showDiscover") private var showDiscover = true
+    @AppStorage("showQueue") private var showQueue = true
+    @AppStorage("showPlaybackDetails") private var showPlaybackDetails = true
+    @AppStorage("showPresets") private var showPresets = true
+    @AppStorage("showAudioControls") private var showAudioControls = true
+    @AppStorage("showExport") private var showExport = true
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -146,6 +152,15 @@ struct ContentView: View {
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
     private var hasTrack: Bool { audio.fileName != nil }
+
+    /// Migrates the preference from the previous standalone Discover toggle.
+    private func restoreDiscoverVisibilityPreference() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "showDiscover") == nil,
+           let previous = defaults.object(forKey: "isDiscoverExpanded") as? Bool {
+            showDiscover = previous
+        }
+    }
 
     /// Tom resultante: 0 se "Manter o tom original", senão acompanha a velocidade (efeito vinil).
     private var computedPitch: Float {
@@ -192,7 +207,10 @@ struct ContentView: View {
 
     private var playerLifecycle: some View {
         playerCanvas
-        .onAppear { restoreLastSession() }
+        .onAppear {
+            restoreDiscoverVisibilityPreference()
+            restoreLastSession()
+        }
         .onOpenURL { incomingURL in
             guard let components = URLComponents(
                 url: incomingURL,
@@ -382,7 +400,8 @@ struct ContentView: View {
                         onRefreshSuggestions: { startRadio() },
                         onSelect: { track, _ in playTrack(track) },
                         onLink: { link in startDownload(link) },
-                        onServerSettings: { showServerSettings = true }
+                        onServerSettings: { showServerSettings = true },
+                        isDiscoverExpanded: $showDiscover
                     )
                     resumeSection
                     if downloader.isDownloading {
@@ -395,11 +414,33 @@ struct ContentView: View {
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
                     }
-                    if hasTrack { playbackDetails }
+                    if hasTrack {
+                        CollapsibleGlassSection(
+                            title: "REPRODUÇÃO", icon: "waveform",
+                            isExpanded: $showPlaybackDetails, tint: currentTheme.accent
+                        ) {
+                            playbackDetails
+                        }
+                    }
                     relatedSection
-                    presets
-                    controls
-                    exportSection
+                    CollapsibleGlassSection(
+                        title: "PRESETS", icon: "slider.horizontal.3",
+                        isExpanded: $showPresets, tint: currentTheme.accent
+                    ) {
+                        presets
+                    }
+                    CollapsibleGlassSection(
+                        title: "CONTROLES", icon: "dial.high",
+                        isExpanded: $showAudioControls, tint: currentTheme.accent
+                    ) {
+                        controls
+                    }
+                    CollapsibleGlassSection(
+                        title: "EXPORTAR", icon: "square.and.arrow.up",
+                        isExpanded: $showExport, tint: currentTheme.accent
+                    ) {
+                        exportSection
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -587,68 +628,64 @@ struct ContentView: View {
         }
     }
 
-    // Discovery and play-next are deliberately separate surfaces and data sources.
+    // The Up Next queue is separate from discovery and never loses playback state.
     private var relatedSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        CollapsibleGlassSection(
+            title: "A SEGUIR", icon: "list.dash",
+            isExpanded: $showQueue,
+            tint: currentTheme.accent,
+            detail: "\(playbackQueue.upNextQueue.count) na fila"
+        ) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("A SEGUIR", systemImage: "text.line.first.and.arrowtriangle.forward")
-                        .font(.caption.weight(.heavy))
-                        .tracking(1.5)
-                        .foregroundStyle(currentTheme.accent)
-                    Spacer()
-                    Text("\(playbackQueue.upNextQueue.count) na fila")
-                        .font(.caption2)
-                        .foregroundStyle(DS.Ink.secondary)
-                    radioButton
-                }
-                if playbackQueue.upNextQueue.isEmpty {
-                    Text(hasTrack ? "A fila está vazia. As próximas músicas aparecerão aqui." :
-                         "Escolha uma música para começar.")
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Ink.secondary)
-                } else {
-                    ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
-                        let track = playbackQueue.upNextQueue[index]
-                        let status = downloader.status(for: track)
-                        Button {
-                            playFromQueue(track)
-                        } label: {
-                            HStack(spacing: 10) {
-                                Text(String(format: "%02d", index + 1))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(currentTheme.accent)
-                                WebImage(url: track.thumbnailURL)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 42, height: 42)
-                                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(track.title)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.white)
-                                        .lineLimit(1)
-                                    Text(status == .none ? "Na fila" : status.shortDescription)
-                                        .font(.caption2)
-                                        .foregroundStyle(status == .downloaded
-                                            ? Color.green.opacity(0.85) : DS.Ink.secondary)
-                                }
-                                Spacer(minLength: 0)
-                                TrackStatusIndicator(status: status, accent: currentTheme.accent)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(audio.isExporting)
+                if currentTrack != nil {
+                    HStack {
+                        Spacer(minLength: 0)
+                        radioButton
                     }
                 }
+            if playbackQueue.upNextQueue.isEmpty {
+                Text(hasTrack ? "A fila está vazia. As próximas músicas aparecerão aqui." :
+                     "Escolha uma música para começar.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Ink.secondary)
+            } else {
+                ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
+                    let track = playbackQueue.upNextQueue[index]
+                    let status = downloader.status(for: track)
+                    Button {
+                        playFromQueue(track)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(String(format: "%02d", index + 1))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(currentTheme.accent)
+                            WebImage(url: track.thumbnailURL)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 42, height: 42)
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(track.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Text(status == .none ? "Na fila" : status.shortDescription)
+                                    .font(.caption2)
+                                    .foregroundStyle(status == .downloaded
+                                        ? Color.green.opacity(0.85) : DS.Ink.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            TrackStatusIndicator(status: status, accent: currentTheme.accent)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(audio.isExporting)
+                }
             }
-            .padding(14)
-            .glassSurface(RoundedRectangle(cornerRadius: 16), theme: currentTheme, depth: 0.6)
-
+            }
         }
     }
-
 
     private var durationText: String {
         let seconds = Int(audio.duration / Double(speed))
