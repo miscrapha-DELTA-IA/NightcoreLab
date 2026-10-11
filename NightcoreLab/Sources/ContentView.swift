@@ -108,8 +108,12 @@ struct ContentView: View {
     @State private var isDraggingTime = false
     @State private var dragProgress: Double = 0.0
 
-    /// Estilo do fundo do mini-player (botão de vinil): fosco → nítido → em movimento.
-    @State private var bgStyle: PlayerBackgroundStyle = .blurred
+    /// Estilo persistente: Turbulent é o padrão, mas o utilizador pode escolher outro.
+    @AppStorage("playerBackgroundStyle") private var bgStyleRaw = PlayerBackgroundStyle.turbulent.rawValue
+
+    private var bgStyle: PlayerBackgroundStyle {
+        PlayerBackgroundStyle(rawValue: bgStyleRaw) ?? .turbulent
+    }
 
     @State private var showImporter = false
     @State private var exportFormat: ExportFormat = .m4a
@@ -518,10 +522,9 @@ struct ContentView: View {
         // Fundo da capa: usa `.background` para ter exatamente o tamanho do card.
         // Uma imagem `scaledToFill` ou um `GeometryReader` como irmão no ZStack esticariam a altura.
         .background {
-            if let url = coverURL {
-                PlayerBackgroundView(style: bgStyle, imageURL: url)
-                    .id(url)
-            }
+            // Turbulent também aparece em músicas importadas sem thumbnail.
+            PlayerBackgroundView(style: bgStyle, imageURL: coverURL, theme: currentTheme)
+                .id(coverURL)
         }
         .clipShape(trackCardShape)
         .glassSurface(trackCardShape, theme: currentTheme, isActive: audio.isPlaying)
@@ -594,27 +597,39 @@ struct ContentView: View {
         .accessibilityValue("\\(Int(audio.playbackTime)) de \\(Int(audio.duration)) segundos")
     }
 
-    /// Botão vinil: avança o fundo do player em ciclo fosco → nítido → em movimento.
-    /// Sem capa não há o que estilizar, então fica desativado.
+    /// Menu explícito: a opção Turbulent não se confunde com a capa que desliza.
     private var bgStyleButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                bgStyle = bgStyle.next
+        Menu {
+            ForEach(PlayerBackgroundStyle.allCases, id: \.rawValue) { style in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        bgStyleRaw = style.rawValue
+                    }
+                } label: {
+                    Label(style.displayName,
+                          systemImage: style == bgStyle ? "checkmark.circle.fill" : style.symbolName)
+                }
             }
         } label: {
-            Image(systemName: "opticaldisc")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(currentTheme.accent)
-                .symbolEffect(.bounce, value: bgStyle)
-                .frame(width: 36, height: 36)
-                .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
+            VStack(spacing: 2) {
+                Image(systemName: bgStyle.symbolName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(currentTheme.accent)
+                    .frame(width: 36, height: 36)
+                    .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
+
+                Text(bgStyle == .turbulent ? "FLUIDO" : "FUNDO")
+                    .font(.system(size: 8, weight: .black, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(currentTheme.accent)
+            }
+            .frame(width: 48)
+            .contentShape(Rectangle())
         }
-        .disabled(coverURL == nil)
-        .opacity(coverURL == nil ? 0.4 : 1)
-        .sensoryFeedback(.selection, trigger: bgStyle)
-        .accessibilityLabel("Estilo do fundo do player")
+        .sensoryFeedback(.selection, trigger: bgStyleRaw)
+        .accessibilityLabel("Escolher estilo do fundo do player")
         .accessibilityValue(bgStyle.displayName)
-        .accessibilityHint("Alterna entre fosco, nítido e em movimento")
+        .accessibilityHint("Fosco, Nítido, Em movimento ou Turbulent Displacement")
     }
 
     @ViewBuilder
