@@ -129,7 +129,7 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                     unifiedPlayerCard
                         .padding(.horizontal, 20)
                         // Keep the overlay controls in their own row.
-                        .padding(.top, 74)
+                        .padding(.top, 70)
                         .hideablePanel(.player, edge: .top)
                 }
 
@@ -199,7 +199,7 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
     /// A antiga janela Reprodução agora é a metade inferior deste cartão.
     /// O mesmo card recebe a capa, transporte, scrubber e metal líquido.
     private var unifiedPlayerCard: some View {
-        VStack(spacing: showsKaraoke ? 0 : 10) {
+        VStack(spacing: showsKaraoke ? 0 : 8) {
             PlayerHeader(
                 track: track,
                 isPlaying: isPlaying,
@@ -211,11 +211,11 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
             )
             if !showsKaraoke {
                 playerDetails()
-                    .padding(.top, 4)
+                    .padding(.top, 2)
             }
         }
-        .padding(.horizontal, showsKaraoke ? 12 : 14)
-        .padding(.vertical, showsKaraoke ? 10 : 14)
+        .padding(.horizontal, showsKaraoke ? 12 : 12)
+        .padding(.vertical, showsKaraoke ? 10 : 11)
         .background {
             if !showsKaraoke {
                 PlayerBackgroundView(style: playerBackgroundStyle,
@@ -321,10 +321,10 @@ private struct PlayerHeader: View {
     var body: some View {
         // Vertical (player aberto) <-> horizontal (mini-player no topo).
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12))
-                             : AnyLayout(VStackLayout(spacing: 11))
+                             : AnyLayout(VStackLayout(spacing: 9))
         layout {
             CoverArt(url: track.coverURL)
-                .frame(width: compact ? 52 : 192, height: compact ? 52 : 192)
+                .frame(width: compact ? 52 : 174, height: compact ? 52 : 174)
                 .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 28, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: compact ? 6 : 30, y: compact ? 2 : 14)
 
@@ -358,7 +358,7 @@ private struct Transport: View {
                     .font(.title2)
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(.black)
-                    .frame(width: compact ? 44 : 64, height: compact ? 44 : 64)
+                    .frame(width: compact ? 44 : 60, height: compact ? 44 : 60)
                     .background(.white, in: Circle())
             }
             .buttonStyle(.plain)

@@ -175,6 +175,37 @@ final class PanelSystemTests: XCTestCase {
     }
 
     @MainActor
+    func testDiscoveryWorkspaceBulkToggleUpdatesAllPanelsAndKeepsUnrelatedChoices() {
+        withDefaults { defaults in
+            let store = PanelStore(defaults: defaults)
+            XCTAssertEqual(PanelID.discoveryPanels, [.omnibox, .discover, .queue, .presets])
+            store.setVisible(false, for: PanelID.discoveryPanels)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 4)
+            XCTAssertTrue(store.isVisible(.player))
+            XCTAssertTrue(store.isVisible(.controls))
+            store.setVisible(true, for: PanelID.discoveryPanels)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 0)
+            XCTAssertTrue(PanelStore(defaults: defaults).hidden.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testBatchVisibilityAlwaysExitsZenWithoutLosingPreviousPreferences() {
+        withDefaults { defaults in
+            let store = PanelStore(defaults: defaults)
+            store.setVisible(false, for: .header)
+            store.setZen(true)
+            store.setVisible(false, for: [.omnibox, .queue])
+            XCTAssertFalse(store.isZen)
+            XCTAssertFalse(store.isVisible(.header))
+            XCTAssertFalse(store.isVisible(.queue))
+            XCTAssertTrue(store.isVisible(.player))
+            store.setVisible(true, for: [.omnibox, .queue])
+            XCTAssertEqual(store.hidden, [.header])
+        }
+    }
+
+    @MainActor
     func testSearchRevealIsTemporaryAndNeverWritesPreferences() {
         withDefaults { defaults in
             let store = PanelStore(defaults: defaults)

@@ -5,8 +5,8 @@ import Observation
 // Ocultar/exibir "janelas" sem mexer no visual delas.
 //
 //  • Cada painel ganha UMA linha:  .hideablePanel(.lyrics, edge: .bottom)
-//  • Um botão de olho no canto abre o menu com um toque simples.
-//  • O menu oferece "Mostrar tudo", modo Zen e toggles por painel.
+//  • O olho abre um popover persistente: alternar vários painéis sem sair.
+//  • O editor oferece layouts rápidos, grupos e toggles individuais.
 //  • Zen NÃO altera a escolha individual: ao sair, cada painel volta como estava.
 //  • Nada de alças/badges nos painéis: a estética original fica intacta.
 // =============================================================================
@@ -15,6 +15,7 @@ enum PanelID: String, CaseIterable, Identifiable {
     case header, player, lyrics, themes, controls
     case omnibox, discover, queue, presets, export
 
+    static let discoveryPanels: [PanelID] = [.omnibox, .discover, .queue, .presets]
     static let mainPanels: [PanelID] = [.header, .player, .omnibox, .discover, .queue, .presets, .controls, .export]
     static let karaokePanels: [PanelID] = [.player, .lyrics, .themes]
     // Telas novas: adicione um case + título + ícone aqui.
@@ -125,9 +126,14 @@ final class PanelStore {
     func toggle(_ id: PanelID) { setVisible(isHidden(id), for: id) }
 
     func setVisible(_ visible: Bool, for id: PanelID) {
+        setVisible(visible, for: [id])
+    }
+
+    /// Batch updates are atomic: one animation and one saved preference per tap.
+    func setVisible(_ visible: Bool, for ids: [PanelID]) {
         withAnimation(Self.motion) {
             isZen = false
-            if visible { hidden.remove(id) } else { hidden.insert(id) }
+            if visible { hidden.subtract(ids) } else { hidden.formUnion(ids) }
         }
         persist()
     }
@@ -221,31 +227,16 @@ extension AnyTransition {
     }
 }
 
-// MARK: - Botão de olho (toque = menu de painéis e restauração)
+// MARK: - Editor persistente de visibilidade
 
 struct PanelsMenuButton: View {
-    let panels: [PanelID]                       // só os painéis que existem na tela atual
+    let panels: [PanelID]
     @Environment(PanelStore.self) private var store
+    @State private var isEditorPresented = false
 
     var body: some View {
-        Menu {
-            Section("Layouts em um toque") {
-                Button("Mostrar tudo", systemImage: "eye") { store.showAll() }
-                Button("Essencial", systemImage: "square.grid.2x2") { store.apply(.balanced) }
-                Button("Só ouvir", systemImage: "headphones") { store.apply(.listen) }
-                Button("Ocultar seções desta tela", systemImage: "rectangle.slash") {
-                    store.hideAll(in: panels)
-                }
-                Button(store.isZen ? "Sair do modo Zen" : "Fundo livre (Zen)",
-                       systemImage: "eye.slash") { store.toggleZen() }
-            }
-            Section("Personalizar painéis") {
-                ForEach(panels) { id in
-                    Toggle(isOn: Binding(get: { !store.isHidden(id) }, set: { store.setVisible($0, for: id) })) {
-                        Label(id.title, systemImage: id.icon)
-                    }
-                }
-            }
+        Button {
+            isEditorPresented = true
         } label: {
             Image(systemName: store.isZen ? "eye.slash.fill" : "eye")
                 .font(.system(size: 18, weight: .semibold))
@@ -253,10 +244,126 @@ struct PanelsMenuButton: View {
                 .environmentButtonSurface()
                 .foregroundStyle(.white)
         }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isEditorPresented, arrowEdge: .top) {
+            PanelVisibilityEditor(panels: panels)
+                .presentationCompactAdaptation(.popover)
+        }
         .accessibilityLabel("Gerenciar painéis")
         .accessibilityValue(store.isZen ? "Modo Zen ativado" : "Modo Zen desativado")
         .accessibilityAction(named: Text("Alternar modo Zen")) { store.toggleZen() }
         .accessibilityAction(named: Text("Mostrar tudo")) { store.showAll() }
-        .accessibilityHint("Toque para abrir o menu, mostrar painéis ocultos ou escolher o modo Zen.")
+        .accessibilityHint("Abre o editor. Alterne várias janelas sem fechar o painel.")
+    }
+}
+
+/// Unlike a Menu, a popover does not dismiss after every switch or preset.
+private struct PanelVisibilityEditor: View {
+    let panels: [PanelID]
+    @Environment(PanelStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    private var discoveryIDs: [PanelID] {
+        PanelID.discoveryPanels.filter { panels.contains($0) }
+    }
+    private var otherIDs: [PanelID] {
+        panels.filter { !PanelID.discoveryPanels.contains($0) }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Label("Exibição", systemImage: "eye")
+                        .font(.headline)
+                    Spacer()
+                    Button("Concluído") { dismiss() }
+                        .font(.subheadline.weight(.semibold))
+                }
+
+                Text("Escolha quantos painéis quiser. Este editor permanece aberto.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("LAYOUTS RÁPIDOS")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        quickLayout("Tudo", symbol: "eye") { store.showAll() }
+                        quickLayout("Essencial", symbol: "square.grid.2x2") { store.apply(.balanced) }
+                        quickLayout("Só ouvir", symbol: "headphones") { store.apply(.listen) }
+                    }
+                    Button {
+                        store.toggleZen()
+                    } label: {
+                        Label(store.isZen ? "Sair do Zen" : "Fundo livre (Zen)",
+                              systemImage: "eye.slash")
+                    }
+                    .font(.subheadline)
+                    .buttonStyle(.plain)
+                }
+                Divider()
+
+                if !discoveryIDs.isEmpty {
+                    HStack {
+                        Text("MÚSICAS · BUSCA E DESCOBERTA")
+                            .font(.caption2.weight(.heavy))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Button("Tudo") { store.setVisible(true, for: discoveryIDs) }
+                            .font(.caption.weight(.semibold))
+                        Button("Nada") { store.setVisible(false, for: discoveryIDs) }
+                            .font(.caption.weight(.semibold))
+                    }
+                    ForEach(discoveryIDs) { id in panelToggle(id) }
+                    Divider()
+                }
+
+                if !otherIDs.isEmpty {
+                    Text("OUTRAS JANELAS")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(.secondary)
+                    ForEach(otherIDs) { id in panelToggle(id) }
+                }
+
+                Button {
+                    store.hideAll(in: panels)
+                } label: {
+                    Label("Ocultar janelas desta tela", systemImage: "rectangle.slash")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(18)
+        }
+        .frame(width: 330, height: 480)
+        .tint(.primary)
+    }
+
+    private func quickLayout(_ title: String, symbol: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: symbol)
+                Text(title).font(.caption2.weight(.semibold)).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func panelToggle(_ id: PanelID) -> some View {
+        Toggle(isOn: Binding(
+            get: { !store.isHidden(id) },
+            set: { store.setVisible($0, for: id) }
+        )) {
+            Label(id.title, systemImage: id.icon)
+                .font(.subheadline)
+        }
+        .toggleStyle(.switch)
     }
 }

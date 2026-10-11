@@ -144,6 +144,7 @@ struct ContentView: View {
     @AppStorage("lyricsCleanMode") private var lyricsCleanMode = true
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
+    @AppStorage("showMusicWorkspace") private var isMusicWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
     @AppStorage("showPresets") private var isPresetsExpanded = true
     @AppStorage("showAudioControls") private var isControlsExpanded = true
@@ -160,6 +161,9 @@ struct ContentView: View {
 
     private var hasTrack: Bool { audio.fileName != nil }
     private var hiddenMainPanelCount: Int { panels.hiddenCount(in: PanelID.mainPanels) }
+    private var hasMusicPanels: Bool {
+        PanelID.discoveryPanels.contains { panels.isVisible($0) }
+    }
 
     /// Migrates the preference from the previous standalone Discover toggle.
     private func restoreDiscoverExpansionPreference() {
@@ -389,19 +393,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: DS.Spacing.l) {
                     header.hideablePanel(.header, edge: .top)
-                    SearchView(
-                        downloader: downloader, theme: currentTheme,
-                        isEnabled: !audio.isExporting,
-                        suggestedTracks: relatedVideos,
-                        isLoadingSuggestions: isLoadingRelated,
-                        canRefreshSuggestions: currentTrack != nil,
-                        onRefreshSuggestions: { startRadio() },
-                        onSelect: { track, _ in playTrack(track) },
-                        onLink: { link in startDownload(link) },
-                        onServerSettings: { showServerSettings = true },
-                        isDiscoverExpanded: $isDiscoverExpanded,
-                        isPresented: !(hasTrack && currentTrack != nil && showLyrics)
-                    )
+                    musicWorkspace
                     if hiddenMainPanelCount > 0 {
                         HStack(spacing: 10) {
                             Image(systemName: "eye.slash")
@@ -431,14 +423,6 @@ struct ContentView: View {
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
                     }
-                    relatedSection.hideablePanel(.queue)
-                    CollapsibleGlassSection(
-                        title: "PRESETS", icon: "slider.horizontal.3",
-                        isExpanded: $isPresetsExpanded, tint: currentTheme.accent
-                    ) {
-                        presets
-                    }
-                    .hideablePanel(.presets)
                     CollapsibleGlassSection(
                         title: "CONTROLES", icon: "dial.high",
                         isExpanded: $isControlsExpanded, tint: currentTheme.accent
@@ -462,6 +446,80 @@ struct ContentView: View {
             .scrollDismissesKeyboard(.interactively)
             .scrollDisabled(isAdjustingSlider)
             .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
+    }
+
+    /// Uma superfície única para busca, descoberta, próximas faixas e presets.
+    /// Mantém a SearchView montada mesmo recolhida para preservar busca e cache.
+    private var musicWorkspace: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.smooth(duration: 0.32)) {
+                    isMusicWorkspaceExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "square.stack.3d.up")
+                    Text("MÚSICAS")
+                        .font(.caption.bold())
+                        .tracking(1.3)
+                    Spacer()
+                    Image(systemName: isMusicWorkspaceExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(currentTheme.accent)
+                .frame(minHeight: 30)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Área de busca, descoberta, fila e presets")
+            .accessibilityValue(isMusicWorkspaceExpanded ? "Expandida" : "Recolhida")
+
+            VStack(alignment: .leading, spacing: 10) {
+                SearchView(
+                    downloader: downloader, theme: currentTheme,
+                    isEnabled: !audio.isExporting,
+                    suggestedTracks: relatedVideos,
+                    isLoadingSuggestions: isLoadingRelated,
+                    canRefreshSuggestions: currentTrack != nil,
+                    onRefreshSuggestions: { startRadio() },
+                    onSelect: { track, _ in playTrack(track) },
+                    onLink: { link in startDownload(link) },
+                    onServerSettings: { showServerSettings = true },
+                    isDiscoverExpanded: $isDiscoverExpanded,
+                    isPresented: !(hasTrack && currentTrack != nil && showLyrics),
+                    integrated: true
+                )
+                relatedSection.hideablePanel(.queue)
+                CollapsibleGlassSection(
+                    title: "PRESETS", icon: "slider.horizontal.3",
+                    isExpanded: $isPresetsExpanded,
+                    tint: currentTheme.accent,
+                    integrated: true
+                ) {
+                    presets
+                }
+                .hideablePanel(.presets)
+            }
+            .frame(height: isMusicWorkspaceExpanded ? nil : 0, alignment: .top)
+            .opacity(isMusicWorkspaceExpanded ? 1 : 0)
+            .clipped()
+            .allowsHitTesting(isMusicWorkspaceExpanded)
+            .accessibilityHidden(!isMusicWorkspaceExpanded)
+        }
+        .padding(14)
+        .background(.ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        // Hide the whole workspace without unmounting the omnibox and its state.
+        .frame(height: hasMusicPanels ? nil : 0, alignment: .top)
+        .opacity(hasMusicPanels ? 1 : 0)
+        .clipped()
+        .allowsHitTesting(hasMusicPanels)
+        .accessibilityHidden(!hasMusicPanels)
     }
 
     // Kept outside the main body to avoid SwiftUI's expression type-check explosion.
@@ -633,7 +691,8 @@ struct ContentView: View {
             title: "A SEGUIR", icon: "list.dash",
             isExpanded: $isQueueExpanded,
             tint: currentTheme.accent,
-            detail: "\(playbackQueue.upNextQueue.count) na fila"
+            detail: "\(playbackQueue.upNextQueue.count) na fila",
+            integrated: true
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 if currentTrack != nil {

@@ -22,6 +22,7 @@ struct SearchView: View {
     let onServerSettings: () -> Void
     @Binding var isDiscoverExpanded: Bool
     let isPresented: Bool
+    var integrated: Bool = false
     @Environment(PanelStore.self) private var panels
     @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -175,7 +176,8 @@ struct SearchView: View {
                     title: "DESCOBRIR",
                     icon: "sparkles",
                     isExpanded: discoverExpansion,
-                    tint: theme.accent
+                    tint: theme.accent,
+                    integrated: integrated
                 ) {
                 VStack(alignment: .leading, spacing: 12) {
                     if isSearchMode {

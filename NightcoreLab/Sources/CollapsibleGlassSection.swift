@@ -9,6 +9,7 @@ struct CollapsibleGlassSection<Content: View>: View {
     @Binding var isExpanded: Bool
     var tint: Color = .white
     var detail: String? = nil
+    var integrated: Bool = false
     @ViewBuilder let content: () -> Content
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -54,12 +55,19 @@ struct CollapsibleGlassSection<Content: View>: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(integrated ? 0 : 14)
+        .background {
+            if !integrated {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            }
+        }
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                .allowsHitTesting(false)
+            if !integrated {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
         }
     }
 }
