@@ -113,7 +113,7 @@ struct LyricsView: View {
     @AppStorage("lyricsColorMode") private var colorMode: LyricsColorMode = .artwork
 
     private var lyricAccent: Color {
-        if inline { return theme.accent }
+        // A escolha do Control Center também afeta as letras no karaokê inline.
         switch colorMode {
         // If the artwork is grayscale/unavailable, use readable neutral white,
         // never the theme color; otherwise the two choices looked identical.
