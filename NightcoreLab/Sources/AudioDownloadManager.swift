@@ -61,6 +61,11 @@ final class AudioDownloadManager: ObservableObject {
 
     func cachedTrack(_ track: Track) -> Track {
         var result = cache.entries[track.id]?.track ?? track
+        // Metadata YT Music não pode ser perdido quando o arquivo já existe em cache.
+        result.cleanArtist = track.cleanArtist ?? result.cleanArtist
+        result.cleanTitle = track.cleanTitle ?? result.cleanTitle
+        result.album = track.album ?? result.album
+        result.duration = track.duration ?? result.duration
         result.isCached = cache.localURL(for: track.id) != nil
         return result
     }

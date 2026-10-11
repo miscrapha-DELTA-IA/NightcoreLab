@@ -209,7 +209,7 @@ final class OmniboxEngine {
         }
     }
 
-    private nonisolated func fetch<T: Decodable>(_ type: T.Type, _ path: String, _ q: String) async throws -> T {
+    private func fetch<T: Decodable>(_ type: T.Type, _ path: String, _ q: String) async throws -> T {
         var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "q", value: q)]
         let (data, resp) = try await session.data(from: comps.url!)
