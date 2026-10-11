@@ -53,6 +53,25 @@ final class ShareSnapshotTests: XCTestCase {
         }
     }
 
+    /// Attach the portrait image for every theme to the CI test bundle for visual review.
+    @MainActor
+    func testShareCardVisualCatalogForAllSeventeenThemes() async throws {
+        for theme in AppTheme.allCases {
+            try Task.checkCancellation()
+            let snapshot = ShareSnapshot(trackID: "demo", title: "Nightcore • 120 BPM",
+                artist: "Artist & Friends", artworkURL: nil,
+                theme: theme, visualStyle: .marble,
+                marblePhase: 4.75, timestamp: .now)
+            let image = try await ShareRenderer.render(snapshot)
+            XCTAssertEqual(image.size.width * image.scale, 1080, accuracy: 1)
+            XCTAssertEqual(image.size.height * image.scale, 1920, accuracy: 1)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "NightcoreLab Share Card — \(theme.displayName)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     @MainActor
     func testImageRendererProducesPortraitCardWithoutNetwork() async throws {
         let sample = ShareSnapshot(trackID: "a", title: "NightcoreLab",
