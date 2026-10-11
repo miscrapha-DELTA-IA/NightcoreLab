@@ -61,6 +61,12 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     let canSkipNext: Bool
     @Binding var appTheme: AppTheme
     @Binding var isKaraokeMode: Bool
+    @Binding var visibleDiscover: Bool
+    @Binding var visibleQueue: Bool
+    @Binding var visiblePlayback: Bool
+    @Binding var visiblePresets: Bool
+    @Binding var visibleControls: Bool
+    @Binding var visibleExport: Bool
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -133,10 +139,13 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
         }
         .overlay(alignment: .topLeading) {
             if !isKaraokeMode {
-                zenButton
-                    .padding(.top, 16)
-                    .padding(.leading, 16)
-                    .transition(.opacity)
+                HStack(spacing: 8) {
+                    zenButton
+                    layoutMenu
+                }
+                .padding(.top, 16)
+                .padding(.leading, 16)
+                .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -145,6 +154,30 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
+    }
+
+    /// Menu disponível mesmo em Zen Mode; não altera as preferências de expansão.
+    private var layoutMenu: some View {
+        Menu {
+            Section("Música e sugestões") {
+                Toggle("Descobrir", isOn: $visibleDiscover)
+                Toggle("A Seguir", isOn: $visibleQueue)
+                Toggle("Reprodução", isOn: $visiblePlayback)
+            }
+            Section("Ferramentas") {
+                Toggle("Presets", isOn: $visiblePresets)
+                Toggle("Controles", isOn: $visibleControls)
+                Toggle("Exportar", isOn: $visibleExport)
+            }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.10), in: Circle())
+                .foregroundStyle(.white)
+        }
+        .accessibilityLabel("Personalizar seções visíveis")
+        .accessibilityHint("Mostrar ou ocultar Descobrir, A Seguir e demais painéis")
     }
 
     /// Contraponto do botão do karaokê: mantém-se acessível mesmo sem faixa.
