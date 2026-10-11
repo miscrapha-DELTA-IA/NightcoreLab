@@ -105,10 +105,23 @@ enum LyricsMatcher {
     static func best(_ records: [LyricsRecord], youtubeTitle: String,
                      audioDuration: TimeInterval) -> LyricsRecord? {
         guard let identity = identity(from: youtubeTitle) else { return nil }
-        return records.filter { isTrusted($0, identity: identity, audioDuration: audioDuration) }
-            .min { left, right in
-                abs(left.duration - audioDuration) < abs(right.duration - audioDuration)
-            }
+        let trusted = records.filter {
+            isTrusted($0, identity: identity, audioDuration: audioDuration)
+        }
+        // Without artist metadata, identical titles from different artists cannot
+        // be disambiguated safely by duration alone.
+        if identity.artist == nil {
+            let artists = Set(trusted.map { normalized($0.artistName) })
+            if artists.count > 1 { return nil }
+        }
+        // When both static and timed records are trusted, prefer karaoke timing.
+        let synchronized = trusted.filter {
+            !($0.syncedLyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let eligible = synchronized.isEmpty ? trusted : synchronized
+        return eligible.min { left, right in
+            abs(left.duration - audioDuration) < abs(right.duration - audioDuration)
+        }
     }
 
     static func sorted(_ records: [LyricsRecord], for identity: LyricsIdentity?,
