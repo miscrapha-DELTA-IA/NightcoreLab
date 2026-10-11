@@ -128,7 +128,11 @@ struct ContentView: View {
         keepOriginalPitch ? 0 : 1200 * log2(speed)
     }
 
-    var body: some View {
+    var body: some View { playerPresentations }
+
+    // Splitting the chains keeps the same lifecycle and modal behavior while
+    // avoiding a single giant generic expression in the SwiftUI type checker.
+    private var playerCanvas: some View {
         ZStack {
             // Luz ambiente na cor do tema: troca com crossfade.
             AmbientBackground(theme: currentTheme)
@@ -156,6 +160,10 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.8), value: coverURL)
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
+    }
+
+    private var playerLifecycle: some View {
+        playerCanvas
         .onAppear { restoreLastSession() }
         .onOpenURL { incomingURL in
             guard let components = URLComponents(
@@ -217,6 +225,10 @@ struct ContentView: View {
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
         }
         .task { downloader.warmUp() }
+    }
+
+    private var playerPresentations: some View {
+        playerLifecycle
         .sheet(isPresented: $showLyrics) {
             if let currentTrack {
                 LyricsView(track: currentTrack, audio: audio, theme: currentTheme,
