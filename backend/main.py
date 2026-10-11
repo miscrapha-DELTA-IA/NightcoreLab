@@ -17,7 +17,7 @@ instala "yt-dlp[default]" (traz o yt-dlp-ejs) e o pacote "deno" (binário oficia
 
 Variáveis de ambiente opcionais:
     MAX_DURATION_SECONDS      limite fixo de segurança: duração inferior a 600 s (10 min)
-    MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 2; protege os 512 MB do tier gratuito)
+    MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 1, máximo 2; protege 512 MB de RAM)
     COOKIES_FILE              caminho de um cookies.txt (formato Netscape) para contornar a
                               verificação anti-bot do YouTube. No Render, use um Secret File:
                               /etc/secrets/<nome do Secret File>. O nome precisa bater
@@ -31,6 +31,7 @@ from __future__ import annotations
 import importlib.util
 import asyncio
 import contextlib
+import concurrent.futures
 from dataclasses import dataclass
 import json
 import logging
@@ -52,7 +53,10 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, HttpUrl
 
 MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
-MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
+# A 512 MiB Render container defaults to one extraction; two is the hard cap.
+MAX_CONCURRENT_DOWNLOADS = min(max(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "1")), 1), 2)
+MAX_PENDING_DOWNLOADS = 4
+CONCURRENT_FRAGMENTS = 2
 MAX_CACHE_BYTES = 300 * 1024 * 1024
 CACHE_DIR = Path(os.getenv("AUDIO_CACHE_DIR", tempfile.gettempdir())) / "nightcore_audio_cache"
 COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
@@ -150,7 +154,15 @@ def _cache_extracted_audio(video_id: str, result: tuple[Path, str, str | None, s
         return result
 
 
-download_semaphore = asyncio.Semaphore(min(MAX_CONCURRENT_DOWNLOADS, 2))
+# Only costly yt-dlp extraction uses this pool: it has precisely two workers.
+# FastAPI sync endpoints and cache/file operations use their own thread facilities.
+executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="nightcore-ytdlp"
+)
+# /related uses yt-dlp on the framework's sync threadpool, so share a single
+# two-operation gate with downloads to prevent bypassing the extraction cap.
+_heavy_ytdlp_slots = threading.BoundedSemaphore(2)
+download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 @dataclass
 class InFlightDownload:
@@ -236,6 +248,9 @@ def related(url: HttpUrl):
     video_id = _youtube_video_id(str(url))
     if not _related_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="Sugestões ocupadas. Tente novamente.")
+    if not _heavy_ytdlp_slots.acquire(blocking=False):
+        _related_slots.release()
+        raise HTTPException(status_code=429, detail="Servidor ocupado. Tente novamente.")
     try:
         options = {
             "extract_flat": True,
@@ -265,6 +280,7 @@ def related(url: HttpUrl):
         log.exception("Erro ao consultar sugestões para %s", video_id)
         raise HTTPException(status_code=503, detail="Sugestões temporariamente indisponíveis.")
     finally:
+        _heavy_ytdlp_slots.release()
         _related_slots.release()
 
 
@@ -390,26 +406,33 @@ def _secret_file_names() -> list[str]:
 
 
 def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
-    """Blocking yt-dlp work runs in a worker thread, never on the event loop."""
-    _sweep_stale_work_dirs()  # Runs in asyncio.to_thread, not on the event loop.
-    work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
-    try:
-        audio_path, title, thumbnail = _extract_m4a(url, work_dir)
-        return audio_path, title, thumbnail, work_dir
-    except BaseException:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise
+    """All synchronous yt-dlp work is bounded by an actual worker lifetime.
+
+    The threading gate remains acquired until the worker exits, even when its
+    asyncio waiter is cancelled (run_in_executor cannot kill running threads).
+    """
+    with _heavy_ytdlp_slots:
+        _sweep_stale_work_dirs()
+        work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
+        try:
+            audio_path, title, thumbnail = _extract_m4a(url, work_dir)
+            return audio_path, title, thumbnail, work_dir
+        except BaseException:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise
 
 
 async def _shared_extraction(url: str):
     # The semaphore is always released by the context manager, including on failure.
-    # Do not cancel to_thread on client disconnect: the blocking worker cannot be killed.
+    # The outer semaphore bounds scheduled extractions. The thread-level gate
+    # remains held even if a client disconnects while a worker is still running.
     async with download_semaphore:
+        loop = asyncio.get_running_loop()
         try:
-            result = await asyncio.to_thread(_run_extraction, url)
+            result = await loop.run_in_executor(executor, _run_extraction, url)
             return await asyncio.to_thread(_cache_extracted_audio, _youtube_video_id(url), result)
         finally:
-            log.debug("yt-dlp worker finished or cancelled for %s", url)
+            log.debug("yt-dlp extraction settled for %s", url)
 
 
 async def _cleanup_orphan(video_id: str, entry: InFlightDownload) -> None:
@@ -456,6 +479,10 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         if hit is not None:
             _release_cached_reader(video_id)
     if entry is None:
+        # Bound distinct queued video IDs as well as actual worker count.
+        # Otherwise thousands of unique requests still allocate tasks in RAM.
+        if len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
+            raise HTTPException(status_code=429, detail="Fila de downloads ocupada. Tente novamente.")
         entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
         in_flight_downloads[video_id] = entry
         entry.task.add_done_callback(lambda _, vid=video_id, item=entry: asyncio.create_task(_cleanup_orphan(vid, item)))
@@ -608,7 +635,7 @@ def _extract_with(url: str, work_dir: str, label: str,
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,
-        "concurrent_fragment_downloads": 4,  # only segmented DASH/HLS; no effect on single-file m4a
+        "concurrent_fragment_downloads": CONCURRENT_FRAGMENTS,  # bounded DASH/HLS requests
     }
     if clients:
         ydl_opts["extractor_args"] = {"youtube": {"player_client": clients}}
