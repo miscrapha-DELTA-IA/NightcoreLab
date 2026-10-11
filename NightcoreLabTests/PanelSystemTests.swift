@@ -110,7 +110,7 @@ final class PanelSystemTests: XCTestCase {
             XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }),
                            [.header, .player, .omnibox, .discover, .queue, .controls])
             store.apply(.listen)
-            XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }), [.player, .controls])
+            XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }), [.player, .presets, .controls])
             XCTAssertTrue(store.isVisible(.lyrics))
             XCTAssertTrue(store.isVisible(.themes))
             XCTAssertEqual(PanelStore(defaults: defaults).hidden, store.hidden)
@@ -178,13 +178,31 @@ final class PanelSystemTests: XCTestCase {
     func testDiscoveryWorkspaceBulkToggleUpdatesAllPanelsAndKeepsUnrelatedChoices() {
         withDefaults { defaults in
             let store = PanelStore(defaults: defaults)
-            XCTAssertEqual(PanelID.discoveryPanels, [.omnibox, .discover, .queue, .presets])
+            XCTAssertEqual(PanelID.discoveryPanels, [.omnibox, .discover, .queue])
+            XCTAssertEqual(PanelID.audioPanels, [.presets, .controls])
             store.setVisible(false, for: PanelID.discoveryPanels)
-            XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 4)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 3)
             XCTAssertTrue(store.isVisible(.player))
+            XCTAssertTrue(store.isVisible(.presets))
             XCTAssertTrue(store.isVisible(.controls))
             store.setVisible(true, for: PanelID.discoveryPanels)
             XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 0)
+            XCTAssertTrue(PanelStore(defaults: defaults).hidden.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testAudioWorkspaceBulkVisibilityDoesNotHideMusicDiscovery() {
+        withDefaults { defaults in
+            let store = PanelStore(defaults: defaults)
+            store.setVisible(false, for: PanelID.audioPanels)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.audioPanels), 2)
+            XCTAssertTrue(store.isVisible(.omnibox))
+            XCTAssertTrue(store.isVisible(.queue))
+            store.setVisible(true, for: .presets)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.audioPanels), 1)
+            XCTAssertFalse(store.isVisible(.controls))
+            store.setVisible(true, for: PanelID.audioPanels)
             XCTAssertTrue(PanelStore(defaults: defaults).hidden.isEmpty)
         }
     }

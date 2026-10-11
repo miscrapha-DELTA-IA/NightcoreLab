@@ -16,14 +16,34 @@ struct CollapsibleGlassSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(reduceMotion
-                    ? .easeInOut(duration: 0.2)
-                    : .spring(response: 0.4, dampingFraction: 0.8)) {
-                    isExpanded.toggle()
-                }
-            } label: {
+            if integrated {
                 HStack(spacing: 9) {
+                    Image(systemName: icon)
+                    Text(title.uppercased())
+                        .font(.caption.bold())
+                        .tracking(1.3)
+                    Spacer(minLength: 8)
+                    if let detail {
+                        Text(detail)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.60))
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity, minHeight: 30)
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            } else {
+                Button {
+                    withAnimation(reduceMotion
+                        ? .easeInOut(duration: 0.2)
+                        : .spring(response: 0.4, dampingFraction: 0.8)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 9) {
                     Image(systemName: icon)
                     Text(title.uppercased())
                         .font(.caption.bold())
@@ -48,11 +68,12 @@ struct CollapsibleGlassSection<Content: View>: View {
             .accessibilityValue(isExpanded ? "Expandido" : "Recolhido")
             .accessibilityHint(isExpanded ? "Toque para recolher" : "Toque para expandir")
 
-            if isExpanded {
-                content()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 12)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                if isExpanded {
+                    content()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 12)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
         .padding(integrated ? 0 : 14)

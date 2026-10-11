@@ -324,7 +324,7 @@ private struct PlayerHeader: View {
                              : AnyLayout(VStackLayout(spacing: 9))
         layout {
             CoverArt(url: track.coverURL)
-                .frame(width: compact ? 52 : 174, height: compact ? 52 : 174)
+                .frame(width: compact ? 52 : 164, height: compact ? 52 : 164)
                 .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 28, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: compact ? 6 : 30, y: compact ? 2 : 14)
 

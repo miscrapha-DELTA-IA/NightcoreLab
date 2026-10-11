@@ -145,9 +145,8 @@ struct ContentView: View {
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
     @AppStorage("showMusicWorkspace") private var isMusicWorkspaceExpanded = true
+    @AppStorage("showAudioWorkspace") private var isAudioWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
-    @AppStorage("showPresets") private var isPresetsExpanded = true
-    @AppStorage("showAudioControls") private var isControlsExpanded = true
     @AppStorage("showExport") private var isExportExpanded = true
 
     @Environment(LyricsStore.self) private var lyricsStore
@@ -163,6 +162,9 @@ struct ContentView: View {
     private var hiddenMainPanelCount: Int { panels.hiddenCount(in: PanelID.mainPanels) }
     private var hasMusicPanels: Bool {
         PanelID.discoveryPanels.contains { panels.isVisible($0) }
+    }
+    private var hasAudioPanels: Bool {
+        PanelID.audioPanels.contains { panels.isVisible($0) }
     }
 
     /// Migrates the preference from the previous standalone Discover toggle.
@@ -423,13 +425,7 @@ struct ContentView: View {
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
                     }
-                    CollapsibleGlassSection(
-                        title: "CONTROLES", icon: "dial.high",
-                        isExpanded: $isControlsExpanded, tint: currentTheme.accent
-                    ) {
-                        controls
-                    }
-                    .hideablePanel(.controls)
+                    audioWorkspace
                     CollapsibleGlassSection(
                         title: "EXPORTAR", icon: "square.and.arrow.up",
                         isExpanded: $isExportExpanded, tint: currentTheme.accent
@@ -448,7 +444,7 @@ struct ContentView: View {
             .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
     }
 
-    /// Uma superfície única para busca, descoberta, próximas faixas e presets.
+    /// Uma superfície única para busca, descoberta e próximas faixas.
     /// Mantém a SearchView montada mesmo recolhida para preservar busca e cache.
     private var musicWorkspace: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -471,7 +467,7 @@ struct ContentView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Área de busca, descoberta, fila e presets")
+            .accessibilityLabel("Área de busca, descoberta e fila")
             .accessibilityValue(isMusicWorkspaceExpanded ? "Expandida" : "Recolhida")
 
             VStack(alignment: .leading, spacing: 10) {
@@ -490,15 +486,6 @@ struct ContentView: View {
                     integrated: true
                 )
                 relatedSection.hideablePanel(.queue)
-                CollapsibleGlassSection(
-                    title: "PRESETS", icon: "slider.horizontal.3",
-                    isExpanded: $isPresetsExpanded,
-                    tint: currentTheme.accent,
-                    integrated: true
-                ) {
-                    presets
-                }
-                .hideablePanel(.presets)
             }
             .frame(height: isMusicWorkspaceExpanded ? nil : 0, alignment: .top)
             .opacity(isMusicWorkspaceExpanded ? 1 : 0)
@@ -520,6 +507,70 @@ struct ContentView: View {
         .clipped()
         .allowsHitTesting(hasMusicPanels)
         .accessibilityHidden(!hasMusicPanels)
+    }
+
+    /// Presets e controles vivem num único cartão de vidro. O olho ainda
+    /// permite ajustar a visibilidade de cada subseção separadamente.
+    private var audioWorkspace: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.smooth(duration: 0.32)) {
+                    isAudioWorkspaceExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "dial.high")
+                    Text("ÁUDIO")
+                        .font(.caption.bold())
+                        .tracking(1.3)
+                    Spacer()
+                    Image(systemName: isAudioWorkspaceExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(currentTheme.accent)
+                .frame(minHeight: 30)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Área de presets e controles")
+            .accessibilityValue(isAudioWorkspaceExpanded ? "Expandida" : "Recolhida")
+
+            if isAudioWorkspaceExpanded {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("PRESETS", systemImage: "slider.horizontal.3")
+                            .font(.caption.bold())
+                            .tracking(1.3)
+                            .foregroundStyle(currentTheme.accent)
+                        presets
+                    }
+                    .hideablePanel(.presets)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("CONTROLES", systemImage: "dial.high")
+                            .font(.caption.bold())
+                            .tracking(1.3)
+                            .foregroundStyle(currentTheme.accent)
+                        controls
+                    }
+                    .hideablePanel(.controls)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .frame(height: hasAudioPanels ? nil : 0, alignment: .top)
+        .opacity(hasAudioPanels ? 1 : 0)
+        .clipped()
+        .allowsHitTesting(hasAudioPanels)
+        .accessibilityHidden(!hasAudioPanels)
     }
 
     // Kept outside the main body to avoid SwiftUI's expression type-check explosion.

@@ -15,7 +15,8 @@ enum PanelID: String, CaseIterable, Identifiable {
     case header, player, lyrics, themes, controls
     case omnibox, discover, queue, presets, export
 
-    static let discoveryPanels: [PanelID] = [.omnibox, .discover, .queue, .presets]
+    static let discoveryPanels: [PanelID] = [.omnibox, .discover, .queue]
+    static let audioPanels: [PanelID] = [.presets, .controls]
     static let mainPanels: [PanelID] = [.header, .player, .omnibox, .discover, .queue, .presets, .controls, .export]
     static let karaokePanels: [PanelID] = [.player, .lyrics, .themes]
     // Telas novas: adicione um case + título + ícone aqui.
@@ -66,7 +67,7 @@ enum PanelDensity: String, CaseIterable, Identifiable {
         switch self {
         case .discover: return Set(PanelID.allCases)
         case .balanced: return [.header, .player, .omnibox, .discover, .queue, .controls, .lyrics, .themes]
-        case .listen: return [.player, .controls, .lyrics, .themes]
+        case .listen: return [.player, .presets, .controls, .lyrics, .themes]
         }
     }
 }
@@ -266,8 +267,13 @@ private struct PanelVisibilityEditor: View {
     private var discoveryIDs: [PanelID] {
         PanelID.discoveryPanels.filter { panels.contains($0) }
     }
+    private var audioIDs: [PanelID] {
+        PanelID.audioPanels.filter { panels.contains($0) }
+    }
     private var otherIDs: [PanelID] {
-        panels.filter { !PanelID.discoveryPanels.contains($0) }
+        panels.filter {
+            !PanelID.discoveryPanels.contains($0) && !PanelID.audioPanels.contains($0)
+        }
     }
 
     var body: some View {
@@ -318,6 +324,21 @@ private struct PanelVisibilityEditor: View {
                             .font(.caption.weight(.semibold))
                     }
                     ForEach(discoveryIDs) { id in panelToggle(id) }
+                    Divider()
+                }
+
+                if !audioIDs.isEmpty {
+                    HStack {
+                        Text("ÁUDIO · PRESETS E CONTROLES")
+                            .font(.caption2.weight(.heavy))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Button("Tudo") { store.setVisible(true, for: audioIDs) }
+                            .font(.caption.weight(.semibold))
+                        Button("Nada") { store.setVisible(false, for: audioIDs) }
+                            .font(.caption.weight(.semibold))
+                    }
+                    ForEach(audioIDs) { id in panelToggle(id) }
                     Divider()
                 }
 
