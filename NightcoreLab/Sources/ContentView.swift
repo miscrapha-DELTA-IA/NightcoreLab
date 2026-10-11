@@ -158,29 +158,17 @@ struct ContentView: View {
     // avoiding a single giant generic expression in the SwiftUI type checker.
     private var playerCanvas: some View {
         ZStack {
-            // Fundo fluido em movimento leve, sempre atrás dos controles.
-            // Mantemos uma opacidade discreta para preservar a hierarquia do player.
-            TurbulentBackgroundView(theme: currentTheme)
-                .opacity(0.6)
+            // Liquid Marble: uma camada Metal no fundo de toda a tela.
+            // A capa permanece nítida no cartão; removemos a capa ampliada
+            // e desfocada que antes escondia o efeito fluido.
+            TurbulentMarbleView(
+                theme: MarbleTheme(appTheme: currentTheme),
+                speed: 0.6,
+                maxFPS: 30
+            )
+            .overlay(Color.black.opacity(0.4))
+            .allowsHitTesting(false)
 
-            if let artwork = coverURL {
-                GeometryReader { geometry in
-                    WebImage(url: artwork)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
-                        .blur(radius: 50)
-                        // A capa ampliada vira uma textura translúcida sobre a
-                        // turbulência, sem esconder a thumbnail nítida do player.
-                        .opacity(0.27)
-                        .overlay(Color.black.opacity(0.29))
-                }
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-                .id(artwork)
-                .transition(.opacity)
-            }
 
             mainScrollContent
         }

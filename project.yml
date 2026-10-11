@@ -47,6 +47,10 @@ targets:
     sources:
       # Código Swift: NightcoreLabApp, ContentView, AudioEngineManager, TelemetryManager
       - path: NightcoreLab/Sources
+      # Metal stitchable shader: compilar como source (default.metallib),
+      # NÃO copiar Shaders.metal como recurso solto do bundle.
+      - path: NightcoreLab/Resources/Shaders.metal
+        buildPhase: sources
       # Catálogo de assets (ícone do app)
       - path: NightcoreLab/Resources/Assets.xcassets
       # Manifesto de privacidade, copiado explicitamente como recurso do bundle
