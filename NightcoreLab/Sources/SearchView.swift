@@ -21,7 +21,10 @@ struct SearchView: View {
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
     @Binding var isDiscoverExpanded: Bool
-    @Binding var isDiscoverVisible: Bool
+    let isPresented: Bool
+    @Environment(PanelStore.self) private var panels
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var searchExpansionOverride: Bool?
     @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
     @AppStorage(AudioDownloadManager.serverURLKey) private var savedServerURL = AudioDownloadManager.defaultServerURL
     @State private var omnibox = OmniboxEngine(baseURL: URL(string: AudioDownloadManager.defaultServerURL)!)
@@ -40,20 +43,33 @@ struct SearchView: View {
         return nil
     }
     private var isSearchMode: Bool { submittedQuery != nil || typedText != nil }
+    private var isDiscoverVisible: Bool {
+        PanelPresentation.showsDiscover(hidden: panels.hidden, isZen: panels.isZen,
+                                        searchActive: isSearchMode)
+    }
+    private var discoverExpansion: Binding<Bool> {
+        Binding(
+            get: { PanelPresentation.discoverExpanded(saved: isDiscoverExpanded,
+                       searchActive: isSearchMode, userOverride: searchExpansionOverride) },
+            set: { value in
+                // Only an explicit accordion tap updates the saved preference.
+                isDiscoverExpanded = value
+                if isSearchMode { searchExpansionOverride = value }
+            }
+        )
+    }
     private var displayedTracks: [Track] {
         if typedText != nil {
             if !omnibox.results.isEmpty { return omnibox.results.map(\.asTrack) }
             // Só usa o fallback da consulta que o usuário realmente submeteu.
-            return submittedQuery == query ? searchResults : []
+            return submittedQuery == query.trimmingCharacters(in: .whitespacesAndNewlines) ? searchResults : []
         }
         return DiscoveryPresentation.visibleTracks(searchQuery: submittedQuery,
                                             searchResults: searchResults, suggestions: suggestedTracks)
     }
 
     private func showSuggestions() {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-            isDiscoverExpanded = true
-        }
+        searchExpansionOverride = nil
         lastSearchQuery = ""
         query = ""
         omnibox.queryChanged("")
@@ -93,11 +109,8 @@ struct SearchView: View {
             query = ""
             onLink(value)
         } else {
-            // A new text search should open the panel so results are not hidden.
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                isDiscoverVisible = true
-                isDiscoverExpanded = true
-            }
+            // Reveal results for this session without changing either preference.
+            searchExpansionOverride = nil
             lastSearchQuery = value
             submittedQuery = value
             searchRequestID = UUID()
@@ -106,57 +119,61 @@ struct SearchView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button(action: onServerSettings) {
-                    Image(systemName: "server.rack").foregroundStyle(theme.accent)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Button(action: onServerSettings) {
+                        Image(systemName: "server.rack").foregroundStyle(theme.accent)
+                    }
+                    .accessibilityLabel("Configurar servidor")
+                    Image(systemName: looksLikeLink ? "arrow.down.circle" : "magnifyingglass")
+                        .foregroundStyle(theme.accent)
+                    TextField("Buscar música ou colar link", text: $query)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .focused($isFocused)
+                        .onSubmit { handleInput(query) }
+                        .disabled(!isEnabled)
+                    if isSearching || omnibox.isSearching || downloader.isDownloading {
+                        ProgressView().tint(theme.accent)
+                    }
+                    if !query.isEmpty {
+                        Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
+                            .accessibilityLabel("Limpar busca")
+                    }
                 }
-                .accessibilityLabel("Configurar servidor")
-                Image(systemName: looksLikeLink ? "arrow.down.circle" : "magnifyingglass")
-                    .foregroundStyle(theme.accent)
-                TextField("Buscar música ou colar link", text: $query)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .focused($isFocused)
-                    .onSubmit { handleInput(query) }
-                    .disabled(!isEnabled)
-                if isSearching || omnibox.isSearching || downloader.isDownloading {
-                    ProgressView().tint(theme.accent)
-                }
-                if !query.isEmpty {
-                    Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
-                        .accessibilityLabel("Limpar busca")
-                }
-            }
-            .padding(14)
-            .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
+                .padding(14)
+                .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
 
-            if typedText != nil && !omnibox.suggestions.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(omnibox.suggestions.prefix(5), id: \.self) { item in
-                            Button {
-                                query = item
-                                handleInput(item)
-                            } label: {
-                                Text(item)
-                                    .font(.caption)
-                                    .lineLimit(1)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                                    .background(.ultraThinMaterial, in: Capsule())
+                if typedText != nil && !omnibox.suggestions.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(omnibox.suggestions.prefix(5), id: \.self) { item in
+                                Button {
+                                    query = item
+                                    handleInput(item)
+                                } label: {
+                                    Text(item)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 7)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
+
             }
+            .hideablePanel(.omnibox, edge: .top)
 
             if isDiscoverVisible {
                 CollapsibleGlassSection(
                     title: "DESCOBRIR",
                     icon: "sparkles",
-                    isExpanded: $isDiscoverExpanded,
+                    isExpanded: discoverExpansion,
                     tint: theme.accent
                 ) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -238,14 +255,18 @@ struct SearchView: View {
                     }
                 }
             }
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
             }
         }
-        .animation(.spring(duration: 0.5), value: isDiscoverVisible)
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.5), value: isDiscoverVisible)
         .onAppear {
             if let base = URL(string: AudioDownloadManager.apiBaseURL) { omnibox.useServer(base) }
             guard !hasRestoredQuery else { return }
             hasRestoredQuery = true
+            guard !panels.isHidden(.omnibox) else {
+                showSuggestions()
+                return
+            }
             let previous = lastSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !previous.isEmpty, submittedQuery == nil, searchResults.isEmpty else { return }
             // A deliberate saved text search is restored once, never on every keystroke.
@@ -260,20 +281,38 @@ struct SearchView: View {
                 omnibox.queryChanged(query)
             }
         }
+        .onChange(of: panels.isHidden(.omnibox)) { _, hidden in
+            if hidden { showSuggestions() }
+        }
+        .onChange(of: panels.isZen) { _, zen in
+            if zen { isFocused = false }
+        }
+        .onChange(of: isPresented) { _, presented in
+            if !presented { isFocused = false }
+        }
         .onChange(of: query) { _, value in
+            searchExpansionOverride = nil
             // Link/ID colado bypassa ambas as APIs de busca.
             if case let .direct(id) = OmniboxIntent.classify(value), isEnabled {
-                query = ""
+                showSuggestions()
                 onLink("https://www.youtube.com/watch?v=\(id)")
                 return
             }
-            omnibox.queryChanged(value)
-            if case let .text(value) = OmniboxIntent.classify(value), value.count >= 2 {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    isDiscoverVisible = true
-                    isDiscoverExpanded = true
-                }
+            if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                showSuggestions()
+                return
             }
+            // Editing invalidates a submitted fallback; never show stale results.
+            if let submittedQuery, submittedQuery != value.trimmingCharacters(in: .whitespacesAndNewlines) {
+                self.submittedQuery = nil
+                searchRequestID = UUID()
+                searchResults = []
+                hasSearched = false
+                isSearching = false
+                errorMessage = nil
+                lastSearchQuery = ""
+            }
+            omnibox.queryChanged(value)
         }
         .task(id: searchRequestID) {
             guard let requested = submittedQuery else {

@@ -7,7 +7,8 @@ memória e 256 MB em disco, por até sete dias.
 
 ## Fluxo
 
-- `SearchView` aplica debounce de 400 ms e cancela consultas antigas. `YouTubeSearchService`
+- `OmniboxEngine` aplica debounce de 220 ms e cancela consultas antigas. Após envio,
+  `SearchView` espera 900 ms antes de tentar o fallback `YouTubeSearchService`, que
   chama `GET /search?query=…` na mesma ponte configurada em Servidor.
 - No servidor, o processo Python executa `yt-dlp` com
   `["ytsearch15:<query>", "--dump-json", "--flat-playlist"]`, sem shell,

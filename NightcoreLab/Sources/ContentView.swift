@@ -143,20 +143,13 @@ struct ContentView: View {
     // Clean is a presentation preference, not a PanelStore visibility mask.
     @AppStorage("lyricsCleanMode") private var lyricsCleanMode = true
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
-    @AppStorage("showDiscover") private var showDiscover = true
-    @AppStorage("showQueue") private var showQueue = true
-    @AppStorage("showPlaybackDetails") private var showPlaybackDetails = true
-    @AppStorage("showPresets") private var showPresets = true
-    @AppStorage("showAudioControls") private var showAudioControls = true
-    @AppStorage("showExport") private var showExport = true
+    @AppStorage("showDiscover") private var isDiscoverExpanded = true
+    @AppStorage("showQueue") private var isQueueExpanded = true
+    @AppStorage("showPlaybackDetails") private var isPlaybackExpanded = true
+    @AppStorage("showPresets") private var isPresetsExpanded = true
+    @AppStorage("showAudioControls") private var isControlsExpanded = true
+    @AppStorage("showExport") private var isExportExpanded = true
 
-    // Visibilidade é independente do estado de expansão do acordeão.
-    @AppStorage("visibleDiscover") private var visibleDiscover = true
-    @AppStorage("visibleQueue") private var visibleQueue = true
-    @AppStorage("visiblePlayback") private var visiblePlayback = true
-    @AppStorage("visiblePresets") private var visiblePresets = true
-    @AppStorage("visibleControls") private var visibleControls = true
-    @AppStorage("visibleExport") private var visibleExport = true
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -167,11 +160,11 @@ struct ContentView: View {
     private var hasTrack: Bool { audio.fileName != nil }
 
     /// Migrates the preference from the previous standalone Discover toggle.
-    private func restoreDiscoverVisibilityPreference() {
+    private func restoreDiscoverExpansionPreference() {
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "showDiscover") == nil,
            let previous = defaults.object(forKey: "isDiscoverExpanded") as? Bool {
-            showDiscover = previous
+            isDiscoverExpanded = previous
         }
     }
 
@@ -195,12 +188,6 @@ struct ContentView: View {
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
-            visibleDiscover: $visibleDiscover,
-            visibleQueue: $visibleQueue,
-            visiblePlayback: $visiblePlayback,
-            visiblePresets: $visiblePresets,
-            visibleControls: $visibleControls,
-            visibleExport: $visibleExport,
             onPlayPause: { audio.togglePlayback() },
             onPrevious: { audio.seek(to: 0) },
             onNext: {
@@ -232,7 +219,7 @@ struct ContentView: View {
     private var playerLifecycle: some View {
         playerCanvas
         .onAppear {
-            restoreDiscoverVisibilityPreference()
+            restoreDiscoverExpansionPreference()
             if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
         }
@@ -437,8 +424,8 @@ struct ContentView: View {
                         onSelect: { track, _ in playTrack(track) },
                         onLink: { link in startDownload(link) },
                         onServerSettings: { showServerSettings = true },
-                        isDiscoverExpanded: $showDiscover,
-                        isDiscoverVisible: $visibleDiscover
+                        isDiscoverExpanded: $isDiscoverExpanded,
+                        isPresented: !(hasTrack && currentTrack != nil && showLyrics)
                     )
                     resumeSection
                     if downloader.isDownloading {
@@ -451,56 +438,41 @@ struct ContentView: View {
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
                     }
-                    if hasTrack && visiblePlayback {
+                    if hasTrack {
                         CollapsibleGlassSection(
                             title: "REPRODUÇÃO", icon: "waveform",
-                            isExpanded: $showPlaybackDetails, tint: currentTheme.accent
+                            isExpanded: $isPlaybackExpanded, tint: currentTheme.accent
                         ) {
                             playbackDetails
                         }
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        .hideablePanel(.playback)
                     }
-                    if visibleQueue {
-                        relatedSection
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    relatedSection.hideablePanel(.queue)
+                    CollapsibleGlassSection(
+                        title: "PRESETS", icon: "slider.horizontal.3",
+                        isExpanded: $isPresetsExpanded, tint: currentTheme.accent
+                    ) {
+                        presets
                     }
-                    if visiblePresets {
-                        CollapsibleGlassSection(
-                            title: "PRESETS", icon: "slider.horizontal.3",
-                            isExpanded: $showPresets, tint: currentTheme.accent
-                        ) {
-                            presets
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .hideablePanel(.presets)
+                    CollapsibleGlassSection(
+                        title: "CONTROLES", icon: "dial.high",
+                        isExpanded: $isControlsExpanded, tint: currentTheme.accent
+                    ) {
+                        controls
                     }
-                    if visibleControls {
-                        CollapsibleGlassSection(
-                            title: "CONTROLES", icon: "dial.high",
-                            isExpanded: $showAudioControls, tint: currentTheme.accent
-                        ) {
-                            controls
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .hideablePanel(.controls)
+                    CollapsibleGlassSection(
+                        title: "EXPORTAR", icon: "square.and.arrow.up",
+                        isExpanded: $isExportExpanded, tint: currentTheme.accent
+                    ) {
+                        exportSection
                     }
-                    if visibleExport {
-                        CollapsibleGlassSection(
-                            title: "EXPORTAR", icon: "square.and.arrow.up",
-                            isExpanded: $showExport, tint: currentTheme.accent
-                        ) {
-                            exportSection
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    }
+                    .hideablePanel(.export)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 32)
-                .animation(.spring(duration: 0.5), value: visibleDiscover)
-                .animation(.spring(duration: 0.5), value: visibleQueue)
-                .animation(.spring(duration: 0.5), value: visiblePlayback)
-                .animation(.spring(duration: 0.5), value: visiblePresets)
-                .animation(.spring(duration: 0.5), value: visibleControls)
-                .animation(.spring(duration: 0.5), value: visibleExport)
                 .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
             }
             .scrollDismissesKeyboard(.interactively)
@@ -688,7 +660,7 @@ struct ContentView: View {
     private var relatedSection: some View {
         CollapsibleGlassSection(
             title: "A SEGUIR", icon: "list.dash",
-            isExpanded: $showQueue,
+            isExpanded: $isQueueExpanded,
             tint: currentTheme.accent,
             detail: "\(playbackQueue.upNextQueue.count) na fila"
         ) {

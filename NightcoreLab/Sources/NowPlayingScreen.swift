@@ -78,19 +78,12 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     @Binding var isKaraokeMode: Bool
     @Binding var lyricsCleanMode: Bool
     @Binding var backgroundStyle: BackgroundStyle
-    @Binding var visibleDiscover: Bool
-    @Binding var visibleQueue: Bool
-    @Binding var visiblePlayback: Bool
-    @Binding var visiblePresets: Bool
-    @Binding var visibleControls: Bool
-    @Binding var visibleExport: Bool
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
-    @AppStorage("isZenMode") private var isZenMode = false
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -143,8 +136,8 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                     .padding(.horizontal, 20)
                     // Reserve a separate top row for eye/share/mic controls.
                     // Compressing the player by 148pt made artwork and title collide.
-                    .padding(.top, showsKaraoke ? 74 : 22)
-                    .hideablePanel(.player, edge: .top, enabled: showsKaraoke)
+                    .padding(.top, 74)
+                    .hideablePanel(.player, edge: .top)
                 }
 
                 if showsKaraoke {
@@ -158,18 +151,21 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                             .hideablePanel(.themes, edge: .bottom)
                             .transition(.barRise)
                     }
-                } else if !isZenMode {
-                    // Somente o conteúdo inferior sai da hierarquia; artwork,
-                    // transporte e fundo Metal permanecem intactos.
-                    normalExtras()
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+                // Keep SearchView and its engine/cache alive while temporarily covered.
+                normalExtras()
+                    .padding(.top, isTrackLoaded && panels.isVisible(.player) ? 0 : 74)
+                    .frame(height: showsKaraoke || panels.isZen ? 0 : nil)
+                    .opacity(showsKaraoke || panels.isZen ? 0 : 1)
+                    .clipped()
+                    .allowsHitTesting(!showsKaraoke && !panels.isZen)
+                    .accessibilityHidden(showsKaraoke || panels.isZen)
             }
         }
         .overlay {
-            if showsKaraoke && panels.isZen {
+            if panels.isZen {
                 // Toque em qualquer área livre revela o layout; estados individuais
-                // de cada painel não mudam quando alternamos Zen no karaokê.
+                // de cada painel não mudam quando alternamos Zen.
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
@@ -177,22 +173,13 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            if !isKaraokeMode {
-                HStack(spacing: 8) {
-                    zenButton
-                    layoutMenu
-                }
+            PanelsMenuButton(panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels)
                 .padding(.top, 16)
                 .padding(.leading, 16)
-                .transition(.opacity)
-            }
         }
         .overlay(alignment: .topTrailing) {
             if isTrackLoaded {
                 HStack(spacing: 8) {
-                    if showsKaraoke {
-                        PanelsMenuButton(panels: [.player, .lyrics, .themes])
-                    }
                     ShareButton(isWorking: isBuildingShare, action: shareCurrentTrack)
                     if canShowKaraoke {
                         micButton
@@ -240,50 +227,6 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                 showShareError = true
             }
         }
-    }
-
-    /// Menu disponível mesmo em Zen Mode; não altera as preferências de expansão.
-    private var layoutMenu: some View {
-        Menu {
-            Section("Música e sugestões") {
-                Toggle("Descobrir", isOn: $visibleDiscover)
-                Toggle("A Seguir", isOn: $visibleQueue)
-                Toggle("Reprodução", isOn: $visiblePlayback)
-            }
-            Section("Ferramentas") {
-                Toggle("Presets", isOn: $visiblePresets)
-                Toggle("Controles", isOn: $visibleControls)
-                Toggle("Exportar", isOn: $visibleExport)
-            }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 18, weight: .semibold))
-                .frame(width: 44, height: 44)
-                .background(Color.white.opacity(0.10), in: Circle())
-                .foregroundStyle(.white)
-        }
-        .accessibilityLabel("Personalizar seções visíveis")
-        .accessibilityHint("Mostrar ou ocultar Descobrir, A Seguir e demais painéis")
-    }
-
-    /// Contraponto do botão do karaokê: mantém-se acessível mesmo sem faixa.
-    private var zenButton: some View {
-        Button {
-            withAnimation(motion) { isZenMode.toggle() }
-        } label: {
-            Image(systemName: isZenMode ? "moon.stars.fill" : "moon.zzz")
-                .font(.system(size: 18, weight: .semibold))
-                .symbolEffect(.bounce, value: isZenMode)
-                .frame(width: 44, height: 44)
-                .background(isZenMode
-                            ? MarbleTheme(appTheme: appTheme).palette.body.opacity(0.28)
-                            : Color.white.opacity(0.10), in: Circle())
-                .foregroundStyle(.white)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isZenMode ? "Desativar modo Zen" : "Ativar modo Zen")
-        .accessibilityValue(isZenMode ? "Ativado" : "Desativado")
-        .accessibilityHint("Oculta ou mostra os painéis abaixo do player")
     }
 
     private var micButton: some View {

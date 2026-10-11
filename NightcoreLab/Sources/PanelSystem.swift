@@ -13,6 +13,10 @@ import Observation
 
 enum PanelID: String, CaseIterable, Identifiable {
     case player, lyrics, themes, controls
+    case omnibox, discover, queue, playback, presets, export
+
+    static let mainPanels: [PanelID] = [.player, .omnibox, .discover, .queue, .playback, .presets, .controls, .export]
+    static let karaokePanels: [PanelID] = [.player, .lyrics, .themes]
     // Telas novas: adicione um case + título + ícone aqui.
 
     var id: String { rawValue }
@@ -22,6 +26,12 @@ enum PanelID: String, CaseIterable, Identifiable {
         case .lyrics: return "Letras"
         case .themes: return "Temas e fundo"
         case .controls: return "Controles"
+        case .omnibox: return "Busca"
+        case .discover: return "Descobrir"
+        case .queue: return "A seguir"
+        case .playback: return "Reprodução"
+        case .presets: return "Presets"
+        case .export: return "Exportar"
         }
     }
     var icon: String {
@@ -30,7 +40,44 @@ enum PanelID: String, CaseIterable, Identifiable {
         case .lyrics: return "text.quote"
         case .themes: return "paintpalette"
         case .controls: return "slider.horizontal.3"
+        case .omnibox: return "magnifyingglass"
+        case .discover: return "sparkles"
+        case .queue: return "list.dash"
+        case .playback: return "waveform"
+        case .presets: return "slider.horizontal.3"
+        case .export: return "square.and.arrow.up"
         }
+    }
+}
+
+/// Presets only edit the existing visibility preference, never accordion expansion.
+enum PanelDensity: String, CaseIterable, Identifiable {
+    case discover, balanced, listen
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .discover: return "Descobrir"
+        case .balanced: return "Equilibrado"
+        case .listen: return "Só ouvir"
+        }
+    }
+    var visiblePanels: Set<PanelID> {
+        switch self {
+        case .discover: return Set(PanelID.allCases)
+        case .balanced: return [.player, .omnibox, .queue, .lyrics, .themes]
+        case .listen: return [.player, .controls, .lyrics, .themes]
+        }
+    }
+}
+
+/// Derived presentation: searching never writes visibility or expansion preferences.
+enum PanelPresentation {
+    static func showsDiscover(hidden: Set<PanelID>, isZen: Bool, searchActive: Bool) -> Bool {
+        !isZen && (!hidden.contains(.discover) || (!hidden.contains(.omnibox) && searchActive))
+    }
+
+    static func discoverExpanded(saved: Bool, searchActive: Bool, userOverride: Bool?) -> Bool {
+        searchActive ? (userOverride ?? true) : saved
     }
 }
 
@@ -43,27 +90,53 @@ final class PanelStore {
     private(set) var isZen = false
     @ObservationIgnored private let defaultsKey = "ui.hiddenPanels"
 
-    init() {
-        let raw = UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []
-        hidden = Set(raw.compactMap(PanelID.init(rawValue:)))
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let raw = defaults.stringArray(forKey: defaultsKey) ?? []
+        var migrated = Set(raw.compactMap(PanelID.init(rawValue:)))
+        let legacy: [(String, PanelID)] = [
+            ("visibleDiscover", .discover), ("visibleQueue", .queue),
+            ("visiblePlayback", .playback), ("visiblePresets", .presets),
+            ("visibleControls", .controls), ("visibleExport", .export)
+        ]
+        for (key, id) in legacy where defaults.object(forKey: key) != nil {
+            if !defaults.bool(forKey: key) { migrated.insert(id) }
+        }
+        hidden = migrated
+        // Write the merged preference BEFORE removing its legacy source.
+        persist()
+        for (key, _) in legacy { defaults.removeObject(forKey: key) }
+        // Zen is now a session-only mask on both screens.
+        defaults.removeObject(forKey: "isZenMode")
     }
 
     func isVisible(_ id: PanelID) -> Bool { !isZen && !hidden.contains(id) }
     func isHidden(_ id: PanelID) -> Bool { hidden.contains(id) }
 
-    func toggle(_ id: PanelID) {
+    func toggle(_ id: PanelID) { setVisible(isHidden(id), for: id) }
+
+    func setVisible(_ visible: Bool, for id: PanelID) {
         withAnimation(Self.motion) {
             isZen = false
-            if hidden.contains(id) { hidden.remove(id) } else { hidden.insert(id) }
+            if visible { hidden.remove(id) } else { hidden.insert(id) }
         }
         persist()
     }
     func showAll() { withAnimation(Self.motion) { isZen = false; hidden.removeAll() }; persist() }
+    func apply(_ density: PanelDensity) {
+        withAnimation(Self.motion) {
+            isZen = false
+            hidden = Set(PanelID.allCases).subtracting(density.visiblePanels)
+        }
+        persist()
+    }
     func setZen(_ on: Bool) { withAnimation(Self.motion) { isZen = on } }
     func toggleZen() { setZen(!isZen) }
 
     private func persist() {
-        UserDefaults.standard.set(hidden.map(\.rawValue), forKey: defaultsKey)
+        defaults.set(hidden.map(\.rawValue).sorted(), forKey: defaultsKey)
     }
 }
 
@@ -141,9 +214,17 @@ struct PanelsMenuButton: View {
 
     var body: some View {
         Menu {
-            Section("Janelas") {
+            Button(store.isZen ? "Sair do modo Zen" : "Entrar no modo Zen", systemImage: "eye.slash") {
+                store.toggleZen()
+            }
+            Section("Densidade da interface") {
+                ForEach(PanelDensity.allCases) { density in
+                    Button(density.title) { store.apply(density) }
+                }
+            }
+            Section("Painéis desta tela") {
                 ForEach(panels) { id in
-                    Toggle(isOn: Binding(get: { !store.isHidden(id) }, set: { _ in store.toggle(id) })) {
+                    Toggle(isOn: Binding(get: { !store.isHidden(id) }, set: { store.setVisible($0, for: id) })) {
                         Label(id.title, systemImage: id.icon)
                     }
                 }
@@ -159,7 +240,10 @@ struct PanelsMenuButton: View {
         } primaryAction: {
             store.toggleZen()
         }
-        .accessibilityLabel(store.isZen ? "Mostrar janelas" : "Ocultar janelas")
+        .accessibilityLabel("Visibilidade dos painéis")
+        .accessibilityValue(store.isZen ? "Modo Zen ativado" : "Modo Zen desativado")
+        .accessibilityAction(named: Text("Alternar modo Zen")) { store.toggleZen() }
+        .accessibilityAction(named: Text("Mostrar tudo")) { store.showAll() }
         .accessibilityHint("Toque para ocultar ou mostrar tudo. Mantenha pressionado para escolher janelas.")
     }
 }
