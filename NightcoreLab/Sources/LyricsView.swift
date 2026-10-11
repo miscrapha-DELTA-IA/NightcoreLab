@@ -419,7 +419,9 @@ struct LyricsView: View {
                     ScrollView {
                         Text(text)
                             .font(.title3.weight(.medium))
-                            .foregroundStyle(.white)
+                            // Static lyrics also honor the Capa/Tema selection.
+                            .foregroundStyle(lyricAccent)
+                            .animation(.easeInOut(duration: 0.28), value: lyricAccent)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(24)
                     }
