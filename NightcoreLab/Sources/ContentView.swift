@@ -1082,7 +1082,7 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
-            lyricStore.clear()
+            lyricsStore.clear()
             if let lyricsPrefetcher { Task { await lyricsPrefetcher.cancel() } }
             showLyrics = false
             resumeTrack = nil
