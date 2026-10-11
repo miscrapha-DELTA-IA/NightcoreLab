@@ -6,6 +6,7 @@ struct NightcoreLabApp: App {
     @UIApplicationDelegateAdaptor(NightcoreAppDelegate.self) private var appDelegate
     @State private var lyricsStore = LyricsStore()
     @State private var panelStore = PanelStore()
+    @State private var playHistory = PlayHistoryStore()
 
     init() {
         SDImageCache.shared.config.maxMemoryCost = 64 * 1024 * 1024
@@ -18,6 +19,7 @@ struct NightcoreLabApp: App {
             ContentView()
                 .environment(lyricsStore)
                 .environment(panelStore)
+                .environment(playHistory)
         }
     }
 }

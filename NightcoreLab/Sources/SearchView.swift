@@ -23,6 +23,7 @@ struct SearchView: View {
     @Binding var isDiscoverExpanded: Bool
     let isPresented: Bool
     @Environment(PanelStore.self) private var panels
+    @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchExpansionOverride: Bool?
     @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
@@ -260,6 +261,7 @@ struct SearchView: View {
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.5), value: isDiscoverVisible)
         .onAppear {
+            omnibox.useHistoryStore(playHistory)
             if let base = URL(string: AudioDownloadManager.apiBaseURL) { omnibox.useServer(base) }
             guard !hasRestoredQuery else { return }
             hasRestoredQuery = true

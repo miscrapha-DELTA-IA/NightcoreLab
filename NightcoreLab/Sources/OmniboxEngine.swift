@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import Observation
 
 // =============================================================================
 // Omnibox: resultados do YT Music (via seu backend) + histórico local, re-ranqueados.
@@ -16,12 +15,6 @@ struct TrackHit: Identifiable, Hashable, Sendable, Codable {
     let thumb: URL?
     let isSong: Bool
     let explicit: Bool
-}
-
-struct HistoryEntry: Codable, Sendable {
-    let hit: TrackHit
-    var plays: Int
-    var lastPlayed: Date
 }
 
 enum OmniboxIntent: Equatable {
@@ -102,7 +95,7 @@ enum OmniboxRanker {
         return Double(matched) / Double(qTokens.count)
     }
 
-    private static func frecency(_ e: HistoryEntry?, now: Date) -> Double {
+    static func frecency(_ e: HistoryEntry?, now: Date) -> Double {
         guard let e else { return 0 }
         let freq = min(1, log1p(Double(e.plays)) / log1p(20))
         let days = max(0, now.timeIntervalSince(e.lastPlayed) / 86_400)
@@ -122,8 +115,10 @@ final class OmniboxEngine {
     private(set) var lastRequestFailed = false
     private(set) var hasSearched = false
 
-    /// O app mantém isto atualizado (videoID -> reproduções/última vez).
-    @ObservationIgnored var history: [String: HistoryEntry] = [:]
+    @ObservationIgnored private var historyStore: PlayHistoryStore?
+    private var history: [String: HistoryEntry] { historyStore?.entries ?? [:] }
+
+    func useHistoryStore(_ store: PlayHistoryStore) { historyStore = store }
 
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private let cache = NSCache<NSString, Box>()
@@ -135,10 +130,6 @@ final class OmniboxEngine {
 
     init(baseURL: URL) {
         self.baseURL = baseURL
-        if let stored = UserDefaults.standard.data(forKey: "omnibox.playHistory"),
-           let decoded = try? JSONDecoder().decode([String: HistoryEntry].self, from: stored) {
-            history = decoded
-        }
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 8
         session = URLSession(configuration: cfg)
@@ -153,22 +144,7 @@ final class OmniboxEngine {
         isSearching = false
     }
 
-    /// Registra a escolha da música; persiste frecency mesmo após fechar Karaoke Mode.
-    func recordPlay(_ hit: TrackHit) {
-        let previous = history[hit.id]
-        history[hit.id] = HistoryEntry(hit: hit, plays: (previous?.plays ?? 0) + 1,
-                                       lastPlayed: .now)
-        // Armazenar apenas 100 itens recentes para evitar crescimento indefinido.
-        if history.count > 100 {
-            for entry in history.sorted(by: { $0.value.lastPlayed < $1.value.lastPlayed })
-                .prefix(history.count - 100) {
-                history.removeValue(forKey: entry.key)
-            }
-        }
-        if let data = try? JSONEncoder().encode(history) {
-            UserDefaults.standard.set(data, forKey: "omnibox.playHistory")
-        }
-    }
+    func recordPlay(_ hit: TrackHit) { historyStore?.recordStart(hit) }
 
     /// Chame em `.onChange(of: text)`.
     func queryChanged(_ raw: String) {
