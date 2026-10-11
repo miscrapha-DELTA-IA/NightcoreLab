@@ -100,6 +100,10 @@ struct TurbulentMarbleView: View {
     var maxFPS: Double = 60          // use 30 em Low Power Mode
     var isPaused: Bool = false
     var extendIntoSafeArea: Bool = true
+    /// The sharing path supplies the same phase as the live shader, but renders a still frame.
+    var frozenTime: Float? = nil
+    /// Stable clock origin shared by the visible player and the share snapshot.
+    var startedAt: Date? = nil
 
     @State private var start = Date()
     @Environment(\.scenePhase) private var scenePhase
@@ -108,8 +112,9 @@ struct TurbulentMarbleView: View {
     var body: some View {
         let p = theme.palette
         TimelineView(.animation(minimumInterval: 1.0 / max(maxFPS, 1.0),
-                                paused: isPaused || reduceMotion || scenePhase != .active)) { ctx in
-            let t = Float((isPaused || reduceMotion ? 0 : ctx.date.timeIntervalSince(start)) * speed)
+                                paused: frozenTime != nil || isPaused || reduceMotion || scenePhase != .active)) { ctx in
+            let t = frozenTime ?? Float((isPaused || reduceMotion ? 0 :
+                                        ctx.date.timeIntervalSince(startedAt ?? start)) * speed)
             Rectangle()
                 .fill(.black)
                 .visualEffect { content, proxy in

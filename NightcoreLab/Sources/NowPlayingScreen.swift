@@ -7,7 +7,7 @@ import SwiftUI
 
 // MARK: - Preferências persistidas
 
-enum BackgroundStyle: String, CaseIterable, Identifiable {
+enum BackgroundStyle: String, CaseIterable, Identifiable, Sendable {
     case marble     // shader Metal
     case cover      // capa com blur forte
 
@@ -93,6 +93,10 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var marbleStartedAt = Date()
+    @State private var isBuildingShare = false
+    @State private var shareResult: ShareExportPayload?
+    @State private var showShareError = false
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
     private var motion: Animation {
@@ -106,7 +110,8 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                 BackgroundLayer(
                     style: backgroundStyle,
                     theme: MarbleTheme(appTheme: appTheme),
-                    coverURL: track.coverURL
+                    coverURL: track.coverURL,
+                    marbleStartedAt: marbleStartedAt
                 )
                 .transition(.opacity)
             } else {
@@ -116,7 +121,8 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                 TurbulentMarbleView(
                     theme: MarbleTheme(appTheme: appTheme),
                     speed: 0.6,
-                    maxFPS: 30
+                    maxFPS: 30,
+                    startedAt: marbleStartedAt
                 )
                 .overlay(Color.black.opacity(0.4))
                 .allowsHitTesting(false)
@@ -135,7 +141,7 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                     )
                     .padding(.horizontal, 20)
                     .padding(.top, showsKaraoke ? 12 : 22)
-                    .padding(.trailing, showsKaraoke ? 98 : 0)
+                    .padding(.trailing, showsKaraoke ? 148 : 0)
                     .hideablePanel(.player, edge: .top, enabled: showsKaraoke)
                 }
 
@@ -178,20 +184,58 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if isTrackLoaded && canShowKaraoke {
+            if isTrackLoaded {
                 HStack(spacing: 8) {
                     if showsKaraoke {
                         PanelsMenuButton(panels: [.player, .lyrics, .themes])
                     }
-                    micButton
+                    ShareButton(isWorking: isBuildingShare, action: shareCurrentTrack)
+                    if canShowKaraoke {
+                        micButton
+                    }
                 }
                 .padding(.top, 16)
                 .padding(.trailing, 16)
             }
         }
+        .sheet(item: $shareResult) { payload in
+            ShareExportService(image: payload.image)
+        }
+        .alert("Não foi possível criar o cartão", isPresented: $showShareError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Tente compartilhar novamente. A reprodução continua normalmente.")
+        }
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
+    }
+
+    /// Congela a fase exibida agora; nunca reinicia o áudio nem cria outro shader animado.
+    private func shareCurrentTrack() {
+        guard isTrackLoaded, !isBuildingShare else { return }
+        let capturedAt = Date()
+        let style: ShareSnapshot.VisualStyle = showsKaraoke && backgroundStyle == .cover
+            ? .blurredArtwork : .marble
+        let snapshot = ShareSnapshotBuilder.make(
+            track: track,
+            theme: appTheme,
+            visualStyle: style,
+            marbleStartedAt: marbleStartedAt,
+            speed: showsKaraoke ? 0.8 : 0.6,
+            capturedAt: capturedAt
+        )
+        isBuildingShare = true
+        Task { @MainActor in
+            defer { isBuildingShare = false }
+            do {
+                let image = try await ShareRenderer.render(snapshot)
+                try Task.checkCancellation()
+                shareResult = ShareExportPayload(image: image)
+            } catch {
+                showShareError = true
+            }
+        }
     }
 
     /// Menu disponível mesmo em Zen Mode; não altera as preferências de expansão.
@@ -385,6 +429,7 @@ private struct BackgroundLayer: View {
     let style: BackgroundStyle
     let theme: MarbleTheme
     let coverURL: URL?
+    let marbleStartedAt: Date
 
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
@@ -392,7 +437,9 @@ private struct BackgroundLayer: View {
         ZStack {
             switch style {
             case .marble:
-                TurbulentMarbleView(theme: theme, speed: 0.8, maxFPS: lowPower ? 30 : 60)
+                TurbulentMarbleView(theme: theme, speed: 0.8,
+                                    maxFPS: lowPower ? 30 : 60,
+                                    startedAt: marbleStartedAt)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)
