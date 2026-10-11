@@ -72,3 +72,17 @@ struct LRCLIBClient: Sendable {
         return (data, status)
     }
 }
+extension LRCLIBRecord {
+    init(legacy: LyricsRecord) {
+        self.init(id: legacy.id, trackName: legacy.trackName,
+                  artistName: legacy.artistName, albumName: nil,
+                  duration: legacy.duration, instrumental: legacy.instrumental,
+                  plainLyrics: legacy.plainLyrics, syncedLyrics: legacy.syncedLyrics)
+    }
+
+    var asLegacyRecord: LyricsRecord {
+        LyricsRecord(id: id, trackName: trackName, artistName: artistName,
+                     duration: duration ?? 0, syncedLyrics: syncedLyrics,
+                     plainLyrics: plainLyrics, instrumental: instrumental)
+    }
+}
