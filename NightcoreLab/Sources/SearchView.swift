@@ -113,10 +113,11 @@ struct SearchView: View {
                         .accessibilityLabel("Voltar às sugestões")
                 } else if canRefreshSuggestions {
                     Button(action: onRefreshSuggestions) {
-                        Image(systemName: "arrow.clockwise")
+                        Label("Iniciar Rádio", systemImage: "dot.radiowaves.left.and.right")
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(theme.accent)
                     }
-                    .accessibilityLabel("Atualizar sugestões")
+                    .accessibilityLabel("Iniciar Rádio e acrescentar recomendações à fila")
                 }
             }
 
