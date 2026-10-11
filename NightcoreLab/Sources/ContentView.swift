@@ -194,7 +194,7 @@ struct ContentView: View {
                 }
                 prefetchUpcoming()
             } else if let currentTrack {
-                downloader.saveLastTrack(currentTrack, at: audio.currentTime)
+                downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
             }
         }
         // Áudio muda instantaneamente enquanto o dedo arrasta
@@ -210,7 +210,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 if let currentTrack {
-                    downloader.saveLastTrack(currentTrack, at: audio.currentTime)
+                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
                 }
                 TelemetryManager.shared.flush()
             }
@@ -864,7 +864,7 @@ struct ContentView: View {
                 playingTrackID = track.id
                 currentTrack = downloader.cachedTrack(track)
                 if let currentTrack {
-                    downloader.saveLastTrack(currentTrack, at: audio.currentTime)
+                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
                 }
                 // Only fetch new suggestions when there is no queued successor.
                 if playbackQueue.upNextQueue.isEmpty {
