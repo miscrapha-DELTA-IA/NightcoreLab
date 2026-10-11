@@ -5,6 +5,7 @@ on:
     paths:
       - 'NightcoreLab/Sources/LyricsControlCenter.swift'
       - 'NightcoreLab/Sources/LyricsView.swift'
+      - 'NightcoreLab/Sources/KaraokeLyricsView.swift'
       - 'NightcoreLab/Sources/NowPlayingScreen.swift'
       - 'NightcoreLab/Sources/ContentView.swift'
       - 'NightcoreLabTests/KaraokeCleanModeTests.swift'

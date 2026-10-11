@@ -140,6 +140,32 @@ extension KaraokeTheme {
     }
 }
 
+// MARK: - Safe-area geometry
+
+/// Keeps artwork fully framed and lyric glyphs away from narrow-screen edges.
+/// Pure geometry, independent from the playback clock or LRCLIB pipeline.
+enum KaraokeLayoutMetrics {
+    static func horizontalInset(for width: CGFloat) -> CGFloat {
+        min(44, max(28, width * 0.09))
+    }
+
+    static func textWidth(for width: CGFloat) -> CGFloat {
+        max(1, width - horizontalInset(for: width) * 2)
+    }
+
+    static func fontSize(for width: CGFloat) -> CGFloat {
+        min(28, max(22, width * 0.067))
+    }
+
+    static func verticalMargin(for height: CGFloat) -> CGFloat {
+        min(120, max(48, height * 0.18))
+    }
+
+    static func coverEdge(for viewport: CGSize) -> CGFloat {
+        max(1, min(520, viewport.width - 80, viewport.height * 0.56))
+    }
+}
+
 // MARK: - View raiz
 
 struct KaraokeLyricsView: View {
@@ -149,31 +175,50 @@ struct KaraokeLyricsView: View {
     var accent: Color? = nil
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 22) {
-                    ForEach(store.lines) { line in
-                        KaraokeLineView(
-                            line: line,
-                            status: status(of: line),
-                            isPlaying: store.isPlaying,
-                            offset: store.userOffset,
-                            clock: clock,
-                            theme: theme,
-                            accent: accent
-                        )
-                        .id(line.id)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                        .onTapGesture { store.seekHandler?(line.start) }
+        GeometryReader { viewport in
+            let inset = KaraokeLayoutMetrics.horizontalInset(for: viewport.size.width)
+            let wordLimit = KaraokeLayoutMetrics.textWidth(for: viewport.size.width)
+            let fittedTheme: KaraokeTheme = {
+                var adjusted = theme
+                adjusted.font = .system(
+                    size: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
+                    weight: .heavy, design: .rounded
+                )
+                return adjusted
+            }()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 20) {
+                        ForEach(store.lines) { line in
+                            KaraokeLineView(
+                                line: line,
+                                status: status(of: line),
+                                isPlaying: store.isPlaying,
+                                offset: store.userOffset,
+                                clock: clock,
+                                theme: fittedTheme,
+                                accent: accent,
+                                maxWordWidth: wordLimit
+                            )
+                            .id(line.id)
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .onTapGesture { store.seekHandler?(line.start) }
+                        }
+                    }
+                    .padding(.horizontal, inset)
+                }
+                .scrollIndicators(.hidden)
+                .contentMargins(.vertical,
+                                KaraokeLayoutMetrics.verticalMargin(for: viewport.size.height),
+                                for: .scrollContent)
+                .onChange(of: store.activeLineIndex) { _, new in
+                    guard let new else { return }
+                    withAnimation(.smooth(duration: 0.45)) {
+                        proxy.scrollTo(new, anchor: .center)
                     }
                 }
-                .padding(.horizontal, 24)
-            }
-            .contentMargins(.vertical, 180, for: .scrollContent)
-            .onChange(of: store.activeLineIndex) { _, new in
-                guard let new else { return }
-                withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(new, anchor: .center) }
             }
         }
         .onAppear { store.startTracking() }
@@ -200,6 +245,7 @@ private struct KaraokeLineView: View {
     let clock: PlaybackClock
     let theme: KaraokeTheme
     let accent: Color?
+    let maxWordWidth: CGFloat
 
     var body: some View {
         if line.words.isEmpty {
@@ -230,7 +276,8 @@ private struct KaraokeLineView: View {
                     fill: fill(w),
                     fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
                     glow: status == .active,
-                    theme: theme
+                    theme: theme,
+                    maxWordWidth: maxWordWidth
                 )
                 .gapAfter(w.spaceAfter ? 9 : 0)
             }
@@ -246,18 +293,25 @@ private struct KaraokeWordView: View {
     let fillColor: Color
     let glow: Bool
     let theme: KaraokeTheme
+    let maxWordWidth: CGFloat
 
-    var body: some View {
+    /// One line per word. Long words shrink instead of spilling outside the viewport.
+    /// Both copies share the exact same metrics, preserving left-to-right sync.
+    private var glyph: some View {
         Text(word.text)
             .font(theme.font)
+            .lineLimit(1)
+            .minimumScaleFactor(0.52)
+            .frame(maxWidth: maxWordWidth)
+    }
+
+    var body: some View {
+        glyph
             .foregroundStyle(theme.inactive)
-            .fixedSize()
             .overlay(alignment: .leading) {
                 if fill > 0 {
-                    Text(word.text)
-                        .font(theme.font)
+                    glyph
                         .foregroundStyle(fillColor)
-                        .fixedSize()
                         .mask(alignment: .leading) {
                             Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
                         }
@@ -284,8 +338,9 @@ private struct FlowLayout: Layout {
         var cursor: CGFloat = 0
         for (i, sub) in subviews.enumerated() {
             let size = sub.sizeThatFits(.unspecified)
-            let canBreak = i == 0 || subviews[i - 1][GapAfter.self] > 0
-            if canBreak, !rows[rows.count - 1].items.isEmpty, cursor + size.width > maxWidth {
+            // Prefer a break at a space. When a joined syllable group gets too
+            // long for the screen, an emergency break prevents horizontal overflow.
+            if !rows[rows.count - 1].items.isEmpty, cursor + size.width > maxWidth {
                 rows.append(Row()); cursor = 0
             }
             rows[rows.count - 1].items.append((i, size))
@@ -305,7 +360,7 @@ private struct FlowLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for row in rows(maxWidth: bounds.width, subviews) {
-            var x = bounds.minX + (bounds.width - row.width) / 2      // centralizado
+            var x = bounds.minX + max(0, (bounds.width - row.width) / 2) // never start offscreen
             for item in row.items {
                 subviews[item.index].place(at: CGPoint(x: x, y: y), anchor: .topLeading,
                                            proposal: ProposedViewSize(item.size))

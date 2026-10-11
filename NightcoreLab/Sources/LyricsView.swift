@@ -333,7 +333,8 @@ struct LyricsView: View {
                             .foregroundStyle(lyricAccent)
                             .animation(.easeInOut(duration: 0.28), value: lyricAccent)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(24)
+                            .padding(.horizontal, inline ? 32 : 24)
+                            .padding(.vertical, 24)
                     }
                 } else {
                     Spacer()

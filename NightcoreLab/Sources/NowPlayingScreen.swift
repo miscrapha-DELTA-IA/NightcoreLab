@@ -141,8 +141,9 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                         onNext: onNext
                     )
                     .padding(.horizontal, 20)
-                    .padding(.top, showsKaraoke ? 12 : 22)
-                    .padding(.trailing, showsKaraoke ? 148 : 0)
+                    // Reserve a separate top row for eye/share/mic controls.
+                    // Compressing the player by 148pt made artwork and title collide.
+                    .padding(.top, showsKaraoke ? 74 : 22)
                     .hideablePanel(.player, edge: .top, enabled: showsKaraoke)
                 }
 
@@ -460,20 +461,41 @@ private struct BackgroundLayer: View {
 
 private struct BlurredCover: View {
     let url: URL?
+
     var body: some View {
-        AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.5))) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFill()
-                    .saturation(1.35)
-            default:
-                Color.black
+        GeometryReader { viewport in
+            AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.45))) { phase in
+                ZStack {
+                    Color.black
+
+                    if case .success(let image) = phase {
+                        // Ambient fill can crop, since it is intentionally blurred.
+                        // Bound it to the viewport BEFORE the blur; never zoom the whole image.
+                        image.resizable()
+                            .scaledToFill()
+                            .frame(width: viewport.size.width, height: viewport.size.height)
+                            .clipped()
+                            .blur(radius: 32)
+                            .overlay(Color.black.opacity(0.30))
+
+                        // Main artwork stays entirely visible, even for 16:9 videos.
+                        // Lyrics remain legible because the card is softly subdued.
+                        image.resizable()
+                            .scaledToFit()
+                            .frame(width: KaraokeLayoutMetrics.coverEdge(for: viewport.size),
+                                   height: KaraokeLayoutMetrics.coverEdge(for: viewport.size))
+                            .opacity(0.66)
+                            .blur(radius: 2)
+                            .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+                    }
+                }
+                .frame(width: viewport.size.width, height: viewport.size.height)
+                .clipped()
             }
+            .id(url) // A change of track replaces both images together.
         }
-        .blur(radius: 50)
-        .scaleEffect(1.3)           // esconde a borda transparente que o blur cria
-        .clipped()
-        .id(url)                    // troca de faixa = crossfade
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
