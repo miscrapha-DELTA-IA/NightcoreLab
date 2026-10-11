@@ -25,7 +25,8 @@ final class PlaybackQueueTransitionTests: XCTestCase {
         XCTAssertEqual(queue.remaining(after: b)?.map(\.id), [c.id])
         XCTAssertEqual(queue.upNextQueue.count, 3)
         XCTAssertTrue(queue.commitPlaying(b))
-        XCTAssertEqual(queue.upNextQueue.map(\.id), [c.id])
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [a.id, c.id],
+                       "Playing from the middle must not discard earlier items")
     }
 
     func testFailurePreservesQueueAndAllowsRetry() {
@@ -54,7 +55,62 @@ final class PlaybackQueueTransitionTests: XCTestCase {
         XCTAssertEqual(queue.upNextQueue.map(\.id), [old.id, next.id])
         XCTAssertTrue(transition.didStart(latest, trackID: next.id))
         XCTAssertTrue(queue.commitPlaying(next))
-        XCTAssertTrue(queue.upNextQueue.isEmpty)
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [old.id],
+                       "Stale callbacks must not erase unrelated queued tracks")
+    }
+
+    func testManualSelectionOutsideQueuePreservesWholeContext() {
+        let queue = PlaybackQueue()
+        let first = track("aaaaaaaaaaa"), second = track("bbbbbbbbbbb")
+        let manual = track("ccccccccccc")
+        queue.replace(with: [first, second], excluding: manual.id)
+        XCTAssertFalse(queue.commitPlaying(manual))
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [first.id, second.id])
+        XCTAssertFalse(queue.shouldFetchRadio(afterAutomaticAdvance: false))
+    }
+
+    func testManualSelectionOfMiddleTrackRemovesOnlyThatEntry() {
+        let queue = PlaybackQueue()
+        let one = track("aaaaaaaaaaa"), two = track("bbbbbbbbbbb")
+        let three = track("ccccccccccc"), four = track("ddddddddddd")
+        queue.replace(with: [one, two, three, four], excluding: "eeeeeeeeeee")
+        XCTAssertTrue(queue.contains(three))
+        XCTAssertTrue(queue.commitPlaying(three))
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [one.id, two.id, four.id])
+        XCTAssertFalse(queue.contains(three))
+        XCTAssertFalse(queue.commitPlaying(three))
+    }
+
+    func testRadioAppendDoesNotDuplicateOrReorderQueue() {
+        let queue = PlaybackQueue()
+        let current = track("aaaaaaaaaaa"), next = track("bbbbbbbbbbb")
+        let other = track("ccccccccccc"), later = track("ddddddddddd")
+        queue.replace(with: [next, other], excluding: current.id)
+        queue.append([current, other, later, next, later], excluding: current.id)
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [next.id, other.id, later.id])
+    }
+
+    func testLazyRadioRefillOnlyAfterAutomaticAdvanceToShortQueue() {
+        let queue = PlaybackQueue()
+        let next = track("bbbbbbbbbbb"), second = track("ccccccccccc")
+        queue.replace(with: [next, second], excluding: "aaaaaaaaaaa")
+        XCTAssertFalse(queue.shouldFetchRadio(afterAutomaticAdvance: true))
+        XCTAssertFalse(queue.shouldFetchRadio(afterAutomaticAdvance: false))
+        XCTAssertTrue(queue.commitPlaying(next))
+        XCTAssertTrue(queue.shouldFetchRadio(afterAutomaticAdvance: true))
+        XCTAssertFalse(queue.shouldFetchRadio(afterAutomaticAdvance: false))
+        XCTAssertTrue(queue.commitPlaying(second))
+        XCTAssertTrue(queue.shouldFetchRadio(afterAutomaticAdvance: true))
+    }
+
+    func testOverlappingRadioResponsesAppendOnlyNewTracks() {
+        let queue = PlaybackQueue()
+        let a = track("aaaaaaaaaaa"), b = track("bbbbbbbbbbb")
+        let c = track("ccccccccccc"), d = track("ddddddddddd")
+        queue.replace(with: [a], excluding: "eeeeeeeeeee")
+        queue.append([b, c], excluding: "eeeeeeeeeee")
+        queue.append([c, d, b], excluding: "eeeeeeeeeee")
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [a.id, b.id, c.id, d.id])
     }
 
     func testUnknownQueueEntryDoesNotMutate() {
