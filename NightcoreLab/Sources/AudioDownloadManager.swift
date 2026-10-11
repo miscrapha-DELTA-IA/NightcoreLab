@@ -23,6 +23,7 @@ final class AudioDownloadManager: ObservableObject {
     private var rateLimitUntil: Date = .distantPast
     private var breakerTask: Task<Void, Never>?
     @Published private(set) var cachedIDs = Set<String>()
+    @Published private(set) var downloadingIDs = Set<String>()
     var backgroundCompletionHandler: (() -> Void)?
 
     private let transfers: DownloadKit.DownloadManager
@@ -63,6 +64,39 @@ final class AudioDownloadManager: ObservableObject {
         return result
     }
 
+    func status(for track: Track) -> TrackStatus {
+        TrackStatus.resolve(cached: cachedIDs.contains(track.id),
+                            downloading: downloadingIDs.contains(track.id))
+    }
+
+    /// Never calls the backend. Returns nil after local eviction/reinstall.
+    func cachedAudioURL(for track: Track) -> URL? {
+        cache.localURL(for: track.id)
+    }
+
+    func saveLastTrack(_ track: Track, at position: TimeInterval = 0) {
+        PlaybackSessionStorage.save(track, at: position)
+    }
+
+    func loadLastTrack() -> SavedPlaybackSession? {
+        PlaybackSessionStorage.load()
+    }
+
+    func clearLastTrack() {
+        PlaybackSessionStorage.clear()
+    }
+
+    private func refreshTrackStatuses() {
+        var pending = Set(tracks.values.map(\.id))
+        if isDownloading, let selectedID {
+            pending.insert(selectedID)
+        }
+        pending.subtract(cachedIDs)
+        if pending != downloadingIDs {
+            downloadingIDs = pending
+        }
+    }
+
     func downloadAudio(youtubeURL: String, onReady: @escaping (URL, URL?) -> Void) {
         guard let track = Track.from(url: youtubeURL) else {
             errorMessage = "Cole um link válido do YouTube."
@@ -85,6 +119,7 @@ final class AudioDownloadManager: ObservableObject {
         isDownloading = cachedLocal == nil
         downloadProgress = cachedLocal == nil ? 0 : 1
         attempts[track.id] = 0
+        refreshTrackStatuses()
         let cached = cachedTrack(track)
         if let cachedLocal {
             // Local playback is immediate and does not invalidate in-flight Up Next work.
@@ -185,6 +220,7 @@ final class AudioDownloadManager: ObservableObject {
         isDownloading = false
         isRetrying = false
         downloadProgress = 0
+        refreshTrackStatuses()
         serialize {
             // A new track may have been selected while this cancellation waited
             // for older queue mutations. Never erase its download.
@@ -233,6 +269,7 @@ final class AudioDownloadManager: ObservableObject {
         isDownloading = false
         isRetrying = false
         downloadProgress = 1
+        refreshTrackStatuses()
         let callback = onReady
         onReady = nil
         onFailure = nil
@@ -244,6 +281,7 @@ final class AudioDownloadManager: ObservableObject {
         isDownloading = false
         isRetrying = false
         errorMessage = message
+        refreshTrackStatuses()
         let callback = onFailure
         onReady = nil
         onFailure = nil
@@ -253,6 +291,7 @@ final class AudioDownloadManager: ObservableObject {
     private var pendingURL: URL { cache.folder.appendingPathComponent("pending.json") }
 
     private func persistPending() {
+        refreshTrackStatuses()
         try? FileManager.default.createDirectory(at: cache.folder, withIntermediateDirectories: true)
         let unique = Dictionary(tracks.values.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         if let data = try? JSONEncoder().encode(unique) { try? data.write(to: pendingURL, options: .atomic) }

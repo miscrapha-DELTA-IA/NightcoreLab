@@ -105,6 +105,8 @@ struct ContentView: View {
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
     @State private var currentTrack: Track?
+    @State private var resumeTrack: Track?
+    @State private var didRestoreSession = false
     @State private var showLyrics = false
     @State private var isLoadingRelated = false
     @State private var relatedSourceURL: String?
@@ -126,7 +128,11 @@ struct ContentView: View {
         keepOriginalPitch ? 0 : 1200 * log2(speed)
     }
 
-    var body: some View {
+    var body: some View { playerPresentations }
+
+    // Splitting the chains keeps the same lifecycle and modal behavior while
+    // avoiding a single giant generic expression in the SwiftUI type checker.
+    private var playerCanvas: some View {
         ZStack {
             // Luz ambiente na cor do tema: troca com crossfade.
             AmbientBackground(theme: currentTheme)
@@ -149,48 +155,16 @@ struct ContentView: View {
                 .transition(.opacity)
             }
 
-            ScrollView {
-                VStack(spacing: DS.Spacing.l) {
-                    header
-                    SearchView(
-                        downloader: downloader, theme: currentTheme,
-                        isEnabled: !audio.isExporting,
-                        suggestedTracks: relatedVideos,
-                        isLoadingSuggestions: isLoadingRelated,
-                        canRefreshSuggestions: relatedSourceURL != nil,
-                        onRefreshSuggestions: { relatedRequestID = UUID() },
-                        onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
-                        onLink: { link in startDownload(link) },
-                        onServerSettings: { showServerSettings = true }
-                    )
-                    if downloader.isDownloading {
-                        Text(downloadStatusText)
-                            .font(DS.Typography.captionNumeric)
-                            .foregroundStyle(DS.Ink.secondary)
-                            .transition(.opacity)
-                    } else if let message = downloader.errorMessage {
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .font(DS.Typography.caption)
-                            .foregroundStyle(DS.Ink.error)
-                    }
-                    trackCard
-                    relatedSection
-                    presets
-                    controls
-                    exportSection
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 32)
-                .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollDisabled(isAdjustingSlider)
-.onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
+            mainScrollContent
         }
         .animation(.easeInOut(duration: 0.8), value: coverURL)
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
+    }
+
+    private var playerLifecycle: some View {
+        playerCanvas
+        .onAppear { restoreLastSession() }
         .onOpenURL { incomingURL in
             guard let components = URLComponents(
                 url: incomingURL,
@@ -220,7 +194,16 @@ struct ContentView: View {
             advanceQueue()
         }
         .onChange(of: audio.isPlaying) { _, playing in
-            if playing { prefetchUpcoming() }
+            if playing {
+                // Restored offline tracks only load recommendations after user presses Play.
+                if relatedSourceURL == nil, let currentTrack {
+                    relatedSourceURL = currentTrack.url.absoluteString
+                    relatedRequestID = UUID()
+                }
+                prefetchUpcoming()
+            } else if let currentTrack {
+                downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+            }
         }
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, _ in
@@ -233,10 +216,19 @@ struct ContentView: View {
             if !enabled { TelemetryManager.shared.discardPending() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { TelemetryManager.shared.flush() }
+            if phase == .background {
+                if let currentTrack {
+                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                }
+                TelemetryManager.shared.flush()
+            }
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
         }
         .task { downloader.warmUp() }
+    }
+
+    private var playerPresentations: some View {
+        playerLifecycle
         .sheet(isPresented: $showLyrics) {
             if let currentTrack {
                 LyricsView(track: currentTrack, audio: audio, theme: currentTheme,
@@ -360,6 +352,82 @@ struct ContentView: View {
         .accessibilityLabel("Importar música MP3, M4A, WAV ou AIFF")
     }
 
+    // Pull the long list out of body, keeping the view hierarchy unchanged.
+    private var mainScrollContent: some View {
+            ScrollView {
+                VStack(spacing: DS.Spacing.l) {
+                    header
+                    SearchView(
+                        downloader: downloader, theme: currentTheme,
+                        isEnabled: !audio.isExporting,
+                        suggestedTracks: relatedVideos,
+                        isLoadingSuggestions: isLoadingRelated,
+                        canRefreshSuggestions: relatedSourceURL != nil,
+                        onRefreshSuggestions: { relatedRequestID = UUID() },
+                        onSelect: { track, upcoming in playTrack(track, upcoming: upcoming) },
+                        onLink: { link in startDownload(link) },
+                        onServerSettings: { showServerSettings = true }
+                    )
+                    resumeSection
+                    if downloader.isDownloading {
+                        Text(downloadStatusText)
+                            .font(DS.Typography.captionNumeric)
+                            .foregroundStyle(DS.Ink.secondary)
+                            .transition(.opacity)
+                    } else if let message = downloader.errorMessage {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(DS.Typography.caption)
+                            .foregroundStyle(DS.Ink.error)
+                    }
+                    trackCard
+                    relatedSection
+                    presets
+                    controls
+                    exportSection
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
+                .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollDisabled(isAdjustingSlider)
+            .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
+    }
+
+    // Kept outside the main body to avoid SwiftUI's expression type-check explosion.
+    @ViewBuilder
+    private var resumeSection: some View {
+        if let resumeTrack, !hasTrack {
+            Button {
+                playTrack(resumeTrack, upcoming: [])
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(currentTheme.accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("ÚLTIMA MÚSICA")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(DS.Ink.secondary)
+                        Text(resumeTrack.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Text("Retomar")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(currentTheme.accent)
+                }
+                .padding(14)
+                .glassSurface(RoundedRectangle(cornerRadius: 16),
+                              theme: currentTheme, depth: 0.6)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retomar última música: \(resumeTrack.title)")
+        }
+    }
+
     private var downloadStatusText: String {
         if downloader.downloadProgress > 0 {
             return "Baixando… \(Int(downloader.downloadProgress * 100))%"
@@ -393,7 +461,7 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(audio.fileName ?? "Nenhuma música")
+                    Text(currentTrack?.title ?? audio.fileName ?? "Nenhuma música")
                         .font(DS.Typography.trackTitle)
                         .foregroundStyle(.white)
                         .lineLimit(1)
@@ -552,6 +620,7 @@ struct ContentView: View {
                 } else {
                     ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
                         let track = playbackQueue.upNextQueue[index]
+                        let status = downloader.status(for: track)
                         Button {
                             playFromQueue(track)
                         } label: {
@@ -569,13 +638,13 @@ struct ContentView: View {
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.white)
                                         .lineLimit(1)
-                                    Text(downloader.cachedTrack(track).isCached ? "Disponível offline" : "Na fila · pré-carregamento")
+                                    Text(status == .none ? "Na fila" : status.shortDescription)
                                         .font(.caption2)
-                                        .foregroundStyle(DS.Ink.secondary)
+                                        .foregroundStyle(status == .downloaded
+                                            ? Color.green.opacity(0.85) : DS.Ink.secondary)
                                 }
                                 Spacer(minLength: 0)
-                                Image(systemName: "play.fill")
-                                    .foregroundStyle(currentTheme.accent)
+                                TrackStatusIndicator(status: status, accent: currentTheme.accent)
                             }
                             .padding(.vertical, 4)
                         }
@@ -775,16 +844,23 @@ struct ContentView: View {
 
     private func playTrack(_ track: Track, upcoming: [Track], preservingQueue: Bool = false) {
         guard !audio.isExporting else { return }
+        let resumingPrevious = resumeTrack?.id == track.id
+        let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
+        resumeTrack = nil
         let token = playbackTransition.begin(trackID: track.id)
         downloader.select(track, onReady: { localURL, downloadedCoverURL in
             guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
             do {
                 try audio.load(url: localURL)
+                if let resumeAt, resumeAt > 0, resumeAt < audio.duration {
+                    audio.seek(to: resumeAt)
+                }
                 applyPitch()
                 audio.play()
                 guard audio.isPlaying else {
                     if playbackTransition.didFail(token, trackID: track.id) {
                         errorMessage = "Não foi possível iniciar a reprodução. A fila foi preservada."
+                        if resumingPrevious { resumeTrack = track }
                     }
                     return
                 }
@@ -796,9 +872,12 @@ struct ContentView: View {
                     resetRelatedVideos()
                     playbackQueue.replace(with: upcoming, excluding: track.id)
                 }
-                coverURL = downloadedCoverURL
+                coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = downloader.cachedTrack(track)
+                if let currentTrack {
+                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                }
                 // Only fetch new suggestions when there is no queued successor.
                 if playbackQueue.upNextQueue.isEmpty {
                     relatedSourceURL = track.url.absoluteString
@@ -808,11 +887,38 @@ struct ContentView: View {
             } catch {
                 guard playbackTransition.didFail(token, trackID: track.id) else { return }
                 errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                if resumingPrevious { resumeTrack = track }
             }
         }, onFailure: { message in
             guard playbackTransition.didFail(token, trackID: track.id) else { return }
             errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+            if resumingPrevious { resumeTrack = track }
         })
+    }
+
+    private func restoreLastSession() {
+        guard !didRestoreSession else { return }
+        didRestoreSession = true
+        guard !hasTrack, !downloader.isDownloading,
+              let saved = downloader.loadLastTrack() else { return }
+        guard let local = downloader.cachedAudioURL(for: saved.track) else {
+            // No silent server request after a cold launch or cache eviction.
+            resumeTrack = saved.track
+            return
+        }
+        do {
+            try audio.load(url: local)
+            applyPitch()
+            if saved.position > 0, saved.position < audio.duration {
+                audio.seek(to: saved.position)
+            }
+            coverURL = saved.track.thumbnailURL
+            currentTrack = downloader.cachedTrack(saved.track)
+            playingTrackID = saved.track.id
+            // AudioEngineManager.load() does not start playback.
+        } catch {
+            resumeTrack = saved.track
+        }
     }
 
     private func prefetchUpcoming() {
@@ -869,6 +975,8 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
+            resumeTrack = nil
+            downloader.clearLastTrack()
             playbackQueue.clear()
             playbackTransition.reset()
             downloader.cancel()
