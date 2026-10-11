@@ -40,6 +40,10 @@ extension MarbleTheme {
         case .prism: return .prism
         case .magma: return .magma
         case .noir: return .noir
+        case .ultrapink:   return .ultrapink
+        case .ultraorange: return .ultraorange
+        case .purewhite:   return .purewhite
+        case .ultrablack:  return .ultrablack
         }
     }
 }

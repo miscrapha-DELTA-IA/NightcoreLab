@@ -14,6 +14,13 @@ final class ThemeCatalogTests: XCTestCase {
         return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
     }
 
+    func testThemeCatalogContainsSeventeenThemes() {
+        XCTAssertEqual(AppTheme.allCases.count, 17)
+        XCTAssertEqual(MarbleTheme.allCases.count, 17)
+        XCTAssertEqual(AppTheme.noir.next, .ultrapink)
+        XCTAssertEqual(AppTheme.ultrablack.next, .acid)
+    }
+
     func testNamesAndDominantColorsAreUnique() {
         let names = AppTheme.allCases.map(\.displayName)
         let dominant = AppTheme.allCases.map(\.dominantColorName)

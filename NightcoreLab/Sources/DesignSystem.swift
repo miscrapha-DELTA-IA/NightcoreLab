@@ -8,6 +8,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
     // Os novos temas precisam compartilhar o rawValue com MarbleTheme.
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
+    case ultrapink, ultraorange, purewhite, ultrablack
 
     var id: String { rawValue }
 
@@ -26,6 +27,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .prism: return "Prism"
         case .magma: return "Magma"
         case .noir: return "Noir"
+        case .ultrapink:   return "Ultrapink"
+        case .ultraorange: return "Ultra Orange"
+        case .purewhite:   return "Pure White"
+        case .ultrablack:  return "Ultra Black"
         }
     }
 
@@ -45,6 +50,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .prism: return "laranja vibrante"
         case .magma: return "laranja-fogo"
         case .noir: return "branco"
+        case .ultrapink:   return "rosa neon"
+        case .ultraorange: return "laranja neon"
+        case .purewhite:   return "branco puro"
+        case .ultrablack:  return "preto absoluto"
         }
     }
 
@@ -64,6 +73,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .prism: return Color(red: 1.00, green: 0.54, blue: 0.12) // #FF8A1F laranja vibrante
         case .magma: return Color(red: 1.00, green: 0.35, blue: 0.16) // #FF5A2A laranja-fogo
         case .noir: return Color(red: 0.96, green: 0.96, blue: 0.96) // #F4F4F6 branco
+        case .ultrapink:   return Color(red: 1.00, green: 0.18, blue: 0.65) // #FF2EA6 rosa neon
+        case .ultraorange: return Color(red: 1.00, green: 0.29, blue: 0.10) // #FF4A1A laranja neon
+        case .purewhite:   return Color(red: 1.00, green: 1.00, blue: 1.00) // #FFFFFF branco puro
+        case .ultrablack:  return Color(red: 0.62, green: 0.64, blue: 0.69) // #9EA3AF cinza-aço (preto absoluto)
         }
     }
 
@@ -83,6 +96,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .prism: return Color(red: 0.18, green: 0.71, blue: 1.00) // #2FB6FF
         case .magma: return Color(red: 1.00, green: 0.69, blue: 0.18) // #FFB02E
         case .noir: return Color(red: 1.00, green: 0.17, blue: 0.17) // #FF2B2B
+        case .ultrapink:   return Color(red: 1.00, green: 0.70, blue: 0.90) // #FFB3E6 rosa claro
+        case .ultraorange: return Color(red: 0.79, green: 0.84, blue: 0.94) // #C9D6F0 branco azulado
+        case .purewhite:   return Color(red: 0.68, green: 0.71, blue: 0.77) // #AEB6C4 prata
+        case .ultrablack:  return Color(red: 0.48, green: 0.50, blue: 0.55) // #7A7F8C grafite
         }
     }
 

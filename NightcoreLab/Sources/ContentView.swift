@@ -364,7 +364,7 @@ struct ContentView: View {
         .accessibilityLabel(label)
     }
 
-    /// Toque cicla pelos 13 temas em AppTheme.allCases; toque longo abre o
+    /// Toque cicla pelos 17 temas em AppTheme.allCases; toque longo abre o
     /// menu para escolher diretamente pelo nome e cor dominante.
     private var themeButton: some View {
         Button {
