@@ -53,6 +53,42 @@ struct KaraokeTheme: Equatable {
         fill: Color(red: 0.62, green: 0.72, blue: 1.00),
         glow: Color(red: 0.31, green: 0.42, blue: 1.00).opacity(0.75),
         pastOpacity: 0.55, font: base)
+
+    static let atomic = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.35, green: 0.95, blue: 0.88),
+        glow: Color(red: 0.95, green: 0.30, blue: 0.18).opacity(0.70),
+        pastOpacity: 0.55, font: base)
+
+    static let lagoon = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.62, green: 0.85, blue: 1.00),
+        glow: Color(red: 0.12, green: 0.65, blue: 0.95).opacity(0.75),
+        pastOpacity: 0.55, font: base)
+
+    static let volt = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.97, blue: 0.55),
+        glow: Color(red: 0.95, green: 0.88, blue: 0.05).opacity(0.80),
+        pastOpacity: 0.55, font: base)
+
+    static let prism = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.82, blue: 0.55),
+        glow: Color(red: 1.00, green: 0.54, blue: 0.12).opacity(0.75),
+        pastOpacity: 0.55, font: base)
+
+    static let magma = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.86, blue: 0.62),
+        glow: Color(red: 1.00, green: 0.40, blue: 0.08).opacity(0.80),
+        pastOpacity: 0.55, font: base)
+
+    static let noir = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: .white,
+        glow: Color(red: 1.00, green: 0.15, blue: 0.15).opacity(0.75),
+        pastOpacity: 0.55, font: base)
 }
 
 extension KaraokeTheme {
@@ -65,6 +101,12 @@ extension KaraokeTheme {
         case .solar: return .solar
         case .orchid: return .orchid
         case .sapphire: return .sapphire
+        case .atomic: return .atomic
+        case .lagoon: return .lagoon
+        case .volt: return .volt
+        case .prism: return .prism
+        case .magma: return .magma
+        case .noir: return .noir
         }
     }
 }

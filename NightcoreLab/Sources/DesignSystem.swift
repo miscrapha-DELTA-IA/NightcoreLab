@@ -7,6 +7,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
     case acid, crimson, cyber
     // Os novos temas precisam compartilhar o rawValue com MarbleTheme.
     case ultraviolet, solar, orchid, sapphire
+    case atomic, lagoon, volt, prism, magma, noir
 
     var id: String { rawValue }
 
@@ -19,6 +20,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .solar:       return "Solar"
         case .orchid:      return "Orchid"
         case .sapphire:    return "Sapphire"
+        case .atomic: return "Atomic"
+        case .lagoon: return "Lagoon"
+        case .volt: return "Volt"
+        case .prism: return "Prism"
+        case .magma: return "Magma"
+        case .noir: return "Noir"
         }
     }
 
@@ -32,6 +39,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .solar:       return "amarelo âmbar"
         case .orchid:      return "roxo orquídea"
         case .sapphire:    return "azul safira"
+        case .atomic: return "verde-azulado"
+        case .lagoon: return "azul petróleo"
+        case .volt: return "amarelo limão"
+        case .prism: return "laranja vibrante"
+        case .magma: return "laranja-fogo"
+        case .noir: return "branco"
         }
     }
 
@@ -45,6 +58,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .solar:       return Color(red: 1.00, green: 0.78, blue: 0.17) // #FFC72C amarelo âmbar
         case .orchid:      return Color(red: 0.83, green: 0.42, blue: 0.88) // #D46CE0 roxo orquídea
         case .sapphire:    return Color(red: 0.31, green: 0.42, blue: 1.00) // #4F6BFF azul safira
+        case .atomic: return Color(red: 0.11, green: 0.79, blue: 0.72) // #1CC9B8 verde-azulado
+        case .lagoon: return Color(red: 0.12, green: 0.61, blue: 0.88) // #1E9BE0 azul petróleo
+        case .volt: return Color(red: 0.95, green: 0.88, blue: 0.00) // #F2E100 amarelo limão
+        case .prism: return Color(red: 1.00, green: 0.54, blue: 0.12) // #FF8A1F laranja vibrante
+        case .magma: return Color(red: 1.00, green: 0.35, blue: 0.16) // #FF5A2A laranja-fogo
+        case .noir: return Color(red: 0.96, green: 0.96, blue: 0.96) // #F4F4F6 branco
         }
     }
 
@@ -58,6 +77,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .solar:       return Color(red: 1.00, green: 0.54, blue: 0.17) // #FF8A2B laranja
         case .orchid:      return Color(red: 0.91, green: 0.85, blue: 0.94) // #E8D8F0 lilás claro
         case .sapphire:    return Color(red: 0.66, green: 0.72, blue: 1.00) // #A8B8FF azul-pervinca
+        case .atomic: return Color(red: 1.00, green: 0.35, blue: 0.21) // #FF5A36
+        case .lagoon: return Color(red: 1.00, green: 0.75, blue: 0.18) // #FFC02E
+        case .volt: return Color(red: 0.79, green: 0.79, blue: 0.83) // #C9CAD3
+        case .prism: return Color(red: 0.18, green: 0.71, blue: 1.00) // #2FB6FF
+        case .magma: return Color(red: 1.00, green: 0.69, blue: 0.18) // #FFB02E
+        case .noir: return Color(red: 1.00, green: 0.17, blue: 0.17) // #FF2B2B
         }
     }
 
@@ -72,7 +97,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
                        endPoint: vertical ? .top : .trailing)
     }
 
-    /// Próximo tema: acid → crimson → cyber → ultraviolet → solar → orchid → sapphire → acid.
+    /// Próximo tema na ordem de allCases; após Noir volta para Acid.
     var next: AppTheme {
         let all = Self.allCases
         let index = all.firstIndex(of: self) ?? 0
