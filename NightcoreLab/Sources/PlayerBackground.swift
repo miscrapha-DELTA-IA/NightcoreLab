@@ -3,7 +3,7 @@ import SDWebImageSwiftUI
 
 // MARK: - Estilo do fundo
 
-/// Estilos do fundo do mini-player. O botão de vinil avança ciclicamente por eles.
+/// Estilos visíveis no menu de fundo do cartão principal.
 enum PlayerBackgroundStyle: Int, CaseIterable {
     /// Fosco: capa desfocada.
     case blurred
@@ -11,8 +11,10 @@ enum PlayerBackgroundStyle: Int, CaseIterable {
     case sharp
     /// Em movimento: capa deslizando em loop contínuo.
     case marquee
+    /// Turbulent Displacement: gradientes neon animados com blur, sem imagem.
+    case turbulent
 
-    /// Próximo estilo no ciclo blurred → sharp → marquee → blurred.
+    /// Próximo estilo no ciclo blurred → sharp → marquee → turbulent → blurred.
     var next: PlayerBackgroundStyle {
         let all = Self.allCases
         let index = all.firstIndex(of: self) ?? 0
@@ -24,6 +26,16 @@ enum PlayerBackgroundStyle: Int, CaseIterable {
         case .blurred: return "Fosco"
         case .sharp:   return "Nítido"
         case .marquee: return "Em movimento"
+        case .turbulent: return "Turbulent Displacement"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .blurred: return "circle.dotted"
+        case .sharp: return "photo"
+        case .marquee: return "arrow.left.and.right"
+        case .turbulent: return "waveform.path"
         }
     }
 }
@@ -35,12 +47,19 @@ enum PlayerBackgroundStyle: Int, CaseIterable {
 /// o recorte nas bordas arredondadas é feito por quem o usa (`clipShape`).
 struct PlayerBackgroundView: View {
     let style: PlayerBackgroundStyle
-    let imageURL: URL
+    let imageURL: URL?
+    let theme: AppTheme
 
     var body: some View {
         ZStack {
-            switch style {
-            case .blurred:
+            if style == .turbulent {
+                // Destaque no cartão: a textura agora é perceptível, mas os controles
+                // seguem legíveis. Blur menor que o de tela cheia devido à área menor.
+                TurbulentBackgroundView(theme: theme, blurRadius: 36)
+                    .overlay(Color.black.opacity(0.18))
+            } else if let imageURL {
+                switch style {
+                case .blurred:
                 ZStack {
                     CoverFill(url: imageURL)
                         .blur(radius: 15, opaque: true)
@@ -55,12 +74,17 @@ struct PlayerBackgroundView: View {
                 }
                 .transition(.opacity)
 
-            case .marquee:
-                ZStack {
-                    MarqueeCover(url: imageURL)
-                    Color.black.opacity(0.5)
+                case .marquee:
+                    ZStack {
+                        MarqueeCover(url: imageURL)
+                        Color.black.opacity(0.5)
+                    }
+                    .transition(.opacity)
+                case .turbulent:
+                    EmptyView() // Renderizado acima; mantém o switch exaustivo.
                 }
-                .transition(.opacity)
+            } else {
+                Color.black.opacity(0.34)
             }
         }
         .clipped()

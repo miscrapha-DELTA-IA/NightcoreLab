@@ -89,6 +89,7 @@ private struct TurbulentBlob: View {
 /// caller (the player defaults to 0.6).
 struct TurbulentBackgroundView: View {
     let theme: AppTheme
+    var blurRadius: CGFloat = 80
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -115,7 +116,7 @@ struct TurbulentBackgroundView: View {
                         }
                     }
                     .compositingGroup()
-                    .blur(radius: 80, opaque: false)
+                    .blur(radius: blurRadius, opaque: false)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .clipped()
