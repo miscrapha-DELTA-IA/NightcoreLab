@@ -21,6 +21,7 @@ struct SearchView: View {
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
     @Binding var isDiscoverExpanded: Bool
+    @Binding var isDiscoverVisible: Bool
     @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
     @State private var hasRestoredQuery = false
     @State private var query = ""
@@ -75,6 +76,7 @@ struct SearchView: View {
         } else {
             // A new text search should open the panel so results are not hidden.
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                isDiscoverVisible = true
                 isDiscoverExpanded = true
             }
             lastSearchQuery = value
@@ -108,8 +110,9 @@ struct SearchView: View {
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
 
-            CollapsibleGlassSection(
-                title: "DESCOBRIR",
+            if isDiscoverVisible {
+                CollapsibleGlassSection(
+                    title: "DESCOBRIR",
                 icon: "sparkles",
                 isExpanded: $isDiscoverExpanded,
                 tint: theme.accent
@@ -187,8 +190,11 @@ struct SearchView: View {
                         }
                     }
                 }
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
             }
         }
+        .animation(.spring(duration: 0.5), value: isDiscoverVisible)
         .onAppear {
             guard !hasRestoredQuery else { return }
             hasRestoredQuery = true
