@@ -78,6 +78,13 @@ actor LyricsPrefetcher {
     /// A tela de letras consulta a seleção persistida sem chamar a rede.
     func cachedChoice(for videoID: String) -> CachedLyricsChoice? { cache.load(videoID) }
 
+    /// A tela pode aguardar o trabalho já em curso, em vez de iniciar um segundo
+    /// fluxo de até 3 requisições quando o usuário abre o karaokê rapidamente.
+    func awaitChoice(for videoID: String) async -> CachedLyricsChoice? {
+        if activeID == videoID { await task?.value }
+        return cache.load(videoID)
+    }
+
     /// Escolha manual ("trocar letra"): vira definitiva para esta faixa.
     func pin(_ record: LRCLIBRecord, for videoID: String) async {
         if activeID == videoID { task?.cancel() }
