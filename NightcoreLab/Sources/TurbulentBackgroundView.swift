@@ -75,10 +75,10 @@ private struct TurbulentBlob: View {
                 )
             )
             .frame(width: diameter, height: diameter)
-            .scaleEffect(motion.scale)
+            .scaleEffect(CGFloat(motion.scale))
             .position(
-                x: size.width * (anchor.x + motion.horizontal),
-                y: size.height * (anchor.y + motion.vertical)
+                x: size.width * (anchor.x + CGFloat(motion.horizontal)),
+                y: size.height * (anchor.y + CGFloat(motion.vertical))
             )
             .blendMode(.screen)
     }
@@ -99,6 +99,7 @@ struct TurbulentBackgroundView: View {
         TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !animates)) { context in
             // Fixed arrangement for Reduce Motion / offscreen scenes.
             let time = animates ? context.date.timeIntervalSinceReferenceDate : 0.0
+            let palette = TurbulentPalette.colors(for: theme)
             GeometryReader { geometry in
                 ZStack {
                     Color(red: 0.008, green: 0.009, blue: 0.014)
@@ -107,7 +108,7 @@ struct TurbulentBackgroundView: View {
                         ForEach(0..<4, id: \.self) { index in
                             TurbulentBlob(
                                 index: index,
-                                color: TurbulentPalette.colors(for: theme)[index],
+                                color: palette[index],
                                 time: time,
                                 size: geometry.size
                             )
