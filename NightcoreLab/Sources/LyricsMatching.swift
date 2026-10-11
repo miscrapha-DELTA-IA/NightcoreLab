@@ -53,7 +53,7 @@ enum LyricsMatcher {
         var title = raw
         // Remove YouTube presentation labels, but do not discard genuine song
         // titles or bracketed words unless the bracket is a known media qualifier.
-        let qualifiers = #"[\\[(][^\\])]*(?:official|music video|lyrics?|visuali[sz]er|audio|slowed|nightcore|reverb|sped up|edit|remaster|4k|8d|bass boosted)[^\\])]*[\\])]"#
+        let qualifiers = #"\([^)]*(?:official|music video|lyrics?|visuali[sz]er|audio|slowed|nightcore|reverb|sped up|edit|remaster|4k|8d|bass boosted)[^)]*\)|\[[^\]]*(?:official|music video|lyrics?|visuali[sz]er|audio|slowed|nightcore|reverb|sped up|edit|remaster|4k|8d|bass boosted)[^\]]*\]"#
         title = title.replacingOccurrences(of: qualifiers, with: "",
                                            options: [.regularExpression, .caseInsensitive])
         title = title.replacingOccurrences(
