@@ -92,6 +92,7 @@ struct LyricsView: View {
     let audio: AudioEngineManager
     let theme: AppTheme
     let dismiss: () -> Void
+    var inline = false
 
     @Environment(LyricsStore.self) private var lyricStore
     @State private var record: LyricsRecord?
@@ -107,6 +108,7 @@ struct LyricsView: View {
     @AppStorage("lyricsColorMode") private var colorMode: LyricsColorMode = .artwork
 
     private var lyricAccent: Color {
+        if inline { return theme.accent }
         switch colorMode {
         // If the artwork is grayscale/unavailable, use readable neutral white,
         // never the theme color; otherwise the two choices looked identical.
@@ -162,14 +164,21 @@ struct LyricsView: View {
         KaraokeLyricsView(clock: audio.lyricsClock,
                           theme: .forAppTheme(theme),
                           accent: lyricAccent)
+            .mask {
+                if inline { LyricsFadeMask() }
+                else { Rectangle() }
+            }
     }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            LyricsBackdrop(track: track)
+            if !inline {
+                Color.black.ignoresSafeArea()
+                LyricsBackdrop(track: track)
+            }
 
-            VStack(spacing: 18) {
+            VStack(spacing: inline ? 10 : 18) {
+                if !inline {
                 HStack(spacing: 12) {
                     if let cover = track.thumbnailURL {
                         WebImage(url: cover)
@@ -193,7 +202,9 @@ struct LyricsView: View {
                 .padding(14)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                 .padding(.horizontal, 16)
+                }
 
+                if !inline {
                 HStack(spacing: 10) {
                     Text("COR DAS LETRAS")
                         .font(.caption2.weight(.bold))
@@ -209,6 +220,7 @@ struct LyricsView: View {
                     colorModeButton(.theme)
                 }
                 .padding(.horizontal, 22)
+                }
 
                 if let record {
                     HStack(spacing: 8) {
@@ -307,7 +319,7 @@ struct LyricsView: View {
                     Spacer()
                 }
             }
-            .padding(.top, 20)
+            .padding(.top, inline ? 4 : 20)
         }
         .onAppear {
             lyricStore.attach(clock: audio.lyricsClock)

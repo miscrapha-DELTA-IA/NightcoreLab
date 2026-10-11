@@ -154,25 +154,38 @@ struct ContentView: View {
 
     var body: some View { playerPresentations }
 
-    // Splitting the chains keeps the same lifecycle and modal behavior while
-    // avoiding a single giant generic expression in the SwiftUI type checker.
+    /// O motor permanece nesta View; AnyLayout altera apenas sua apresentação.
     private var playerCanvas: some View {
-        ZStack {
-            // Liquid Marble: uma camada Metal no fundo de toda a tela.
-            // A capa permanece nítida no cartão; removemos a capa ampliada
-            // e desfocada que antes escondia o efeito fluido.
-            TurbulentMarbleView(
-                theme: MarbleTheme(appTheme: currentTheme),
-                speed: 0.6,
-                maxFPS: 30
-            )
-            .overlay(Color.black.opacity(0.4))
-            .allowsHitTesting(false)
-
-
-            mainScrollContent
-        }
-        .animation(.easeInOut(duration: 0.8), value: coverURL)
+        NowPlayingScreen(
+            track: TrackInfo(track: currentTrack, fileName: audio.fileName, coverURL: coverURL),
+            clock: audio.lyricsClock,
+            isPlaying: audio.isPlaying,
+            isTrackLoaded: hasTrack,
+            canShowKaraoke: currentTrack != nil,
+            canSkipNext: !playbackQueue.upNextQueue.isEmpty,
+            appTheme: $currentTheme,
+            isKaraokeMode: $showLyrics,
+            onPlayPause: { audio.togglePlayback() },
+            onPrevious: { audio.seek(to: 0) },
+            onNext: {
+                if let next = playbackQueue.upNextQueue.first {
+                    playFromQueue(next)
+                }
+            },
+            normalExtras: { mainScrollContent },
+            karaokeContent: {
+                if let currentTrack {
+                    LyricsView(
+                        track: currentTrack,
+                        audio: audio,
+                        theme: currentTheme,
+                        dismiss: { withAnimation { showLyrics = false } },
+                        inline: true
+                    )
+                    .id(currentTrack.id)
+                }
+            }
+        )
         .tint(currentTheme.accent)
         .preferredColorScheme(.dark)
     }
@@ -240,14 +253,6 @@ struct ContentView: View {
 
     private var playerPresentations: some View {
         playerLifecycle
-        .sheet(isPresented: $showLyrics) {
-            if let currentTrack {
-                LyricsView(track: currentTrack, audio: audio, theme: currentTheme,
-                           dismiss: { showLyrics = false })
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-            }
-        }
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
@@ -390,7 +395,7 @@ struct ContentView: View {
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
                     }
-                    trackCard
+                    if hasTrack { playbackDetails }
                     relatedSection
                     presets
                     controls
@@ -456,84 +461,32 @@ struct ContentView: View {
         RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
     }
 
-    private var trackCard: some View {
+    /// Só os controles auxiliares ficam no modo normal: capa, título e
+    /// transporte já pertencem ao PlayerHeader animado do NowPlayingScreen.
+    private var playbackDetails: some View {
         HStack(spacing: DS.Spacing.m) {
-            Button {
-                audio.togglePlayback()
-            } label: {
-                VinylPlaybackArtwork(coverURL: coverURL,
-                                     isPlaying: audio.isPlaying,
-                                     theme: currentTheme)
-                    .id(coverURL)
-            }
-            .disabled(!hasTrack)
-            .opacity(hasTrack ? 1 : 0.4)
-            .accessibilityLabel(audio.isPlaying ? "Pausar" : "Tocar")
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(currentTrack?.title ?? audio.fileName ?? "Nenhuma música")
-                        .font(DS.Typography.trackTitle)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("POSIÇÃO")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Spacer(minLength: 4)
+                    Text(durationText)
+                        .font(DS.Typography.subtitleNumeric)
                         .foregroundStyle(.white)
-                        .lineLimit(1)
-                    if currentTrack != nil {
-                        Button {
-                            showLyrics = true
-                        } label: {
-                            Image(systemName: "mic.fill")
-                                .font(.subheadline)
-                                .foregroundStyle(currentTheme.accent)
-                                .frame(width: 30, height: 30)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Abrir letras da música")
-                    }
                 }
-                Text(hasTrack ? durationText : "Toque em + ou cole um link")
-                    .font(DS.Typography.subtitleNumeric)
-                    .foregroundStyle(hasTrack ? Color.white : DS.Ink.secondary)
-                    .lineLimit(1)
-                    .contentTransition(.numericText())
-
                 miniScrubber
             }
-
-            Spacer(minLength: 0)
-
             LevelBars(color: currentTheme.accent, isAnimating: audio.isPlaying)
-                .opacity(hasTrack ? 1 : 0)
-
             bgStyleButton
         }
         .padding(DS.Spacing.m)
-        // Fundo da capa: usa `.background` para ter exatamente o tamanho do card.
-        // Uma imagem `scaledToFill` ou um `GeometryReader` como irmão no ZStack esticariam a altura.
         .background {
-            // Turbulent também aparece em músicas importadas sem thumbnail.
             PlayerBackgroundView(style: bgStyle, imageURL: coverURL, theme: currentTheme)
                 .id(coverURL)
         }
         .clipShape(trackCardShape)
         .glassSurface(trackCardShape, theme: currentTheme, isActive: audio.isPlaying)
-        .contentShape(trackCardShape)
-        .onTapGesture {
-            if hasTrack {
-                audio.togglePlayback()
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            } else {
-                showImporter = true
-            }
-        }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { value in
-                    guard hasTrack, !isDraggingTime, abs(value.translation.width) > 50,
-                          abs(value.translation.width) > abs(value.translation.height) else { return }
-                    audio.seek(by: value.translation.width > 0 ? 15 : -15)
-                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                }
-        )
     }
 
     /// Linha do tempo minimalista, atualizada sem modificar o pipeline de áudio.
@@ -1034,6 +987,7 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
+            showLyrics = false
             resumeTrack = nil
             downloader.clearLastTrack()
             playbackQueue.clear()
