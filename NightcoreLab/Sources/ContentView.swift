@@ -145,7 +145,6 @@ struct ContentView: View {
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
-    @AppStorage("showPlaybackDetails") private var isPlaybackExpanded = true
     @AppStorage("showPresets") private var isPresetsExpanded = true
     @AppStorage("showAudioControls") private var isControlsExpanded = true
     @AppStorage("showExport") private var isExportExpanded = true
@@ -191,6 +190,7 @@ struct ContentView: View {
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
+            playerBackgroundStyle: bgStyle,
             onPlayPause: { audio.togglePlayback() },
             onPrevious: { audio.seek(to: 0) },
             onNext: {
@@ -198,6 +198,7 @@ struct ContentView: View {
                     playFromQueue(next)
                 }
             },
+            playerDetails: { integratedPlaybackBar },
             normalExtras: { mainScrollContent },
             karaokeContent: {
                 if let currentTrack {
@@ -387,7 +388,7 @@ struct ContentView: View {
     private var mainScrollContent: some View {
             ScrollView {
                 VStack(spacing: DS.Spacing.l) {
-                    header
+                    header.hideablePanel(.header, edge: .top)
                     SearchView(
                         downloader: downloader, theme: currentTheme,
                         isEnabled: !audio.isExporting,
@@ -429,15 +430,6 @@ struct ContentView: View {
                         Label(message, systemImage: "exclamationmark.triangle.fill")
                             .font(DS.Typography.caption)
                             .foregroundStyle(DS.Ink.error)
-                    }
-                    if hasTrack {
-                        CollapsibleGlassSection(
-                            title: "REPRODUÇÃO", icon: "waveform",
-                            isExpanded: $isPlaybackExpanded, tint: currentTheme.accent
-                        ) {
-                            playbackDetails
-                        }
-                        .hideablePanel(.playback)
                     }
                     relatedSection.hideablePanel(.queue)
                     CollapsibleGlassSection(
@@ -514,17 +506,11 @@ struct ContentView: View {
             : "Extraindo o áudio no servidor…"
     }
 
-    // MARK: - Cartão da música (vidro)
+    // MARK: - Progresso integrado ao cartão do player
 
-    /// Forma única do card: recorte do fundo, vidro e área de toque usam a mesma, para a
-    /// imagem nunca vazar dos cantos arredondados.
-    private var trackCardShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-    }
-
-    /// Só os controles auxiliares ficam no modo normal: capa, título e
-    /// transporte já pertencem ao PlayerHeader animado do NowPlayingScreen.
-    private var playbackDetails: some View {
+    /// Progresso, níveis e estilo de fundo dividem a mesma superfície de
+    /// vidro e o mesmo controle de visibilidade do PlayerHeader.
+    private var integratedPlaybackBar: some View {
         HStack(spacing: DS.Spacing.m) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -541,13 +527,6 @@ struct ContentView: View {
             LevelBars(color: currentTheme.accent, isAnimating: audio.isPlaying)
             bgStyleButton
         }
-        .padding(DS.Spacing.m)
-        .background {
-            PlayerBackgroundView(style: bgStyle, imageURL: coverURL, theme: currentTheme)
-                .id(coverURL)
-        }
-        .clipShape(trackCardShape)
-        .glassSurface(trackCardShape, theme: currentTheme, isActive: audio.isPlaying)
     }
 
     /// Linha do tempo minimalista, atualizada sem modificar o pipeline de áudio.
@@ -596,7 +575,7 @@ struct ContentView: View {
         .frame(height: 12)
         .padding(.top, 5)
         .accessibilityLabel("Posição da música")
-        .accessibilityValue("\\(Int(audio.playbackTime)) de \\(Int(audio.duration)) segundos")
+        .accessibilityValue("\(Int(audio.playbackTime)) de \(Int(audio.duration)) segundos")
     }
 
     /// Menu explícito: a opção Turbulent não se confunde com a capa que desliza.

@@ -47,7 +47,7 @@ final class PanelSystemTests: XCTestCase {
                         "visiblePresets", "visibleControls", "visibleExport"]
             for key in keys { defaults.set(false, forKey: key) }
             let store = PanelStore(defaults: defaults)
-            XCTAssertEqual(store.hidden, [.discover, .queue, .playback, .presets, .controls, .export])
+            XCTAssertEqual(store.hidden, [.discover, .queue, .presets, .controls, .export])
             for key in keys { XCTAssertNil(defaults.object(forKey: key)) }
         }
     }
@@ -107,7 +107,8 @@ final class PanelSystemTests: XCTestCase {
         withDefaults { defaults in
             let store = PanelStore(defaults: defaults)
             store.apply(.balanced)
-            XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }), [.player, .omnibox, .queue])
+            XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }),
+                           [.header, .player, .omnibox, .discover, .queue, .controls])
             store.apply(.listen)
             XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }), [.player, .controls])
             XCTAssertTrue(store.isVisible(.lyrics))
@@ -137,6 +138,39 @@ final class PanelSystemTests: XCTestCase {
             XCTAssertEqual(store.hiddenCount(in: PanelID.mainPanels), 0)
             XCTAssertEqual(defaults.string(forKey: "lastSearchQuery"), "keep-playing")
             XCTAssertTrue(PanelStore(defaults: defaults).hidden.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testHeaderCanBeHiddenAndRestoredAlongsideOtherPanelsInOneAction() {
+        withDefaults { defaults in
+            let store = PanelStore(defaults: defaults)
+            XCTAssertTrue(PanelID.mainPanels.contains(.header))
+            store.hideAll(in: PanelID.mainPanels)
+            XCTAssertFalse(store.isVisible(.header))
+            XCTAssertFalse(store.isVisible(.player))
+            XCTAssertEqual(store.hiddenCount(in: PanelID.mainPanels), PanelID.mainPanels.count)
+            store.apply(.balanced)
+            XCTAssertTrue(store.isVisible(.header))
+            XCTAssertTrue(store.isVisible(.player))
+            XCTAssertFalse(store.isVisible(.export))
+            store.showAll()
+            XCTAssertTrue(store.isVisible(.export))
+            XCTAssertTrue(PanelStore(defaults: defaults).isVisible(.header))
+        }
+    }
+
+    @MainActor
+    func testObsoletePlaybackVisibilityNeverHidesMergedPlayer() {
+        withDefaults { defaults in
+            defaults.set(["playback", "presets"], forKey: "ui.hiddenPanels")
+            defaults.set(false, forKey: "visiblePlayback")
+            let store = PanelStore(defaults: defaults)
+            XCTAssertTrue(store.isVisible(.player))
+            XCTAssertTrue(store.isVisible(.header))
+            XCTAssertFalse(store.isVisible(.presets))
+            XCTAssertNil(defaults.object(forKey: "visiblePlayback"))
+            XCTAssertFalse((defaults.stringArray(forKey: "ui.hiddenPanels") ?? []).contains("playback"))
         }
     }
 

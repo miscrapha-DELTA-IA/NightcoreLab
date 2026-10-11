@@ -12,16 +12,17 @@ import Observation
 // =============================================================================
 
 enum PanelID: String, CaseIterable, Identifiable {
-    case player, lyrics, themes, controls
-    case omnibox, discover, queue, playback, presets, export
+    case header, player, lyrics, themes, controls
+    case omnibox, discover, queue, presets, export
 
-    static let mainPanels: [PanelID] = [.player, .omnibox, .discover, .queue, .playback, .presets, .controls, .export]
+    static let mainPanels: [PanelID] = [.header, .player, .omnibox, .discover, .queue, .presets, .controls, .export]
     static let karaokePanels: [PanelID] = [.player, .lyrics, .themes]
     // Telas novas: adicione um case + título + ícone aqui.
 
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .header: return "Cabeçalho e atalhos"
         case .player: return "Player"
         case .lyrics: return "Letras"
         case .themes: return "Temas e fundo"
@@ -29,13 +30,13 @@ enum PanelID: String, CaseIterable, Identifiable {
         case .omnibox: return "Busca"
         case .discover: return "Descobrir"
         case .queue: return "A seguir"
-        case .playback: return "Reprodução"
         case .presets: return "Presets"
         case .export: return "Exportar"
         }
     }
     var icon: String {
         switch self {
+        case .header: return "heart.text.square"
         case .player: return "music.note"
         case .lyrics: return "text.quote"
         case .themes: return "paintpalette"
@@ -43,7 +44,6 @@ enum PanelID: String, CaseIterable, Identifiable {
         case .omnibox: return "magnifyingglass"
         case .discover: return "sparkles"
         case .queue: return "list.dash"
-        case .playback: return "waveform"
         case .presets: return "slider.horizontal.3"
         case .export: return "square.and.arrow.up"
         }
@@ -56,15 +56,15 @@ enum PanelDensity: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .discover: return "Descobrir"
-        case .balanced: return "Equilibrado"
+        case .discover: return "Completo"
+        case .balanced: return "Essencial"
         case .listen: return "Só ouvir"
         }
     }
     var visiblePanels: Set<PanelID> {
         switch self {
         case .discover: return Set(PanelID.allCases)
-        case .balanced: return [.player, .omnibox, .queue, .lyrics, .themes]
+        case .balanced: return [.header, .player, .omnibox, .discover, .queue, .controls, .lyrics, .themes]
         case .listen: return [.player, .controls, .lyrics, .themes]
         }
     }
@@ -98,7 +98,7 @@ final class PanelStore {
         var migrated = Set(raw.compactMap(PanelID.init(rawValue:)))
         let legacy: [(String, PanelID)] = [
             ("visibleDiscover", .discover), ("visibleQueue", .queue),
-            ("visiblePlayback", .playback), ("visiblePresets", .presets),
+            ("visiblePresets", .presets),
             ("visibleControls", .controls), ("visibleExport", .export)
         ]
         for (key, id) in legacy where defaults.object(forKey: key) != nil {
@@ -108,6 +108,8 @@ final class PanelStore {
         // Write the merged preference BEFORE removing its legacy source.
         persist()
         for (key, _) in legacy { defaults.removeObject(forKey: key) }
+        // The former Reprodução accordion was merged into Player: drop its old visibility key.
+        defaults.removeObject(forKey: "visiblePlayback")
         // Zen is now a session-only mask on both screens.
         defaults.removeObject(forKey: "isZenMode")
     }
@@ -130,6 +132,14 @@ final class PanelStore {
         persist()
     }
     func showAll() { withAnimation(Self.motion) { isZen = false; hidden.removeAll() }; persist() }
+    /// Hide the current screen's panels in one action; the eye menu remains outside this mask.
+    func hideAll(in ids: [PanelID]) {
+        withAnimation(Self.motion) {
+            isZen = false
+            hidden.formUnion(ids)
+        }
+        persist()
+    }
     func apply(_ density: PanelDensity) {
         withAnimation(Self.motion) {
             isZen = false
@@ -219,16 +229,17 @@ struct PanelsMenuButton: View {
 
     var body: some View {
         Menu {
-            Button("Mostrar tudo", systemImage: "eye") { store.showAll() }
-            Button(store.isZen ? "Sair do modo Zen" : "Entrar no modo Zen", systemImage: "eye.slash") {
-                store.toggleZen()
-            }
-            Section("Densidade da interface") {
-                ForEach(PanelDensity.allCases) { density in
-                    Button(density.title) { store.apply(density) }
+            Section("Layouts em um toque") {
+                Button("Mostrar tudo", systemImage: "eye") { store.showAll() }
+                Button("Essencial", systemImage: "square.grid.2x2") { store.apply(.balanced) }
+                Button("Só ouvir", systemImage: "headphones") { store.apply(.listen) }
+                Button("Ocultar seções desta tela", systemImage: "rectangle.slash") {
+                    store.hideAll(in: panels)
                 }
+                Button(store.isZen ? "Sair do modo Zen" : "Fundo livre (Zen)",
+                       systemImage: "eye.slash") { store.toggleZen() }
             }
-            Section("Painéis desta tela") {
+            Section("Personalizar painéis") {
                 ForEach(panels) { id in
                     Toggle(isOn: Binding(get: { !store.isHidden(id) }, set: { store.setVisible($0, for: id) })) {
                         Label(id.title, systemImage: id.icon)

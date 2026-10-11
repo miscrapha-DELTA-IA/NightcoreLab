@@ -2,6 +2,12 @@ import XCTest
 @testable import NightcoreLab
 
 final class NowPlayingScreenTests: XCTestCase {
+    func testIntegratedPlayerKeepsBackgroundStylesAvailable() {
+        // The embedded card keeps using the prior four PlayerBackgroundStyle choices.
+        XCTAssertEqual(PlayerBackgroundStyle.allCases.count, 4)
+        XCTAssertTrue(PlayerBackgroundStyle.allCases.contains(.turbulent))
+    }
+
     func testMapsYouTubeTrackAndParsesAvailableArtist() {
         let artwork = URL(string: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")
         let track = Track(id: "dQw4w9WgXcQ", title: "Example Artist - Example Track",

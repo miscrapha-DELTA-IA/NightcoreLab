@@ -67,7 +67,7 @@ struct TrackInfo: Equatable {
 
 // MARK: - Tela
 
-struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
+struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>: View {
     let track: TrackInfo
     let clock: PlaybackClock
     let isPlaying: Bool
@@ -78,9 +78,11 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     @Binding var isKaraokeMode: Bool
     @Binding var lyricsCleanMode: Bool
     @Binding var backgroundStyle: BackgroundStyle
+    let playerBackgroundStyle: PlayerBackgroundStyle
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
+    @ViewBuilder var playerDetails: () -> PlayerDetails
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
@@ -124,20 +126,11 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
 
             VStack(spacing: 0) {
                 if isTrackLoaded {
-                    PlayerHeader(
-                        track: track,
-                        isPlaying: isPlaying,
-                        compact: showsKaraoke,
-                        canSkipNext: canSkipNext,
-                        onPlayPause: onPlayPause,
-                        onPrevious: onPrevious,
-                        onNext: onNext
-                    )
-                    .padding(.horizontal, 20)
-                    // Reserve a separate top row for eye/share/mic controls.
-                    // Compressing the player by 148pt made artwork and title collide.
-                    .padding(.top, 74)
-                    .hideablePanel(.player, edge: .top)
+                    unifiedPlayerCard
+                        .padding(.horizontal, 20)
+                        // Keep the overlay controls in their own row.
+                        .padding(.top, 74)
+                        .hideablePanel(.player, edge: .top)
                 }
 
                 if showsKaraoke {
@@ -201,6 +194,40 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
+    }
+
+    /// A antiga janela Reprodução agora é a metade inferior deste cartão.
+    /// O mesmo card recebe a capa, transporte, scrubber e metal líquido.
+    private var unifiedPlayerCard: some View {
+        VStack(spacing: showsKaraoke ? 0 : 10) {
+            PlayerHeader(
+                track: track,
+                isPlaying: isPlaying,
+                compact: showsKaraoke,
+                canSkipNext: canSkipNext,
+                onPlayPause: onPlayPause,
+                onPrevious: onPrevious,
+                onNext: onNext
+            )
+            if !showsKaraoke {
+                playerDetails()
+                    .padding(.top, 4)
+            }
+        }
+        .padding(.horizontal, showsKaraoke ? 12 : 14)
+        .padding(.vertical, showsKaraoke ? 10 : 14)
+        .background {
+            if !showsKaraoke {
+                PlayerBackgroundView(style: playerBackgroundStyle,
+                                     imageURL: track.coverURL,
+                                     theme: appTheme)
+                    .id(track.coverURL)
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
+        .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous),
+                      theme: appTheme, isActive: isPlaying, pulses: false, depth: 0.7)
     }
 
     /// Congela a fase exibida agora; nunca reinicia o áudio nem cria outro shader animado.
@@ -294,10 +321,10 @@ private struct PlayerHeader: View {
     var body: some View {
         // Vertical (player aberto) <-> horizontal (mini-player no topo).
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12))
-                             : AnyLayout(VStackLayout(spacing: 16))
+                             : AnyLayout(VStackLayout(spacing: 11))
         layout {
             CoverArt(url: track.coverURL)
-                .frame(width: compact ? 52 : 224, height: compact ? 52 : 224)
+                .frame(width: compact ? 52 : 192, height: compact ? 52 : 192)
                 .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 28, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: compact ? 6 : 30, y: compact ? 2 : 14)
 
@@ -331,7 +358,7 @@ private struct Transport: View {
                     .font(.title2)
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(.black)
-                    .frame(width: compact ? 44 : 72, height: compact ? 44 : 72)
+                    .frame(width: compact ? 44 : 64, height: compact ? 44 : 64)
                     .background(.white, in: Circle())
             }
             .buttonStyle(.plain)
