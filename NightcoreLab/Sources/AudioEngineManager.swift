@@ -84,6 +84,7 @@ final class AudioEngineManager {
     // player → upmix → varispeed → timePitch (só quando necessário) → EQ → reverb → limiter → saída
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
+    @ObservationIgnored lazy var lyricsClock = EnginePlaybackClock(player: player)
     private let upmix = AVAudioMixerNode()
     private let varispeed = AVAudioUnitVarispeed()
     private let timePitch = AudioEngineManager.makeTimePitch()
@@ -168,6 +169,7 @@ final class AudioEngineManager {
 
     func pause() {
         lastKnownTime = currentTime   // captura antes de pausar, enquanto lastRenderTime é válido
+        lyricsClock.didPause(at: lastKnownTime)
         player.pause()
         isPlaying = false
         setupNowPlaying()
@@ -189,6 +191,7 @@ final class AudioEngineManager {
         player.stop()
         isPlaying = false
         lastKnownTime = target
+        lyricsClock.didSeek(to: target)
         scheduledStartTime = target
         needsScheduling = true
         if target < duration {
@@ -210,6 +213,7 @@ final class AudioEngineManager {
     func setSpeed(_ value: Float) {
         speed = value.clamped(to: Self.speedRange)
         Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
+        lyricsClock.setSpeed(Double(speed))
         setupNowPlaying()   // a barra de progresso da tela de bloqueio acompanha a nova velocidade
     }
 
@@ -223,6 +227,7 @@ final class AudioEngineManager {
         speed = value.clamped(to: Self.speedRange)
         pitch = keepOriginalPitch ? 0 : 1200 * log2(speed)
         Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
+        lyricsClock.setSpeed(Double(speed))
         setupNowPlaying()
     }
 
@@ -276,6 +281,7 @@ final class AudioEngineManager {
         let remaining = file.length - startFrame
         guard remaining > 0 else { return }
         scheduledStartTime = start
+        lyricsClock.didSeek(to: start)
         player.scheduleSegment(file, startingFrame: startFrame,
                                frameCount: AVAudioFrameCount(min(remaining, Int64(UInt32.max))),
                                at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
@@ -292,6 +298,7 @@ final class AudioEngineManager {
         isPlaying = false
         lastKnownTime = 0
         scheduledStartTime = 0
+        lyricsClock.didSeek(to: 0)
         setupNowPlaying()
         playbackCompletionCount += 1
     }
@@ -303,6 +310,7 @@ final class AudioEngineManager {
         isPlaying = false
         lastKnownTime = 0
         scheduledStartTime = 0
+        lyricsClock.didSeek(to: 0)
     }
 
     // MARK: - Now Playing (Tela de Bloqueio / Control Center)
