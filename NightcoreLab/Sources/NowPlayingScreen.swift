@@ -127,6 +127,7 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
             VStack(spacing: 0) {
                 if isTrackLoaded {
                     unifiedPlayerCard
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, 20)
                         // Keep the overlay controls in their own row.
                         .padding(.top, 70)

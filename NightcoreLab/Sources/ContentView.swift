@@ -159,7 +159,6 @@ struct ContentView: View {
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
     private var hasTrack: Bool { audio.fileName != nil }
-    private var hiddenMainPanelCount: Int { panels.hiddenCount(in: PanelID.mainPanels) }
     private var hasMusicPanels: Bool {
         PanelID.discoveryPanels.contains { panels.isVisible($0) }
     }
@@ -396,24 +395,6 @@ struct ContentView: View {
                 VStack(spacing: DS.Spacing.l) {
                     header.hideablePanel(.header, edge: .top)
                     musicWorkspace
-                    if hiddenMainPanelCount > 0 {
-                        HStack(spacing: 10) {
-                            Image(systemName: "eye.slash")
-                                .foregroundStyle(currentTheme.accent)
-                            Text(hiddenMainPanelCount == 1
-                                 ? "1 painel oculto"
-                                 : "\(hiddenMainPanelCount) painéis ocultos")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(DS.Ink.secondary)
-                            Spacer(minLength: 8)
-                            Button("Mostrar tudo") { panels.showAll() }
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(currentTheme.accent)
-                        }
-                        .padding(12)
-                        .glassSurface(RoundedRectangle(cornerRadius: 14),
-                                      theme: currentTheme, depth: 0.4)
-                    }
                     resumeSection
                     if downloader.isDownloading {
                         Text(downloadStatusText)
