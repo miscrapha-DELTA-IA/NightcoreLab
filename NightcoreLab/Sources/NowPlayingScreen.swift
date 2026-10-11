@@ -76,6 +76,8 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     let canSkipNext: Bool
     @Binding var appTheme: AppTheme
     @Binding var isKaraokeMode: Bool
+    @Binding var lyricsCleanMode: Bool
+    @Binding var backgroundStyle: BackgroundStyle
     @Binding var visibleDiscover: Bool
     @Binding var visibleQueue: Bool
     @Binding var visiblePlayback: Bool
@@ -88,7 +90,6 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
-    @AppStorage(KaraokePrefs.background) private var backgroundStyle: BackgroundStyle = .marble
     @AppStorage("isZenMode") private var isZenMode = false
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
@@ -150,10 +151,12 @@ struct NowPlayingScreen<Extras: View, LyricsContent: View>: View {
                         .padding(.top, 8)
                         .hideablePanel(.lyrics, edge: .bottom, keepsSpace: true)
                         .transition(.lyricsReveal)
-                    KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle)
-                        .padding(.bottom, 12)
-                        .hideablePanel(.themes, edge: .bottom)
-                        .transition(.barRise)
+                    if KaraokeCleanLayout.showsQuickThemeBar(cleanMode: lyricsCleanMode) {
+                        KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle)
+                            .padding(.bottom, 12)
+                            .hideablePanel(.themes, edge: .bottom)
+                            .transition(.barRise)
+                    }
                 } else if !isZenMode {
                     // Somente o conteúdo inferior sai da hierarquia; artwork,
                     // transporte e fundo Metal permanecem intactos.
@@ -483,7 +486,7 @@ private struct KaraokeBottomBar: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            // Treze temas não cabem na cápsula: rolagem e centralização da seleção.
+            // Todos os temas usam rolagem e centralização da seleção.
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
