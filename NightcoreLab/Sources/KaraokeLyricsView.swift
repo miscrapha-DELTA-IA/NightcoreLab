@@ -28,6 +28,31 @@ struct KaraokeTheme: Equatable {
         fill: Color(red: 1.00, green: 0.16, blue: 0.30),
         glow: Color(red: 1.00, green: 0.16, blue: 0.30).opacity(0.7),
         pastOpacity: 0.55, font: base)
+
+    static let ultraviolet = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.72, green: 0.67, blue: 1.00),
+        glow: Color(red: 0.61, green: 0.55, blue: 1.00).opacity(0.70),
+        pastOpacity: 0.55, font: base)
+
+    // Fundo amarelo pede preenchimento creme para manter legibilidade.
+    static let solar = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 1.00, green: 0.93, blue: 0.62),
+        glow: Color(red: 1.00, green: 0.78, blue: 0.17).opacity(0.75),
+        pastOpacity: 0.55, font: base)
+
+    static let orchid = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.94, green: 0.60, blue: 0.97),
+        glow: Color(red: 0.83, green: 0.42, blue: 0.88).opacity(0.70),
+        pastOpacity: 0.55, font: base)
+
+    static let sapphire = KaraokeTheme(
+        inactive: .white.opacity(0.28),
+        fill: Color(red: 0.62, green: 0.72, blue: 1.00),
+        glow: Color(red: 0.31, green: 0.42, blue: 1.00).opacity(0.75),
+        pastOpacity: 0.55, font: base)
 }
 
 extension KaraokeTheme {
@@ -36,6 +61,10 @@ extension KaraokeTheme {
         case .acid: return .acid
         case .cyber: return .cyber
         case .crimson: return .crimson
+        case .ultraviolet: return .ultraviolet
+        case .solar: return .solar
+        case .orchid: return .orchid
+        case .sapphire: return .sapphire
         }
     }
 }

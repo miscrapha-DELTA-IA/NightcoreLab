@@ -5,6 +5,8 @@ import SwiftUI
 /// Temas do Nightcore Lab: um único acento neon por tema sobre base preta OLED.
 enum AppTheme: String, CaseIterable, Identifiable {
     case acid, crimson, cyber
+    // Os novos temas precisam compartilhar o rawValue com MarbleTheme.
+    case ultraviolet, solar, orchid, sapphire
 
     var id: String { rawValue }
 
@@ -13,6 +15,23 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .acid:    return "Acid"
         case .crimson: return "Crimson"
         case .cyber:   return "Cyber"
+        case .ultraviolet: return "Ultraviolet"
+        case .solar:       return "Solar"
+        case .orchid:      return "Orchid"
+        case .sapphire:    return "Sapphire"
+        }
+    }
+
+    /// Cor dominante descrita no menu do botão de raio e no VoiceOver.
+    var dominantColorName: String {
+        switch self {
+        case .acid:        return "verde neon"
+        case .crimson:     return "vermelho sangue"
+        case .cyber:       return "azul elétrico"
+        case .ultraviolet: return "violeta azulado"
+        case .solar:       return "amarelo âmbar"
+        case .orchid:      return "roxo orquídea"
+        case .sapphire:    return "azul safira"
         }
     }
 
@@ -22,6 +41,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .acid:    return Color(red: 0.20, green: 1.00, blue: 0.00)   // #33FF00 verde neon
         case .crimson: return Color(red: 1.00, green: 0.12, blue: 0.24)   // #FF1F3D vermelho sangue
         case .cyber:   return Color(red: 0.18, green: 0.48, blue: 1.00)   // #2E7AFF azul cobalto elétrico
+        case .ultraviolet: return Color(red: 0.61, green: 0.55, blue: 1.00) // #9C8CFF violeta azulado
+        case .solar:       return Color(red: 1.00, green: 0.78, blue: 0.17) // #FFC72C amarelo âmbar
+        case .orchid:      return Color(red: 0.83, green: 0.42, blue: 0.88) // #D46CE0 roxo orquídea
+        case .sapphire:    return Color(red: 0.31, green: 0.42, blue: 1.00) // #4F6BFF azul safira
         }
     }
 
@@ -31,11 +54,15 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .acid:    return Color(red: 0.00, green: 0.90, blue: 0.63)   // #00E5A0 verde-água
         case .crimson: return Color(red: 1.00, green: 0.36, blue: 0.12)   // #FF5C1F brasa
         case .cyber:   return Color(red: 0.00, green: 0.83, blue: 1.00)   // #00D4FF ciano
+        case .ultraviolet: return Color(red: 0.79, green: 0.82, blue: 0.96) // #C9D1F5 prata arroxeado
+        case .solar:       return Color(red: 1.00, green: 0.54, blue: 0.17) // #FF8A2B laranja
+        case .orchid:      return Color(red: 0.91, green: 0.85, blue: 0.94) // #E8D8F0 lilás claro
+        case .sapphire:    return Color(red: 0.66, green: 0.72, blue: 1.00) // #A8B8FF azul-pervinca
         }
     }
 
     /// Conteúdo sobre superfícies pintadas com o acento.
-    /// Preto nos três temas: contraste de 15:1, 5,5:1 e 5,4:1 (WCAG AA).
+    /// Texto preto mantém pelo menos 4,5:1 de contraste em todos os temas (WCAG AA).
     var onAccent: Color { .black }
 
     /// Gradiente acento → secundária (barras dos sliders).
@@ -45,7 +72,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
                        endPoint: vertical ? .top : .trailing)
     }
 
-    /// Próximo tema no ciclo acid → crimson → cyber → acid.
+    /// Próximo tema: acid → crimson → cyber → ultraviolet → solar → orchid → sapphire → acid.
     var next: AppTheme {
         let all = Self.allCases
         let index = all.firstIndex(of: self) ?? 0
