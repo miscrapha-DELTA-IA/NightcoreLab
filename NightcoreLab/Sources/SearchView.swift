@@ -21,6 +21,7 @@ struct SearchView: View {
     let onLink: (String) -> Void
     let onServerSettings: () -> Void
     @AppStorage("lastSearchQuery") private var lastSearchQuery = ""
+    @AppStorage("isDiscoverExpanded") private var isDiscoverExpanded: Bool = true
     @State private var hasRestoredQuery = false
     @State private var query = ""
     @State private var searchResults: [Track] = []
@@ -38,6 +39,9 @@ struct SearchView: View {
     }
 
     private func showSuggestions() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            isDiscoverExpanded = true
+        }
         lastSearchQuery = ""
         query = ""
         searchResults = []
@@ -69,6 +73,10 @@ struct SearchView: View {
             query = ""
             onLink(value)
         } else {
+            // A new text search should open the panel so results are not hidden.
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                isDiscoverExpanded = true
+            }
             lastSearchQuery = value
             submittedQuery = value
             searchRequestID = UUID()
@@ -100,11 +108,26 @@ struct SearchView: View {
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
 
-            HStack {
-                Label("DESCOBRIR", systemImage: "sparkles")
-                    .font(.caption.weight(.heavy))
-                    .tracking(1.4)
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        isDiscoverExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Label("DESCOBRIR", systemImage: "sparkles")
+                            .font(.caption.weight(.heavy))
+                            .tracking(1.4)
+                        Image(systemName: isDiscoverExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2.weight(.bold))
+                    }
                     .foregroundStyle(theme.accent)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isDiscoverExpanded ? "Recolher Descobrir" : "Expandir Descobrir")
+                .accessibilityValue(isDiscoverExpanded ? "Expandida" : "Recolhida")
                 Spacer()
                 if isSearchMode {
                     Button("Sugestões") { showSuggestions() }
@@ -121,63 +144,69 @@ struct SearchView: View {
                 }
             }
 
-            if let errorMessage, isSearchMode {
-                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-            } else if isSearchMode && hasSearched && searchResults.isEmpty && !isSearching {
-                Text("Nenhuma música encontrada. Experimente outro termo.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
-                Text("Escolha uma música para descobrir faixas relacionadas.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if (isSearchMode && isSearching) || (!isSearchMode && isLoadingSuggestions) {
-                ProgressView(isSearchMode ? "Procurando músicas…" : "Carregando sugestões…")
-                    .tint(theme.accent)
-            }
-            if !displayedTracks.isEmpty {
-                Text(isSearchMode ? "Resultados da pesquisa · tocar agora" :
-                     "Sugestões relacionadas · tocar agora")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(displayedTracks) { result in
-                            let track = downloader.cachedTrack(result)
-                            let status = downloader.status(for: result)
-                            Button {
-                                isFocused = false
-                                // Search/discovery never append all results to the playback queue.
-                                onSelect(track, [])
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    WebImage(url: track.thumbnailURL)
-                                        .resizable()
-                                        .transition(.fade(duration: 0.2))
-                                        .scaledToFill()
-                                        .frame(width: 152, height: 100)
-                                        .clipped()
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    Text(track.title)
-                                        .font(.caption.weight(.semibold))
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                        .frame(height: 34, alignment: .topLeading)
-                                    HStack(spacing: 5) {
-                                        TrackStatusIndicator(status: status, accent: theme.accent)
-                                        Text(status.shortDescription)
-                                            .font(.caption2)
-                                            .foregroundStyle(status == .downloaded
-                                                ? Color.green.opacity(0.85) : theme.accent)
+            if isDiscoverExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let errorMessage, isSearchMode {
+                        Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+                    } else if isSearchMode && hasSearched && searchResults.isEmpty && !isSearching {
+                        Text("Nenhuma música encontrada. Experimente outro termo.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
+                        Text("Escolha uma música para descobrir faixas relacionadas.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if (isSearchMode && isSearching) || (!isSearchMode && isLoadingSuggestions) {
+                        ProgressView(isSearchMode ? "Procurando músicas…" : "Carregando sugestões…")
+                            .tint(theme.accent)
+                    }
+                    if !displayedTracks.isEmpty {
+                        Text(isSearchMode ? "Resultados da pesquisa · tocar agora" :
+                             "Sugestões relacionadas · tocar agora")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(spacing: 12) {
+                                ForEach(displayedTracks) { result in
+                                    let track = downloader.cachedTrack(result)
+                                    let status = downloader.status(for: result)
+                                    Button {
+                                        isFocused = false
+                                        // Search/discovery never append all results to the playback queue.
+                                        onSelect(track, [])
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            WebImage(url: track.thumbnailURL)
+                                                .resizable()
+                                                .transition(.fade(duration: 0.2))
+                                                .scaledToFill()
+                                                .frame(width: 152, height: 100)
+                                                .clipped()
+                                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                            Text(track.title)
+                                                .font(.caption.weight(.semibold))
+                                                .lineLimit(2)
+                                                .multilineTextAlignment(.leading)
+                                                .frame(height: 34, alignment: .topLeading)
+                                            HStack(spacing: 5) {
+                                                TrackStatusIndicator(status: status, accent: theme.accent)
+                                                Text(status.shortDescription)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(status == .downloaded
+                                                        ? Color.green.opacity(0.85) : theme.accent)
+                                            }
+                                        }
+                                        .frame(width: 152)
                                     }
+                                    .buttonStyle(.plain)
+                                    .disabled(!isEnabled)
                                 }
-                                .frame(width: 152)
                             }
-                            .buttonStyle(.plain)
-                            .disabled(!isEnabled)
+                            .padding(.vertical, 3)
                         }
                     }
-                    .padding(.vertical, 3)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .onAppear {
