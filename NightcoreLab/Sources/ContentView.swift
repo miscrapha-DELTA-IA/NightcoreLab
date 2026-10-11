@@ -958,10 +958,9 @@ struct ContentView: View {
         guard !audio.isExporting, !playbackTransition.isPreparing else { return }
         if let next = playbackQueue.upNextQueue.first {
             playFromQueue(next, automatic: true)
-        } else {
-            // The engine reached the queue's end. Fetch lazily, then advance
-            // when the first new item arrives (unless the user selects another).
-            autoplayWhenRadioReady = true
+        } else if currentTrack != nil {
+            // Only the engine's completion event can trigger an automatic radio
+            // request when there is nothing left to advance to.
             startRadio(autoplayWhenReady: true)
         }
     }
@@ -990,8 +989,13 @@ struct ContentView: View {
         guard !Task.isCancelled, requestID == relatedRequestID,
               sourceURL == relatedSourceURL else { return }
         isLoadingRelated = false
+        // A fetch started for a different playing track must not rewrite the
+        // new song's context or trigger an obsolete autoplay.
+        guard let playingTrackID, currentTrack?.url.absoluteString == sourceURL else {
+            autoplayWhenRadioReady = false
+            return
+        }
         relatedVideos = videos
-        guard let playingTrackID else { return }
         playbackQueue.append(videos, excluding: playingTrackID)
         prefetchUpcoming()
         if autoplayWhenRadioReady {
