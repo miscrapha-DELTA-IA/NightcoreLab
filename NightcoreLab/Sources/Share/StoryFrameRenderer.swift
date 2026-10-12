@@ -10,9 +10,11 @@ enum StoryFrameRenderer {
     static func render(request: StoryVideoRequest, artwork: UIImage?,
                        frame: StoryRenderFrame,
                        profile: StoryEncodingProfile,
-                       visualTimeline: AudioFeatureTimeline? = nil) throws -> CGImage {
+                       visualTimeline: AudioFeatureTimeline? = nil,
+                       visualRhythm: RhythmAnalysisResult? = nil) throws -> CGImage {
         let scene = StorySceneView(request: request, artwork: artwork,
-                                   frame: frame, visualTimeline: visualTimeline)
+                                   frame: frame, visualTimeline: visualTimeline,
+                                   visualRhythm: visualRhythm)
         let renderer = ImageRenderer(content: scene)
         renderer.proposedSize = ProposedViewSize(StoryVideoRequest.size)
         renderer.scale = profile.scale

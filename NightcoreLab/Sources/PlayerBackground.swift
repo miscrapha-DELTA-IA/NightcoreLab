@@ -51,6 +51,7 @@ struct PlayerBackgroundView: View {
     let theme: AppTheme
     var frozenTime: Float? = nil
     var reactiveDistortion: Double = 0
+    var pulseDriver: MarblePulseDriver? = nil
 
     var body: some View {
         ZStack {
@@ -63,7 +64,8 @@ struct PlayerBackgroundView: View {
                     maxFPS: 30,
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
-                    reactiveDistortion: reactiveDistortion
+                    reactiveDistortion: reactiveDistortion,
+                    pulseDriver: frozenTime == nil ? pulseDriver : nil
                 )
                 .overlay(Color.black.opacity(0.4))
             } else if let imageURL {

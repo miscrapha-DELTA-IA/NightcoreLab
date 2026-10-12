@@ -7,6 +7,9 @@ struct StorySceneView: View {
     let artwork: UIImage?
     let frame: StoryRenderFrame
     let visualTimeline: AudioFeatureTimeline?
+    /// Stage 12: Marble beat pulse resolved from this frame's SOURCE time, so
+    /// the scrub preview and every MP4 frame agree, at any frame rate.
+    let beatPulse: Double
     /// Resolved ONCE per scene (Stage 10C). Previously these were computed
     /// properties evaluated several times per body (background + lyrics), each
     /// recompiling the composition. The preview may supply the composition
@@ -29,11 +32,15 @@ struct StorySceneView: View {
 
     init(request: StoryVideoRequest, artwork: UIImage?, frame: StoryRenderFrame,
          visualTimeline: AudioFeatureTimeline? = nil,
+         visualRhythm: RhythmAnalysisResult? = nil,
          resolvedCompositionFrame: ResolvedCompositionFrame? = nil) {
         self.request = request
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
+        self.beatPulse = MaterialResolver.beatPulse(
+            VisualMaterial.marble(for: request.reactiveProgram),
+            rhythm: visualRhythm.flatMap { RhythmFrame.at(frame.sourceTime, in: $0) })
         // One deterministic query for both the scrub preview and the MP4 encoder.
         let layer = TypographyLayer.forStory(
             lines: request.lines, lyricTime: frame.lyricTime,
@@ -150,7 +157,8 @@ struct StorySceneView: View {
             TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
                                 speed: 0, maxFPS: 1, isPaused: true,
                                 extendIntoSafeArea: false, frozenTime: phase,
-                                reactiveDistortion: reactiveDistortion)
+                                reactiveDistortion: reactiveDistortion,
+                                beatPulse: beatPulse)
                 .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
         }
     }

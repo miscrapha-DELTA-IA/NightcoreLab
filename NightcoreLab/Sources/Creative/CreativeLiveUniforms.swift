@@ -14,6 +14,9 @@ final class CreativeLiveUniforms {
     private(set) var frame: CreativeParameterFrame = .neutral
     /// While sharing, the visible Marble is frozen at the captured value.
     private(set) var frozenDistortion: Double?
+    /// Stage 12: render-rate beat pulse source for the live Marble material.
+    /// Changes only when the analyzed source or program changes.
+    private(set) var pulseDriver: MarblePulseDriver?
 
     var marbleDistortion: Double {
         frozenDistortion ?? frame.marbleDistortion
@@ -24,17 +27,27 @@ final class CreativeLiveUniforms {
         if frame != next { frame = next }
     }
 
+    func setPulseDriver(_ driver: MarblePulseDriver?) {
+        if pulseDriver != driver { pulseDriver = driver }
+    }
+
+    /// A frozen (sharing) Marble shows no live pulse.
+    var livePulseDriver: MarblePulseDriver? {
+        frozenDistortion == nil ? pulseDriver : nil
+    }
+
     func freeze() { frozenDistortion = frame.marbleDistortion }
 
     func unfreeze() { frozenDistortion = nil }
 }
 
-/// Leaf reader: the only place where the live distortion is observed.
+/// Leaf reader: the only place where the live distortion and the pulse
+/// driver are observed.
 struct LiveMarbleDistortion<Content: View>: View {
     let uniforms: CreativeLiveUniforms
-    @ViewBuilder let content: (Double) -> Content
+    @ViewBuilder let content: (Double, MarblePulseDriver?) -> Content
 
     var body: some View {
-        content(uniforms.marbleDistortion)
+        content(uniforms.marbleDistortion, uniforms.livePulseDriver)
     }
 }
