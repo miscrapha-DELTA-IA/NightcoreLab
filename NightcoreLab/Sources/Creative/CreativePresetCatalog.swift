@@ -81,17 +81,19 @@ enum CreativePresetCatalog {
                                  typography: TypographyStyle,
                                  background: PlayerBackgroundStyle,
                                  reaction: CreativePreset.AudioReaction) -> CreativeVisualProgram {
-        let recipe = program(for: id)
+        // Stage 12.5: an experience id resolves to the experience's own
+        // program (same rules and shader vocabulary as its source recipe).
+        let source = recipe(for: id)
         let configured = CreativePreset(
-            id: recipe.id, name: recipe.preset.name,
+            id: source.id, name: source.preset.name,
             theme: theme, typographyStyle: typography,
             visualStyle: VisualPreset(
                 background: .init(existing: background),
-                shaderParameters: recipe.preset.visualStyle.shaderParameters,
-                intensity: recipe.preset.visualStyle.intensity,
-                motion: recipe.preset.visualStyle.motion),
+                shaderParameters: source.preset.visualStyle.shaderParameters,
+                intensity: source.preset.visualStyle.intensity,
+                motion: source.preset.visualStyle.motion),
             audioReaction: reaction)
-        return CreativeVisualProgram(preset: configured, rules: recipe.rules)
+        return CreativeVisualProgram(preset: configured, rules: source.rules)
     }
 }
 
@@ -250,5 +252,63 @@ extension CreativePresetCatalog {
             try? CreativeExperiencePreset(package: $0)
         }
         return originals + experiencePresets + authored
+    }
+}
+
+
+// MARK: - Stage 12.5: one selection for recipes and complete experiences
+
+extension CreativePresetCatalog {
+    /// Complete experiences offered next to the four recipes. They share the
+    /// existing `creativePresetID` preference: there is no second preset system.
+    static var selectableExperiences: [CreativeExperiencePreset] { experiencePresets }
+
+    /// The curated experience behind a selection id; nil for recipes and
+    /// unknown ids (which keep resolving to Original through program(for:)).
+    static func selectedExperience(id: String) -> CreativeExperiencePreset? {
+        experiencePresets.first(where: { $0.id == id })
+    }
+
+    /// The program behind any selectable id: the experience's own program,
+    /// otherwise the recipe (unknown ids fall back to Original as before).
+    static func recipe(for id: String) -> CreativeVisualProgram {
+        selectedExperience(id: id)?.composition.program ?? program(for: id)
+    }
+
+    /// Choosing an experience is an explicit request for its typography
+    /// effect, so it becomes the karaoke preference. Recipes, theme and font
+    /// are left untouched (a selection never changes the AppTheme).
+    static func typographyStyle(afterSelecting id: String,
+                                current: TypographyStyle) -> TypographyStyle {
+        selectedExperience(id: id)?.typographyPreset.style ?? current
+    }
+
+    /// The ONE typography preset for the live karaoke and the Story request.
+    /// While the selected experience's style is active, its authored
+    /// intensity, seed and mapping apply; its audio reaction only while the
+    /// visuals react (`reacts`). Any other combination is the plain
+    /// `TypographyPreset.current`, i.e. exactly the pre-12.5 behavior.
+    static func typographyPreset(selection id: String, style: TypographyStyle,
+                                 font: TypographyFont, reacts: Bool) -> TypographyPreset {
+        guard let authored = selectedExperience(id: id)?.typographyPreset,
+              authored.style == style else {
+            return .current(style: style, font: font)
+        }
+        return TypographyPreset(
+            style: authored.style,
+            audioReaction: reacts ? authored.audioReaction : .off,
+            effectIntensity: authored.effectIntensity,
+            audioMapping: authored.audioMapping,
+            deterministicSeed: authored.deterministicSeed,
+            font: font)
+    }
+
+    /// The experience-level audio envelope applied to typography, under the
+    /// same conditions as `typographyPreset(selection:style:font:reacts:)`.
+    static func typographyAudioMapping(selection id: String, style: TypographyStyle,
+                                       reacts: Bool) -> CreativeAudioMapping {
+        guard reacts, let experience = selectedExperience(id: id),
+              experience.typographyPreset.style == style else { return .disabled }
+        return experience.audioMapping
     }
 }

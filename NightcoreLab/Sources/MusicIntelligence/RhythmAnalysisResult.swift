@@ -8,9 +8,13 @@ import Foundation
 /// tracking (they follow small tempo drift instead of a fixed grid), a 4/4
 /// downbeat estimate and an evidence-based confidence. BPM candidates remain
 /// hypotheses: octave-related alternatives (e.g. 87 and 174) can coexist.
+///
+/// Version 3 (Stage 12.5): octave and phase checks plus a contrast gate,
+/// validated on genre fixtures (EDM, house, rock, hip hop, no drums). Cached
+/// v2 rhythm is recomputed; the energy timeline is kept.
 struct RhythmAnalysisResult: Codable, Equatable, Sendable {
-    static let algorithmVersion = 2
-    static let methodIdentifier = "spectral-flux-acf-dp-beat-tracking-v2"
+    static let algorithmVersion = 3
+    static let methodIdentifier = "spectral-flux-acf-dp-beat-tracking-v3"
 
     struct BPMCandidate: Codable, Equatable, Sendable {
         let bpm: Double

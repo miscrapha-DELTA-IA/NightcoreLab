@@ -114,6 +114,8 @@ struct ContentView: View {
     private var creativeReactionMode: CreativePreset.AudioReaction = .off
     @AppStorage(CreativePresetCatalog.storageKey)
     private var selectedCreativePresetID = CreativePresetCatalog.defaultID
+    @AppStorage(TypographyStyle.storageKey)
+    private var karaokeTypographyStyle: TypographyStyle = .neon
 
     private var bgStyle: PlayerBackgroundStyle {
         PlayerBackgroundStyle(rawValue: bgStyleRaw) ?? .turbulent
@@ -855,15 +857,34 @@ struct ContentView: View {
                     .font(.caption2.weight(.semibold))
                     .tracking(0.8)
                 Spacer()
+                // One selection (creativePresetID) for recipes and complete
+                // experiences; the same id reaches the player, karaoke and Story.
                 Picker("Preset visual", selection: $selectedCreativePresetID) {
-                    ForEach(CreativePresetCatalog.all) { program in
-                        Text(program.preset.name).tag(program.id)
+                    Section("Receitas") {
+                        ForEach(CreativePresetCatalog.all) { program in
+                            Text(program.preset.name).tag(program.id)
+                        }
+                    }
+                    Section("Experiências") {
+                        ForEach(CreativePresetCatalog.selectableExperiences) { experience in
+                            Text(experience.name).tag(experience.id)
+                        }
                     }
                 }
                 .pickerStyle(.menu)
-                .disabled(creativeReactionMode == .off)
+                .accessibilityIdentifier("creative.presetPicker")
+                .onChange(of: selectedCreativePresetID) { _, id in
+                    karaokeTypographyStyle = CreativePresetCatalog.typographyStyle(
+                        afterSelecting: id, current: karaokeTypographyStyle)
+                }
             }
-            Text("Presets modulam o brilho atual; parâmetros Marble, letras e partículas ficam preparados para futuras versões. Pouca Energia e Reduzir Movimento desativam a reação.")
+            if let experience = CreativePresetCatalog.selectedExperience(id: selectedCreativePresetID) {
+                Text("\(experience.description) · Letra: \(experience.typographyPreset.style.title)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(DS.Ink.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Experiências aplicam programa visual, efeito de letra e reação da letra ao áudio — iguais no player, na prévia e no vídeo. Tema e fonte continuam os seus. Com o ritmo desligado, só o efeito de letra muda; Pouca Energia e Reduzir Movimento pausam a reação.")
                 .font(.caption2)
                 .foregroundStyle(DS.Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)

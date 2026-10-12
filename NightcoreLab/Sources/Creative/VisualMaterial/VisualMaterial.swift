@@ -13,20 +13,60 @@ struct VisualMaterial: Codable, Equatable, Sendable {
         case marble
     }
 
+    /// Stage 12.5 tuning defaults: exactly the values the Stage 12 Marble
+    /// used (the last two were constants inside the Metal shader).
+    static let defaultPulseDecay = 6.0
+    static let defaultOffbeatScale = 0.7
+    static let defaultWarpAmount = 0.18
+    static let defaultBrightnessBoost = 0.10
+    /// Share of a program's visual intensity used as pulse amount.
+    static let programPulseScale = 0.8
+
     let kind: Kind
-    /// Beat pulse amount in 0...1. 0 renders the pre-Stage-12 Marble exactly.
+    /// Beat pulse amount in 0...1 (`beatPulseIntensity`). 0 renders the
+    /// pre-Stage-12 Marble exactly. Stored name kept for Codable payloads.
     let beatPulse: Double
     /// Exponential decay of the pulse per beat phase (higher = snappier).
     let pulseDecay: Double
-    /// Non-downbeat pulses are scaled by this when downbeats are reliable.
+    /// Non-downbeat pulses are scaled by this when downbeats are reliable
+    /// (`downbeatBoost` = 1 − offbeatScale).
     let offbeatScale: Double
+    /// Extra domain warp per unit of pulse (shader: warp × (… + warpAmount·pulse)).
+    let warpAmount: Double
+    /// Accent-colour glow per unit of pulse, kept off the dark veins.
+    let brightnessBoost: Double
+
+    var beatPulseIntensity: Double { beatPulse }
+    /// How much the downbeat stands out: other beats pulse at 1 − downbeatBoost.
+    var downbeatBoost: Double { 1 - offbeatScale }
 
     init(kind: Kind = .marble, beatPulse: Double = 0,
-         pulseDecay: Double = 6, offbeatScale: Double = 0.7) {
+         pulseDecay: Double = VisualMaterial.defaultPulseDecay,
+         offbeatScale: Double = VisualMaterial.defaultOffbeatScale,
+         warpAmount: Double = VisualMaterial.defaultWarpAmount,
+         brightnessBoost: Double = VisualMaterial.defaultBrightnessBoost) {
         self.kind = kind
         self.beatPulse = Self.bound(beatPulse, 0...1, fallback: 0)
-        self.pulseDecay = Self.bound(pulseDecay, 1...20, fallback: 6)
-        self.offbeatScale = Self.bound(offbeatScale, 0...1, fallback: 0.7)
+        self.pulseDecay = Self.bound(pulseDecay, 1...20, fallback: Self.defaultPulseDecay)
+        self.offbeatScale = Self.bound(offbeatScale, 0...1, fallback: Self.defaultOffbeatScale)
+        self.warpAmount = Self.bound(warpAmount, 0...0.5, fallback: Self.defaultWarpAmount)
+        self.brightnessBoost = Self.bound(brightnessBoost, 0...0.3,
+                                          fallback: Self.defaultBrightnessBoost)
+    }
+
+    /// Stage 12.5 tuning vocabulary. Omitted values keep the current look
+    /// bit for bit (a nil downbeatBoost keeps offbeatScale = 0.7 exactly).
+    init(beatPulseIntensity: Double,
+         pulseDecay: Double = VisualMaterial.defaultPulseDecay,
+         downbeatBoost: Double? = nil,
+         warpAmount: Double = VisualMaterial.defaultWarpAmount,
+         brightnessBoost: Double = VisualMaterial.defaultBrightnessBoost) {
+        let offbeat = downbeatBoost.map { boost in
+            1 - Self.bound(boost, 0...1, fallback: 1 - Self.defaultOffbeatScale)
+        } ?? Self.defaultOffbeatScale
+        self.init(beatPulse: beatPulseIntensity, pulseDecay: pulseDecay,
+                  offbeatScale: offbeat, warpAmount: warpAmount,
+                  brightnessBoost: brightnessBoost)
     }
 
     /// The pre-Stage-12 look: no rhythm uniform.
@@ -42,19 +82,26 @@ struct VisualMaterial: Codable, Equatable, Sendable {
         case .subtle: reaction = 0.35
         case .responsive: reaction = 1
         }
-        return VisualMaterial(beatPulse: 0.8 * reaction * program.preset.visualStyle.intensity)
+        return VisualMaterial(
+            beatPulse: programPulseScale * reaction * program.preset.visualStyle.intensity)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, beatPulse, pulseDecay, offbeatScale
+        case kind, beatPulse, pulseDecay, offbeatScale, warpAmount, brightnessBoost
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(kind: try c.decode(Kind.self, forKey: .kind),
                   beatPulse: try c.decode(Double.self, forKey: .beatPulse),
-                  pulseDecay: try c.decodeIfPresent(Double.self, forKey: .pulseDecay) ?? 6,
-                  offbeatScale: try c.decodeIfPresent(Double.self, forKey: .offbeatScale) ?? 0.7)
+                  pulseDecay: try c.decodeIfPresent(Double.self, forKey: .pulseDecay)
+                      ?? Self.defaultPulseDecay,
+                  offbeatScale: try c.decodeIfPresent(Double.self, forKey: .offbeatScale)
+                      ?? Self.defaultOffbeatScale,
+                  warpAmount: try c.decodeIfPresent(Double.self, forKey: .warpAmount)
+                      ?? Self.defaultWarpAmount,
+                  brightnessBoost: try c.decodeIfPresent(Double.self, forKey: .brightnessBoost)
+                      ?? Self.defaultBrightnessBoost)
     }
 
     private static func bound(_ value: Double, _ range: ClosedRange<Double>,
@@ -63,10 +110,22 @@ struct VisualMaterial: Codable, Equatable, Sendable {
     }
 }
 
-/// Exactly the Marble shader's reactive uniforms, all in 0...1.
+/// Exactly the Marble shader's reactive uniforms.
 struct MarbleUniforms: Equatable, Sendable {
     let distortion: Double
     let beatPulse: Double
+    /// Material tuning bound with the pulse (Stage 12.5; former shader constants).
+    let warpAmount: Double
+    let brightnessBoost: Double
+
+    init(distortion: Double, beatPulse: Double,
+         warpAmount: Double = VisualMaterial.defaultWarpAmount,
+         brightnessBoost: Double = VisualMaterial.defaultBrightnessBoost) {
+        self.distortion = distortion
+        self.beatPulse = beatPulse
+        self.warpAmount = warpAmount
+        self.brightnessBoost = brightnessBoost
+    }
 
     static let neutral = MarbleUniforms(distortion: 0, beatPulse: 0)
 }
@@ -79,7 +138,9 @@ enum MaterialResolver {
                        parameters: CreativeParameterFrame,
                        rhythm: RhythmFrame?) -> MarbleUniforms {
         MarbleUniforms(distortion: unit(parameters.marbleDistortion),
-                       beatPulse: beatPulse(material, rhythm: rhythm))
+                       beatPulse: beatPulse(material, rhythm: rhythm),
+                       warpAmount: material.warpAmount,
+                       brightnessBoost: material.brightnessBoost)
     }
 
     /// Weighted by rhythm confidence: weak evidence fades the pulse out instead

@@ -38,11 +38,7 @@ struct StoryDraftPreview: View {
     private var compositionFrame: ResolvedCompositionFrame? {
         // The request's frozen runtime: compiled once, not per scrub step.
         guard let runtime = draft.request.compositionRuntime else { return nil }
-        let typography = TypographyLayer.forStory(
-            lines: draft.request.lines, lyricTime: currentFrame.lyricTime,
-            lyricOffset: draft.request.lyricOffset,
-            preset: draft.request.typographyPreset,
-            prepared: draft.request.preparedLyrics)
+        let typography = draft.request.typographyLayer(atLyricTime: currentFrame.lyricTime)
         return runtime.frame(
             at: currentFrame.elapsed, audioTimeline: visualTimeline,
             typography: typography)

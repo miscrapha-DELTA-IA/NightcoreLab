@@ -48,7 +48,8 @@ static inline float3 ramp(float t, float3 c1, float3 c2, float3 c3) {
 half4 liquidMarble(float2 position, half4 currentColor,
                    float2 size, float time,
                    half4 color1, half4 color2, half4 color3,
-                   float reactiveDistortion, float beatPulse)
+                   float reactiveDistortion, float beatPulse,
+                   float pulseWarp, float pulseGlow)
 {
     const float3 A = float3(color1.rgb);
     const float3 B = float3(color2.rgb);
@@ -59,8 +60,12 @@ half4 liquidMarble(float2 position, half4 currentColor,
     const float strength = clamp(reactiveDistortion, 0.0f, 1.0f);
     // Stage 12 Marble material: rhythm pulse (0 = previous pixels exactly;
     // every pulse term below is an added exact zero when beatPulse is 0).
+    // Stage 12.5: the two pulse amounts come from VisualMaterial (defaults
+    // 0.18 and 0.10, the former constants); the algorithm is unchanged.
     const float pulse = clamp(beatPulse, 0.0f, 1.0f);
-    const float warp = 3.2f * (1.0f + 0.28f * strength + 0.18f * pulse);
+    const float warpGain = clamp(pulseWarp, 0.0f, 0.5f);
+    const float glowGain = clamp(pulseGlow, 0.0f, 0.3f);
+    const float warp = 3.2f * (1.0f + 0.28f * strength + warpGain * pulse);
 
     // Coordenadas normalizadas pela menor dimensão (sem esticar em telas altas).
     float2 uv = (position - 0.5 * size) / min(size.x, size.y) * 1.9;
@@ -97,7 +102,7 @@ half4 liquidMarble(float2 position, half4 currentColor,
     float hl = smoothstep(0.90, 0.97, fr) * (1.0 - smoothstep(0.97, 1.0, fr));
     col += C * hl * 0.35;
     // Beat glow in the accent color, kept off the dark veins.
-    col += C * (0.10f * pulse) * (1.0f - vein);
+    col += C * (glowGain * pulse) * (1.0f - vein);
 
     return half4(half3(saturate(col)), 1.0h);
 }

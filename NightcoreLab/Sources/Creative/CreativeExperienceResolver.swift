@@ -14,16 +14,9 @@ enum CreativeExperienceResolver {
         // The experience mapping is an additional explicit authoring channel:
         // never multiply or silently overwrite the legacy Marble parameters.
         let effectiveTypography: TypographyLayer? = typography.map { input in
-            let authored = preset.typographyPreset
-            let intensity = min(1, authored.effectIntensity +
-                                audioState.typographyIntensity)
-            let mapped = TypographyPreset(
-                style: authored.style,
-                audioReaction: authored.audioReaction,
-                effectIntensity: intensity,
-                audioMapping: authored.audioMapping,
-                deterministicSeed: authored.deterministicSeed,
-                font: authored.font)
+            // Same envelope as the karaoke and Story (TypographyPreset.modulated).
+            let mapped = preset.typographyPreset.modulated(
+                by: preset.audioMapping, features: features)
             return TypographyLayer(
                 layerID: input.layerID, state: input.state,
                 preset: mapped, lyricOffset: input.lyricOffset,
