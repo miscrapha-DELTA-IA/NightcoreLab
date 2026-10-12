@@ -103,3 +103,20 @@ struct CreativeAudioState: Equatable, Sendable {
     static let neutral = CreativeAudioState(
         visualIntensity: 0, typographyIntensity: 0, movement: 0)
 }
+
+extension TypographyPreset {
+    /// Experience-level typography envelope: the mapping's
+    /// `typographyIntensity` is added to `effectIntensity` (clamped to 1).
+    /// One function for the live karaoke, the Story layer and
+    /// CreativeExperienceResolver, so they cannot drift apart.
+    func modulated(by mapping: CreativeAudioMapping,
+                   features: AudioFeatures?) -> TypographyPreset {
+        let extra = mapping.resolve(features: features).typographyIntensity
+        guard extra > 0 else { return self }
+        return TypographyPreset(
+            style: style, audioReaction: audioReaction,
+            effectIntensity: min(1, effectIntensity + extra),
+            audioMapping: audioMapping,
+            deterministicSeed: deterministicSeed, font: font)
+    }
+}

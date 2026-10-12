@@ -220,6 +220,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 .accessibilityHidden(showsKaraoke || panels.isZen)
             }
         }
+        // Stage 12.5: the karaoke reads the live feature envelope from here
+        // (optional environment: other hosts simply get no features).
+        .environment(liveUniforms)
         .overlay {
             if panels.isZen {
                 // Toque em qualquer área livre revela o layout; estados individuais
@@ -352,7 +355,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 backgroundStyle: playerBackgroundStyle,
                 featureEngine: visualEngine,
                 onParameters: { next in liveUniforms.update(next) },
-                onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) }
+                onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) },
+                onFeatureTimeline: { timeline in liveUniforms.setFeatureTimeline(timeline) }
             )
         }
     }

@@ -59,7 +59,10 @@ struct AudioAssetDescriptor: Codable, Equatable, Sendable {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func signature(at url: URL) throws -> String {
+    // A content revision must be verified even when all filesystem metadata matches.
+    // Internal visibility allows AssetIdentityCache to verify warm descriptors
+    // without opening AVAudioFile or decoding the waveform again.
+    static func signature(at url: URL) throws -> String {
         let before = try FileStamp(url)
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
@@ -91,15 +94,18 @@ struct AudioAssetDescriptor: Codable, Equatable, Sendable {
     }
 }
 
-/// Stage 10C: avoid re-hashing an unchanged file.
+/// A bounded descriptor cache, not a metadata-based trust cache.
 ///
-/// `AudioAssetDescriptor.read` and `validateSource` each SHA-256 the whole
-/// file; a single analysis request used to hash it 2× on a cache hit and 3× on
-/// a miss, and the player and the Story preview request separately. This cache
-/// keeps the descriptor per canonical URL together with the FileStamp seen
-/// before hashing, and repeats the full hash only when the stamp differs.
-/// A change that preserves size, modification date AND inode is not detected;
-/// on APFS (nanosecond mtimes) that requires deliberate tampering.
+/// Each *independent* lookup confirms the SHA-256 of the complete source.
+/// A matching FileStamp alone can never authorize a cache hit: edits can
+/// preserve URL, size, mtime, and inode. On a warm hit, one bounded-memory
+/// streaming digest avoids reopening AVAudioFile or re-decoding samples.
+/// On a cold lookup, AudioAssetDescriptor.read performs that digest once.
+///
+/// When correctness requires immediate detection of an arbitrary byte edit,
+/// neither periodic checks nor partial hashes are sufficient. This intentionally
+/// trades sequential file I/O for source identity correctness; FFT and rhythm
+/// analysis remain cached and concurrent requests remain shared by the scheduler.
 actor AssetIdentityCache {
     private struct Entry {
         let stamp: AudioAssetDescriptor.FileStamp
@@ -112,27 +118,48 @@ actor AssetIdentityCache {
 
     init(limit: Int = 64) { self.limit = max(1, limit) }
 
-    /// Same result as `AudioAssetDescriptor.read(at:)`, hashing only when needed.
     func descriptor(for source: URL) throws -> AudioAssetDescriptor {
         guard source.isFileURL else { throw AudioFeatureAnalysisError.unsupportedAudio }
         let url = AudioAssetDescriptor.canonicalURL(source)
-        // Taken BEFORE hashing: if the file changes meanwhile, the stored stamp
-        // is stale and the next request simply hashes again (conservative).
         let stamp = try AudioAssetDescriptor.FileStamp(url)
-        if let entry = entries[url], entry.stamp == stamp { return entry.asset }
+
+        if let entry = entries[url], entry.stamp == stamp {
+            // Digest all bytes, including the unsampled middle of large files.
+            // signature(at:) independently verifies its pre/post filesystem stamp.
+            let revision = try AudioAssetDescriptor.signature(at: url)
+            guard stamp == (try AudioAssetDescriptor.FileStamp(url)) else {
+                forget(url)
+                throw AudioAssetDescriptor.IdentityError.sourceChanged
+            }
+            if revision == entry.asset.sourceRevision { return entry.asset }
+        }
+
+        // Never retain a stale descriptor after a content change, even if the
+        // replacement is corrupt or can no longer be opened as an audio file.
+        forget(url)
         let asset = try AudioAssetDescriptor.read(at: url)
+        guard stamp == (try AudioAssetDescriptor.FileStamp(url)) else {
+            throw AudioAssetDescriptor.IdentityError.sourceChanged
+        }
         remember(Entry(stamp: stamp, asset: asset), for: url)
         return asset
     }
 
-    /// Same contract as `asset.validateSource()`; the full hash runs only when
-    /// the file's stamp no longer matches the one recorded for this descriptor.
+    /// Recheck content before reusing or publishing a decoded timeline. Metadata
+    /// equality does not suffice, including during a single analysis job.
     func validate(_ asset: AudioAssetDescriptor) throws {
-        let stamp = try AudioAssetDescriptor.FileStamp(asset.url)
-        if let entry = entries[asset.url], entry.asset == asset, entry.stamp == stamp {
-            return
+        do {
+            try asset.validateSource()
+        } catch {
+            forget(asset.url)
+            throw error
         }
-        try asset.validateSource()
+    }
+
+    private func forget(_ url: URL) {
+        if entries.removeValue(forKey: url) != nil {
+            order.removeAll { $0 == url }
+        }
     }
 
     private func remember(_ entry: Entry, for url: URL) {

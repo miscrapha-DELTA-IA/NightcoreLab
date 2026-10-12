@@ -1,4 +1,4 @@
-# Creative Runtime Integration (Stages 10A–12)
+# Creative Runtime Integration (Stages 10A–12.5)
 
 Closes the integration of the Stage 10A–12 work on one branch, with CI as the
 validator. No new layers, shaders or engines.
@@ -52,13 +52,100 @@ test` on an iPhone simulator, Release build and IPA packaging. See the PR for
 the run links and results. Not run: Instruments on a physical iPhone (no
 device here); the signposts and performance tests are in place for that.
 
-## Known gaps (UX review)
-1. **Creative Experience presets are not selectable.** The UI offers theme,
-   reaction, 4 programs, effect and font separately; Cyber Night / Liquid
-   Dream / Neon Pulse exist only as data. "Choose preset → see → export" is
-   true per setting, not per experience.
-2. No UI signal when rhythm is insufficient (the pulse silently stays off).
-3. The first Story preview of a track waits for the Rhythm v2 decode.
-4. Glitch draws jitter/flicker only (no RGB split), identically in app and MP4.
-5. Story layout (canvas, 35 pt type, glow 7) intentionally differs from the
+## Stage 12.5 — Creative Experiences in the product
+
+### How an experience is created
+An experience is data, not a new system. `CreativePresetCatalog.experiencePresets`
+builds each one from an existing recipe:
+
+```
+recipe (CreativeVisualProgram: rules + shader vocabulary)
+  → CreativePreset renamed (id "cyber-night", typography style from the preset)
+  → VisualComposition (CreativeSnapshotAdapter.wrap, default layers, deterministic seed)
+  → CreativePresetPackage (composition + TypographyPreset)
+  → CreativeExperiencePreset (+ CreativeAudioMapping, description)
+```
+
+| Experience | Program (visual) | Typography | Audio mapping (rendered part) |
+|---|---|---|---|
+| Cyber Night | Night Drive | Glitch, intensity 0.7, seed 0xC1B3 | beat → typography +0.2 |
+| Liquid Dream | Soft Flow | Magazine Cutout, intensity 0.3, seed 0xD123 | (none on typography) |
+| Neon Pulse | Bass Pulse | Kinetic, responsive, intensity 0.55, seed 0xB455 | beat → typography +0.35 |
+
+To add one: append an `authoredExperience(...)` entry. It appears in the
+picker automatically (`selectableExperiences`).
+
+### How it reaches the preview (player + karaoke)
+- **One selection key**: the existing `creativePresetID` preference holds a
+  recipe id *or* an experience id. The "Preset" menu (ContentView, "RITMO
+  VISUAL") lists *Receitas* and *Experiências*.
+- **Visual**: `effectiveProgram(id:…)` resolves ids through
+  `recipe(for:)` → the experience's program (rules, shader parameters,
+  intensity, motion). `CreativeReactiveAccent` (live Marble, 12 Hz) and the
+  `MarblePulseDriver` (beat pulse) use it unchanged. `program(for:)` is not
+  changed: unknown ids still fall back to Original.
+- **Typography**: selecting an experience sets the karaoke style preference
+  to the experience's style (`typographyStyle(afterSelecting:current:)`).
+  `typographyPreset(selection:style:font:reacts:)` then returns the
+  experience's intensity, seed and mapping with the user's font; its audio
+  reaction only while visuals react. Choosing another style afterwards falls
+  back to the plain `TypographyPreset.current` (pre-12.5 behavior).
+- **Audio mapping**: `typographyAudioMapping(selection:style:reacts:)` →
+  `TypographyLayer.experienceMapping` → `TypographyPreset.modulated(by:features:)`
+  (one function, also used by `CreativeExperienceResolver`).
+- **Live features**: `CreativeReactiveAccent` hands its frozen feature
+  timeline to `CreativeLiveUniforms` (`onFeatureTimeline`);
+  `NowPlayingScreen` puts the uniforms in the environment; the active
+  karaoke line samples it with `CompositionAudioSampler` at the clock's
+  source time — the same sampler the Story uses — and resolves through
+  `TypographyLayer.resolve`, the Story's entry point.
+- Not changed by a selection: AppTheme and font (explicit product rule).
+
+### How it reaches the export
+`NowPlayingScreen.shareVideo` → `StoryRequestBuilder.make(..., creativePresetID:)`
+freezes, once:
+- the composition from the effective program, with the experience's
+  composition seed;
+- `typographyPreset` and `typographyAudioMapping` from the same catalog
+  helpers as the karaoke (reaction ⇔ `reactiveProgram != nil`);
+- prepared lyric seeds.
+
+`StoryVideoRequest.typographyLayer(atLyricTime:)` is the single builder used
+by `StoryDraftPreview` (scrub preview) and `StorySceneView` (every MP4
+frame), so preview and export cannot diverge.
+
+### Marble tuning (material, not shader logic)
+`VisualMaterial` now carries `beatPulseIntensity` (stored as `beatPulse`),
+`pulseDecay`, `downbeatBoost` (= 1 − `offbeatScale`), `warpAmount` and
+`brightnessBoost`. The last two were constants in `liquidMarble`; they are
+now two uniforms with the same defaults (0.18, 0.10). The shader algorithm
+is unchanged and every pulse term is still an exact zero when the pulse is
+0. No preset changes these values yet (visual tuning needs a device).
+
+### Guarantees and tests (12.5)
+| Guarantee | Test |
+|---|---|
+| Experiences use the existing selection; recipes/unknown ids unchanged | `CreativeExperienceUXTests.testExperiencesShareTheExistingPresetSelection` |
+| Selection loads visual, typography, mapping, material | `…testSelectingAnExperienceLoadsVisualTypographyMappingAndComposition` |
+| Recipes and overridden styles keep pre-12.5 typography | `…testRecipesAndOverriddenStylesKeepThePreviousTypography` |
+| Story freezes the experience (program, seed, typography, mapping, material) | `…testStoryFreezesTheSelectedExperience` |
+| Preview = export with an audio envelope | `…testExperiencePreviewAndExportResolveIdenticalFrames` |
+| Mapping reaches exported typography | `…testExperienceMappingReachesStoryTypography` |
+| Live karaoke = Story for the same source time | `…testLiveKaraokeTypographyMatchesTheStory` |
+| Material tuning defaults = Stage 12 look; bounded; Codable-compatible | `VisualMaterialTests` (12.5 section) |
+| Rhythm on genre fixtures | `RhythmGenreFixtureTests`, see `RHYTHM_REAL_WORLD_VALIDATION_STAGE12_5.md` |
+
+## Known gaps (UX review, updated in 12.5)
+1. ~~Creative Experience presets are not selectable.~~ Done in 12.5.
+2. Experience `visualIntensity` / `movement` audio targets are still only
+   resolved by `CreativeExperienceResolver`: no renderer consumes them yet
+   (would change the Marble look; left for the Material Engine stage).
+3. Live typography reacts once the reacting run has loaded its feature
+   timeline (shortly after play/selection); until then it shows the
+   non-reacting frame. Low Power / Reduce Motion disable reaction in both the
+   player and the captured Story, as for the Marble.
+4. No UI signal when rhythm is insufficient (the pulse silently stays off).
+5. The first Story preview of a track waits for the rhythm decode.
+6. Glitch draws jitter/flicker only (no RGB split), identically in app and MP4.
+7. Story layout (canvas, 35 pt type, glow 7) intentionally differs from the
    karaoke screen; values are identical, layout is not.

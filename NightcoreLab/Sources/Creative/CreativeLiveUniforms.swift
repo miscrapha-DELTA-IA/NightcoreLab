@@ -17,6 +17,10 @@ final class CreativeLiveUniforms {
     /// Stage 12: render-rate beat pulse source for the live Marble material.
     /// Changes only when the analyzed source or program changes.
     private(set) var pulseDriver: MarblePulseDriver?
+    /// Stage 12.5: the reacting run's frozen feature envelope, so the live
+    /// karaoke samples the SAME features a Story samples at a source time
+    /// (CompositionAudioSampler). Nil while visuals do not react.
+    private(set) var featureTimeline: AudioFeatureTimeline?
 
     var marbleDistortion: Double {
         frozenDistortion ?? frame.marbleDistortion
@@ -29,6 +33,17 @@ final class CreativeLiveUniforms {
 
     func setPulseDriver(_ driver: MarblePulseDriver?) {
         if pulseDriver != driver { pulseDriver = driver }
+    }
+
+    /// Set once per reacting run and cleared when it ends.
+    func setFeatureTimeline(_ timeline: AudioFeatureTimeline?) {
+        if timeline == nil, featureTimeline == nil { return }
+        featureTimeline = timeline
+    }
+
+    /// Features for the live karaoke at a source time; nil without reaction.
+    func typographyFeatures(at sourceTime: TimeInterval) -> AudioFeatures? {
+        CompositionAudioSampler.sample(featureTimeline, at: sourceTime)
     }
 
     /// A frozen (sharing) Marble shows no live pulse.

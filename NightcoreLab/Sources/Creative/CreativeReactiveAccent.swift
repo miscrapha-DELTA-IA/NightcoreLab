@@ -16,6 +16,9 @@ struct CreativeReactiveAccent: View {
     /// Stage 12: hands the live Marble a render-rate beat pulse source
     /// (nil = no pulse: reaction off, no reliable rhythm, or run ended).
     var onPulseDriver: (MarblePulseDriver?) -> Void = { _ in }
+    /// Stage 12.5: hands the live karaoke this run's feature envelope (nil
+    /// when the run ends), so experience typography reacts like the Story.
+    var onFeatureTimeline: (AudioFeatureTimeline?) -> Void = { _ in }
 
     @AppStorage("creativeReactionMode")
     private var reaction: CreativePreset.AudioReaction = .off
@@ -62,11 +65,13 @@ struct CreativeReactiveAccent: View {
         parameters = .neutral
         onParameters(.neutral)
         onPulseDriver(nil)
+        onFeatureTimeline(nil)
         defer {
             if activeRunID == runID {
                 parameters = .neutral
                 onParameters(.neutral)
                 onPulseDriver(nil)
+                onFeatureTimeline(nil)
             }
         }
         guard canReact, let sourceURL else { return }
@@ -91,6 +96,7 @@ struct CreativeReactiveAccent: View {
             id: selectedProgramID, theme: theme, typography: typography,
             background: backgroundStyle, reaction: reaction
         )
+        onFeatureTimeline(timeline)
         // Marble material: same program, rhythm from the same cached analysis.
         let material = VisualMaterial.marble(for: program)
         if material.beatPulse > 0,

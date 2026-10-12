@@ -42,6 +42,18 @@ struct StoryVideoRequest: Sendable {
     var compositionRuntime: CompositionRuntime? = nil
     /// Per-line stable word seeds and Magazine looks, prepared once.
     var preparedLyrics: [Int: TypographyPreparedLine] = [:]
+    /// Stage 12.5: the selected experience's typography audio envelope,
+    /// frozen with the preset (disabled for recipes or without reaction).
+    var typographyAudioMapping: CreativeAudioMapping = .disabled
+
+    /// The active line's typography layer at a lyric time. The ONE builder
+    /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).
+    func typographyLayer(atLyricTime lyricTime: TimeInterval) -> TypographyLayer? {
+        TypographyLayer.forStory(
+            lines: lines, lyricTime: lyricTime, lyricOffset: lyricOffset,
+            preset: typographyPreset, prepared: preparedLyrics,
+            experienceMapping: typographyAudioMapping)
+    }
 
     /// Source-compatible view of the frozen composition.
     var visualComposition: VisualComposition? {
@@ -95,6 +107,9 @@ enum StoryRequestBuilder {
         let start = min(max(playbackTime, 0), sourceDuration)
         let seconds = min(StoryVideoRequest.maxSeconds, max(0, sourceDuration - start) / safeSpeed)
         guard seconds > 0.05 else { throw StoryRequestError.noRemainingAudio }
+        // Typography reacts to audio only when the visuals do (same gate as
+        // the live karaoke, which only gets features while reacting).
+        let reacts = reactiveProgram != nil
         var request = StoryVideoRequest(
             mode: mode, trackID: track.id, title: track.title, artist: track.artist,
             artworkURL: track.coverURL, theme: theme, playerStyle: playerStyle,
@@ -102,7 +117,9 @@ enum StoryRequestBuilder {
             marbleSpeed: mode == .lyrics ? 0.8 : 0.6,
             playbackTime: start, speed: speed, duration: seconds,
             totalSourceDuration: sourceDuration, lines: lines, lyricOffset: lyricOffset,
-            typographyPreset: .current(style: typographyStyle, font: typography),
+            typographyPreset: CreativePresetCatalog.typographyPreset(
+                selection: creativePresetID, style: typographyStyle,
+                font: typography, reacts: reacts),
             includeAudio: includeAudio,
             reactiveProgram: reactiveProgram,
             reactiveSourceURL: reactiveSourceURL
@@ -118,7 +135,11 @@ enum StoryRequestBuilder {
             background: playerStyle, reaction: .off)
         request.visualComposition = CompositionRuntime.freeze(
             program: effective, sourceStart: start,
-            speed: Double(speed), duration: seconds)
+            speed: Double(speed), duration: seconds,
+            deterministicSeed: CreativePresetCatalog.selectedExperience(id: creativePresetID)?
+                .composition.deterministicSeed ?? 0)
+        request.typographyAudioMapping = CreativePresetCatalog.typographyAudioMapping(
+            selection: creativePresetID, style: typographyStyle, reacts: reacts)
         request.preparedLyrics = Dictionary(
             lines.map { ($0.id, TypographyPreparedLine($0)) },
             uniquingKeysWith: { first, _ in first })
