@@ -74,6 +74,11 @@ struct CreativeReactiveAccent: View {
             return
         }
         guard !Task.isCancelled, activeRunID == runID else { return }
+        // Freeze this run's source envelope, just as Story preview/export do.
+        // It is immutable and shared by value (the sample array is copy-on-write).
+        // A replacement track starts a new task; no actor hops inside the loop.
+        guard let timeline = await featureEngine.cachedTimeline(for: sourceURL),
+              !Task.isCancelled, activeRunID == runID else { return }
 
         // projectM-inspired separation: declarative rules are evaluated
         // outside the SwiftUI rendering code. No shader/runtime creation.
@@ -84,26 +89,19 @@ struct CreativeReactiveAccent: View {
         while !Task.isCancelled && activeRunID == runID {
             let playing = clock.isPlaying
             let sourceTime = clock.lyricTime
-            let sample = await featureEngine.visualResponse(
-                at: sourceTime,
-                preset: program.preset,
-                isPlaying: playing,
-                lowPower: lowPower
-            )
-            guard !Task.isCancelled, activeRunID == runID else { break }
-            if let sample {
-                let features = await featureEngine.features(at: sourceTime)
-                guard !Task.isCancelled, activeRunID == runID else { break }
-                let next = CreativeParameterResolver.resolve(
-                    program: program, response: sample,
-                    features: features, sourceTime: sourceTime)
-                if next != parameters {
-                    parameters = next
-                    onParameters(next)
-                }
+            // The same timestamp must produce the same equations and beat
+            // window on screen and in a Story, regardless of poll/seek history.
+            let next = playing ? CreativeMarbleFrameResolver.resolve(
+                program: program, timeline: timeline,
+                sourceTime: sourceTime) : .neutral
+            if next != parameters {
+                parameters = next
+                onParameters(next)
             }
             do {
-                try await Task.sleep(for: playing ? .milliseconds(83) : .milliseconds(450))
+                // Bound wall-clock updates, not source-time deltas: Slowed and
+                // Nightcore must not change the UI's maximum polling cadence.
+                try await Task.sleep(for: playing ? .seconds(1.0 / 12) : .milliseconds(450))
             } catch { break }
         }
     }

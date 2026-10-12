@@ -20,7 +20,9 @@ final class CreativeMarbleRenderingTests: XCTestCase {
 
     private func request(reaction: CreativePreset.AudioReaction = .responsive,
                          id: String = "bass-pulse",
-                         sourceStart: Double = 2) throws -> StoryVideoRequest {
+                         sourceStart: Double = 2,
+                         speed: Float = 1,
+                         lyricOffset: Double = 0) throws -> StoryVideoRequest {
         let track = TrackInfo(
             track: Track(id: "12345678901", title: "Marble Test",
                          thumbnailURL: nil, cleanArtist: "Nightcore"),
@@ -33,7 +35,7 @@ final class CreativeMarbleRenderingTests: XCTestCase {
             mode: .player, track: track, theme: .acid,
             playerStyle: .turbulent, karaokeBackground: .marble,
             marblePhase: 12.5, playbackTime: sourceStart, sourceDuration: 20,
-            speed: 1, lines: [], lyricOffset: 0,
+            speed: speed, lines: [], lyricOffset: lyricOffset,
             typography: .neon, includeAudio: false,
             reactiveProgram: program, reactiveSourceURL: nil)
     }
@@ -95,6 +97,58 @@ final class CreativeMarbleRenderingTests: XCTestCase {
             let frame = CreativeMarbleFrameResolver.resolve(
                 program: program, timeline: timeline, sourceTime: sourceTime)
             XCTAssertEqual(frame, .neutral)
+        }
+    }
+
+    func testBeatEquationUsesFixedSourceWindowAfterForwardAndBackwardSeek() throws {
+        let preset = try XCTUnwrap(request().reactiveProgram).preset
+        let program = CreativeVisualProgram(preset: preset, rules: [
+            CreativeParameterRule(
+                target: .marbleDistortion,
+                equation: CreativeEquation(signal: .beat))
+        ])
+        let onset = AudioFeatures(bass: 0.85, energy: 0.8, beatDetected: true)
+        let timeline = AudioFeatureTimeline(points: [
+            AudioFeaturePoint(time: 0, features: strong),
+            AudioFeaturePoint(time: 3, features: onset),
+            AudioFeaturePoint(time: 3.05, features: strong)
+        ], duration: 20)
+        // At 3.1 the current envelope no longer has a beat flag. The fixed
+        // look-back must feed BOTH the base mapper and the typed equation.
+        XCTAssertFalse(timeline.features(at: 3.1).beatDetected)
+        for time in [3.1, 10, 3.1, 3.2, 2, 3.1] {
+            let frame = CreativeMarbleFrameResolver.resolve(
+                program: program, timeline: timeline, sourceTime: time)
+            XCTAssertEqual(frame.marbleDistortion, time == 3.1 ? 1 : 0)
+        }
+    }
+
+    func testSourceClockMatchesLiveParametersAtEveryExportSpeedAndProfile() throws {
+        let features = audioTimeline()
+        for speed in [Float(0.75), 1, 1.5] {
+            for id in CreativePresetCatalog.all.map(\.id) {
+                let request = try request(id: id, speed: speed, lyricOffset: 0.4)
+                for profile in [StoryEncodingProfile.economical, .balanced] {
+                    let timeline = StoryRenderTimeline(request: request, profile: profile)
+                    for index in [0, 4, 8, 12, 16, 20] {
+                        let video = timeline.frame(index: index)
+                        let preview = timeline.frame(at: video.elapsed)
+                        let expectedTime = 2 + Double(index) / Double(profile.fps) * Double(speed)
+                        XCTAssertEqual(video.sourceTime, expectedTime, accuracy: 1e-12)
+                        XCTAssertEqual(video.lyricTime, expectedTime + 0.4, accuracy: 1e-12)
+                        let live = CreativeMarbleFrameResolver.resolve(
+                            program: request.reactiveProgram, timeline: features,
+                            sourceTime: expectedTime)
+                        for frame in [preview, video] {
+                            let scene = StorySceneView(
+                                request: request, artwork: nil,
+                                frame: frame, visualTimeline: features)
+                            XCTAssertEqual(scene.reactiveDistortion, live.marbleDistortion,
+                                           accuracy: 1e-12)
+                        }
+                    }
+                }
+            }
         }
     }
 

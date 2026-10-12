@@ -75,8 +75,8 @@ enum CreativePresetCatalog {
     }
 
     /// Preserve app-global theme/typography. The programme only describes
-    /// reaction parameters and future visual targets; the current UI has
-    /// exactly one live consumer (the player outline).
+    /// reaction parameters and future visual targets; the current UI binds
+    /// the player outline and the existing Marble distortion uniform.
     static func effectiveProgram(id: String, theme: AppTheme,
                                  typography: KaraokeTypographyStyle,
                                  background: PlayerBackgroundStyle,

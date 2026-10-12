@@ -1,8 +1,8 @@
 import Foundation
 
 /// Deterministic bridge between a frozen source-audio feature timeline and
-/// the projectM-style typed parameters. Both Story scrub preview and MP4
-/// encoder call this with the SAME original-file timestamp.
+/// the projectM-style typed parameters. Live playback, Story scrub preview
+/// and MP4 encoding all use this with the original-file timestamp.
 enum CreativeMarbleFrameResolver {
     static func resolve(program: CreativeVisualProgram?,
                         timeline: AudioFeatureTimeline?,

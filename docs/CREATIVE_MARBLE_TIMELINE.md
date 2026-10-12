@@ -10,7 +10,7 @@ engine are introduced.
 AudioEngineManager.visualAnalysisURL (read-only local file)
       -> AudioFeatureEngine (one instance, owned by NowPlayingScreen)
           -> existing FFT AudioFeatureTimeline
-          -> AudioVisualMapper / CreativeParameterResolver
+          -> CreativeMarbleFrameResolver (same source-time query as export)
           -> CreativeReactiveAccent (<=12 Hz; muted when paused, hidden,
                                      Reduce Motion, Low Power Mode)
           -> CreativeParameterFrame.playerGlow / marbleDistortion
@@ -29,6 +29,12 @@ is harmless and has no effect.
 There is no second analyzer or polling loop: `CreativeReactiveAccent`
 publishes its existing, throttled parameter frame up to the parent. Only
 the values that actually change invalidate the SwiftUI composition.
+After preparation, the live adapter retains the immutable cached timeline
+for that source and calls the same pure resolver as Story rendering. Beat
+equations and base mapping therefore use the same fixed 150-ms window,
+including after a forward/backward seek. The loop is capped at 12 Hz in
+wall time independently of playback speed; it performs no per-poll actor
+hops or stateful beat accumulation. Pause still clears the live response.
 `AudioFeatureEngine` is now shared with the Story preview as a reference,
 so that the already decoded local-file timeline can be reused. Temporarily
 frozen PNG/MP4 sharing freezes the currently displayed Marble distortion
@@ -69,10 +75,17 @@ identical at each frame index, regardless of order or encoding duration.
   encoder, orientation, cancellation and audio sync paths.
 - No extra audio analysis **inside the per-frame MP4 loop**; only binary
   search on precomputed features and pure parameter mapping.
-- Live audio event latch is based on the previous visible sample; export
-  intentionally uses a stable 150-ms look-back for seek-independent frames.
-  These can differ slightly at beat boundaries but the preview/MP4 pair is
-  identical. GPU color compression can also produce minor differences.
+- Live playback and export use the same stable 150-ms look-back; their
+  parameters agree at the same source timestamp. Live polling and video
+  FPS can sample different instants, and GPU color compression can produce
+  minor differences. Story preview/MP4 still use the exact same frame grid.
+
+## Regression coverage
+
+`CreativeMarbleRenderingTests` checks beat-driven equations after repeated
+forward/backward seeks and compares live resolver values with Story preview
+and video frames at 0.75x, 1x and 1.5x in both encoding profiles. A nonzero
+lyric offset must affect lyrics only, never the audio-reactive source clock.
 
 ## Deferred
 
