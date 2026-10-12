@@ -42,6 +42,20 @@ struct TypographyFrame: Equatable, Sendable {
     let status: TypographyLineStatus
     let activeWordID: Int?
     let words: [TypographyWordFrame]
+    /// Per-word resolved creative effects. These are identical for a given
+    /// preset, lyric timestamp, frozen audio frame and deterministic seed.
+    let animations: [Int: TypographyAnimationState]
+
+    func withAnimations(_ animations: [Int: TypographyAnimationState]) -> TypographyFrame {
+        TypographyFrame(lineID: lineID, lyricTime: lyricTime,
+                        preset: preset, status: status,
+                        activeWordID: activeWordID, words: words,
+                        animations: animations)
+    }
+
+    func animation(for wordID: Int) -> TypographyAnimationState? {
+        animations[wordID]
+    }
 
     func word(id: Int) -> TypographyWordFrame? {
         words.first(where: { $0.id == id })

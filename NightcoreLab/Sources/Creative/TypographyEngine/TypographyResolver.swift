@@ -47,12 +47,10 @@ enum TypographyResolver {
                         prepared: TypographyPreparedLine? = nil) -> TypographyFrame {
         let now = lyricTime.isFinite ? lyricTime : 0
         let available = prepared?.line == state.line ? prepared : TypographyPreparedLine(state.line)
-        let strength = preset.audioReaction.gain
-        let bass = features?.bass ?? 0
-        let energy = features?.energy ?? 0
-        let beat = features?.beatDetected == true
-        let responseScale = 1 + strength * (beat ? 0.04 : 0)
-        let responseGlow = strength * (energy * 0.18 + bass * 0.07)
+        let responseScale = 1 + preset.audioMapping.amount(
+            for: .scale, features: features, reaction: preset.audioReaction)
+        let responseGlow = preset.audioMapping.amount(
+            for: .glow, features: features, reaction: preset.audioReaction)
 
         let activeID: Int? = state.status == .active &&
                              state.line.precision == .word
@@ -84,9 +82,10 @@ enum TypographyResolver {
                 magazine: magazine)
         }
 
-        return TypographyFrame(lineID: state.line.id,
-                               lyricTime: now, preset: preset,
-                               status: state.status,
-                               activeWordID: activeID, words: words)
+        let frame = TypographyFrame(
+            lineID: state.line.id, lyricTime: now, preset: preset,
+            status: state.status, activeWordID: activeID,
+            words: words, animations: [:])
+        return TypographyAnimationEngine.resolve(frame, features: features)
     }
 }

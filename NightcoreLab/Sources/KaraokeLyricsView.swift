@@ -381,14 +381,15 @@ private struct KaraokeLineView: View {
                     word: resolved.word,
                     fill: resolved.progress,
                     fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
-                    glow: status == .active,
+                    glow: (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
                     theme: theme,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
                     typographyStyle: typographyStyle,
                     magazineAppearance: resolved.magazine?.legacy,
                     isCurrentLine: status == .active,
-                    isPastLine: status == .past
+                    isPastLine: status == .past,
+                    animation: frame.animation(for: resolved.id)
                 )
                 .gapAfter(resolved.word.spaceAfter ? 9 : 0)
             }
@@ -410,6 +411,9 @@ struct KaraokeWordView: View {
     let magazineAppearance: MagazineWordAppearance?
     let isCurrentLine: Bool
     let isPastLine: Bool
+    /// All creative decisions are resolved by TypographyAnimationEngine.
+    /// nil is reserved for external callers using the existing legacy API.
+    var animation: TypographyAnimationState? = nil
 
     /// One line per word. Long words shrink instead of spilling outside the viewport.
     /// Both copies share the exact same metrics, preserving left-to-right sync.
@@ -421,35 +425,53 @@ struct KaraokeWordView: View {
             .frame(maxWidth: maxWordWidth)
     }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         if typographyStyle == .magazineCutout, let magazineAppearance {
             cutout(appearance: magazineAppearance)
+        } else if let animation, !animation.isTransformNeutral {
+            // Generic transform output can render future Glitch/Kinetic/Minimal
+            // without adding temporal equations or timers to the view.
+            neonGlyph
+                .scaleEffect(animation.scale)
+                .rotationEffect(.degrees(animation.rotation))
+                .offset(x: animation.offsetX * fontSize,
+                        y: animation.offsetY * fontSize)
+                .opacity(animation.opacity)
+                .blur(radius: animation.blur)
         } else {
-            // NEON: deliberately identical to the previous rendering path.
-            glyph
-                .foregroundStyle(theme.inactive)
-                .overlay(alignment: .leading) {
-                    if fill > 0 {
-                        glyph
-                            .foregroundStyle(fillColor)
-                            .mask(alignment: .leading) {
-                                Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
-                            }
-                            .shadow(color: glow ? theme.glow : .clear, radius: glow ? 10 : 0)
-                    }
-                }
+            neonGlyph
         }
+    }
+
+    /// Exact legacy Neon glyph/mask/glow path; no new modifiers by default.
+    private var neonGlyph: some View {
+        glyph
+            .foregroundStyle(theme.inactive)
+            .overlay(alignment: .leading) {
+                if fill > 0 {
+                    glyph
+                        .foregroundStyle(fillColor)
+                        .mask(alignment: .leading) {
+                            Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                        }
+                        .shadow(color: glow ? theme.glow : .clear,
+                                radius: glow ? (animation?.glow ?? 1) * 10 : 0)
+                }
+            }
     }
 
     /// Lightweight paper tiles; progress is still the original 0...1 sync
     /// from WordSync. No per-word animation, timers or runtime randomness.
-    private func cutout(appearance: MagazineWordAppearance) -> some View {
-        let active = isCurrentLine || (!isPastLine && fill > 0.1)
+    @ViewBuilder private func cutout(appearance: MagazineWordAppearance) -> some View {
+        let legacyActive = isCurrentLine || (!isPastLine && fill > 0.1)
         let progress = max(0, min(1, fill))
-        let tone: MagazineCutoutTone = active ? .black : appearance.tone
-        return tile(appearance: appearance, tone: tone)
+        let tone = animation?.magazineToneIndex.flatMap(MagazineCutoutTone.init(rawValue:))
+            ?? (legacyActive ? .black : appearance.tone)
+        let fills = animation?.magazineFillEnabled ??
+            (legacyActive && progress > 0)
+        let content = tile(appearance: appearance, tone: tone)
             .overlay(alignment: .leading) {
-                if active && progress > 0 {
+                if fills && progress > 0 {
                     tile(appearance: appearance, tone: .accent)
                         .mask(alignment: .leading) {
                             GeometryReader { geometry in
@@ -460,9 +482,19 @@ struct KaraokeWordView: View {
                         }
                 }
             }
-            .rotationEffect(.degrees(appearance.rotation))
-            .scaleEffect(active ? 1.035 : 1)
-            .opacity(isPastLine ? 0.50 : (active ? 1 : 0.68))
+            .rotationEffect(.degrees(animation?.rotation ?? appearance.rotation))
+            .scaleEffect(animation?.scale ?? (legacyActive ? 1.035 : 1))
+            .opacity(animation?.opacity ??
+                (isPastLine ? 0.50 : (legacyActive ? 1 : 0.68)))
+        if let animation,
+           animation.offsetX != 0 || animation.offsetY != 0 || animation.blur != 0 {
+            content
+                .offset(x: animation.offsetX * fontSize,
+                        y: animation.offsetY * fontSize)
+                .blur(radius: animation.blur)
+        } else {
+            content
+        }
     }
 
     private func tile(appearance: MagazineWordAppearance,
