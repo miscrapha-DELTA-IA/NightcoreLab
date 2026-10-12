@@ -18,7 +18,8 @@ enum TypographyAnimationEngine {
         let effect = preset.effectIntensity
         let isActiveLine = frame.status == .active
         let isActiveWord = isActiveLine &&
-            (frame.activeWordID.map { $0 == word.id } ?? word.progress > 0)
+            (frame.activeWordID == word.id ||
+             (frame.activeWordID == nil && word.progress > 0))
         let seed = mix(word.seed ^ preset.deterministicSeed)
         let clock = min(86_400, max(0, frame.lyricTime.isFinite ? frame.lyricTime : 0))
         let slice = UInt64((clock * 12).rounded(.down))
@@ -58,7 +59,7 @@ enum TypographyAnimationEngine {
                 magazineFillEnabled: tileActive && word.progress > 0)
 
         case .glitch:
-            let magnitude = isActiveWord ? effect : 0
+            let magnitude: Double = isActiveWord ? effect : 0
             let flicker = -magnitude * 0.18 * abs(alternate)
             let horizontal = 0.045 * magnitude * noise
             return state(
@@ -71,7 +72,7 @@ enum TypographyAnimationEngine {
                 intensity: magnitude)
 
         case .kinetic:
-            let magnitude = isActiveWord ? effect : 0
+            let magnitude: Double = isActiveWord ? effect : 0
             let progress = min(1, max(0, (frame.lyricTime - word.word.start) / 0.16))
             let ease = progress * progress * (3 - 2 * progress)
             return state(
@@ -84,7 +85,7 @@ enum TypographyAnimationEngine {
 
         case .minimal:
             // Deliberately calmer than Glitch and Kinetic, even at full intensity.
-            let magnitude = isActiveWord ? effect * 0.1 : 0
+            let magnitude: Double = isActiveWord ? effect * 0.1 : 0
             return state(
                 opacity: 1, scale: 1, glow: isActiveLine ? 0.2 : 0,
                 intensity: magnitude)
