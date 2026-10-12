@@ -41,3 +41,16 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: Validar contratos CreativePreset e AudioFeatures no simulador
+        run: |
+          set -o pipefail
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for devices in d["devices"].values() for v in devices if v["name"].startswith("iPhone")))')
+          xcodebuild test \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -destination "platform=iOS Simulator,id=$device_id" \
+            -parallel-testing-enabled NO \
+            -only-testing:NightcoreLabTests/CreativePresetTests \
+            -only-testing:NightcoreLabTests/AudioFeaturesTests \
+            CODE_SIGNING_ALLOWED=NO
