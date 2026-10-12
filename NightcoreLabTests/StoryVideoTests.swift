@@ -1,5 +1,8 @@
 import XCTest
 import SwiftUI
+import AVFoundation
+import CoreImage
+import UIKit
 @testable import NightcoreLab
 
 final class StoryVideoTests: XCTestCase {
@@ -61,6 +64,63 @@ final class StoryVideoTests: XCTestCase {
     func testEveryTypographyHasStableIdentifier() {
         XCTAssertEqual(Set(StoryLyricTypography.allCases.map(\.id)).count,
                        StoryLyricTypography.allCases.count)
+    }
+
+    func testEncodingProfilesReduceExpensiveMetalWork() {
+        let balanced = StoryEncodingProfile.balanced
+        let economical = StoryEncodingProfile.economical
+        XCTAssertEqual(balanced.width, 720)
+        XCTAssertEqual(balanced.height, 1280)
+        XCTAssertEqual(balanced.frameCount(duration: 15), 300)
+        XCTAssertEqual(economical.width, 540)
+        XCTAssertEqual(economical.height, 960)
+        XCTAssertEqual(economical.frameCount(duration: 15), 225)
+        XCTAssertLessThan(balanced.frameCount(duration: 15) *
+                          balanced.width * balanced.height,
+                          450 * 1080 * 1920)
+    }
+
+    /// Encodes/decodes a diagnostic portrait chart through the same H.264 writer.
+    /// Avoids relying on metadata or the image dimensions to determine orientation.
+    @MainActor
+    func testEncodedMP4PreservesUprightPortraitOrientation() async throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 128, height: 256))
+        let chart = renderer.image { _ in
+            UIColor.red.setFill()
+            UIRectFill(CGRect(x: 0, y: 0, width: 128, height: 128))
+            UIColor.blue.setFill()
+            UIRectFill(CGRect(x: 0, y: 128, width: 128, height: 128))
+        }
+        let url = try await StoryVideoExporter.encodeOrientationProbe(
+            try XCTUnwrap(chart.cgImage))
+        defer { try? FileManager.default.removeItem(at: url) }
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let size = try await track.load(.naturalSize)
+        XCTAssertLessThan(size.width, size.height)
+
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let output = try generator.copyCGImage(
+            at: CMTime(value: 0, timescale: 1), actualTime: nil)
+        XCTAssertLessThan(output.width, output.height)
+        let ciImage = CIImage(cgImage: output)
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        func pixel(y: CGFloat) -> (red: UInt8, blue: UInt8) {
+            let rect = CGRect(x: ciImage.extent.midX, y: y, width: 1, height: 1)
+            var bytes = [UInt8](repeating: 0, count: 4)
+            context.render(ciImage.cropped(to: rect), toBitmap: &bytes,
+                           rowBytes: 4, bounds: rect, format: .RGBA8,
+                           colorSpace: CGColorSpaceCreateDeviceRGB())
+            return (bytes[0], bytes[2])
+        }
+        let top = pixel(y: ciImage.extent.maxY - 8)
+        let bottom = pixel(y: ciImage.extent.minY + 8)
+        XCTAssertGreaterThan(Int(top.red), Int(top.blue) + 80,
+                             "The red TOP half is inverted in the encoded video")
+        XCTAssertGreaterThan(Int(bottom.blue), Int(bottom.red) + 80,
+                             "The blue BOTTOM half is inverted in the encoded video")
     }
 
     @MainActor

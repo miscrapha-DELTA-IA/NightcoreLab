@@ -80,6 +80,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Permite salvar vídeos Story na galeria para publicar no YouTube Shorts e em outras redes sociais.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>O Nightcore Lab acessa a rede local para baixar áudio do servidor de extração no seu computador.</string>
 

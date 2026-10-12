@@ -71,6 +71,7 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
     let track: TrackInfo
     let clock: PlaybackClock
     let audio: AudioEngineManager
+    let isScrollDisabled: Bool
     let isPlaying: Bool
     let isTrackLoaded: Bool
     let canShowKaraoke: Bool
@@ -131,16 +132,13 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
             }
 
             VStack(spacing: 0) {
-                if isTrackLoaded {
-                    unifiedPlayerCard
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.horizontal, 20)
-                        // Keep the overlay controls in their own row.
-                        .padding(.top, 70)
-                        .hideablePanel(.player, edge: .top)
-                }
-
                 if showsKaraoke {
+                    if isTrackLoaded {
+                        unifiedPlayerCard
+                            .padding(.horizontal, 20)
+                            .padding(.top, 74)
+                            .hideablePanel(.player, edge: .top)
+                    }
                     karaokeContent()
                         .padding(.top, 8)
                         .hideablePanel(.lyrics, edge: .bottom, keepsSpace: true)
@@ -152,14 +150,34 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                             .transition(.barRise)
                     }
                 }
-                // Keep SearchView and its engine/cache alive while temporarily covered.
-                normalExtras()
-                    .padding(.top, isTrackLoaded && panels.isVisible(.player) ? 0 : 74)
-                    .frame(height: showsKaraoke || panels.isZen ? 0 : nil)
-                    .opacity(showsKaraoke || panels.isZen ? 0 : 1)
-                    .clipped()
-                    .allowsHitTesting(!showsKaraoke && !panels.isZen)
-                    .accessibilityHidden(showsKaraoke || panels.isZen)
+
+                // A single scroll surface places the normal player in the CENTER
+                // of the first viewport, then lets users scroll down to Music/Audio.
+                // SearchView stays mounted in the same scroll hierarchy.
+                GeometryReader { viewport in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            if isTrackLoaded {
+                                unifiedPlayerCard
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .frame(minHeight: viewport.size.height,
+                                           alignment: .center)
+                                    .padding(.horizontal, 20)
+                                    .hideablePanel(.player, edge: .top)
+                            }
+                            normalExtras()
+                                .padding(.top, isTrackLoaded ? 0 : 74)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .scrollDisabled(isScrollDisabled || showsKaraoke || panels.isZen)
+                }
+                .frame(height: showsKaraoke || panels.isZen ? 0 : nil)
+                .opacity(showsKaraoke || panels.isZen ? 0 : 1)
+                .clipped()
+                .allowsHitTesting(!showsKaraoke && !panels.isZen)
+                .accessibilityHidden(showsKaraoke || panels.isZen)
             }
         }
         .overlay {

@@ -17,132 +17,114 @@ enum StoryVideoError: LocalizedError {
     }
 }
 
-/// Sequential frame writer: never holds 450 full-size images in memory.
-/// Isolated to the main actor because ImageRenderer requires SwiftUI main-actor rendering.
-@MainActor
-enum StoryVideoExporter {
-    static func export(_ request: StoryVideoRequest, audioSource: StoryAudioSource?,
-                       progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
-        let image = await ShareRenderer.loadArtwork(request.artworkURL)
-        try Task.checkCancellation()
-
-        var audioURL: URL?
-        if request.includeAudio {
-            guard let audioSource else { throw AudioEngineError.noFileLoaded }
-            progress(0.02)
-            audioURL = try await AudioEngineManager.exportStorySegment(
-                source: audioSource, startTime: request.playbackTime,
-                duration: request.duration)
-        }
-        defer { if let audioURL { try? FileManager.default.removeItem(at: audioURL) } }
-        progress(0.12)
-
-        let silentURL = try await renderVideo(request, artwork: image) { fraction in
-            progress(0.12 + fraction * 0.78)
-        }
-        guard let audioURL else {
-            progress(1)
-            return silentURL
-        }
-        do {
-            try Task.checkCancellation()
-            let combined = try await mixAudio(videoURL: silentURL, audioURL: audioURL)
-            try? FileManager.default.removeItem(at: silentURL)
-            progress(1)
-            return combined
-        } catch {
-            try? FileManager.default.removeItem(at: silentURL)
-            throw error
-        }
+/// Lower pixel count, one shader/frame and a worker-owned encoder.  The fast
+/// profile is vertical 720p/20fps; Low Power Mode uses 540p/15fps.
+struct StoryEncodingProfile: Sendable {
+    let width: Int
+    let height: Int
+    let fps: Int32
+    let bitRate: Int
+    var scale: CGFloat { CGFloat(width) / StoryVideoRequest.size.width }
+    func frameCount(duration: TimeInterval) -> Int {
+        max(1, Int(ceil(duration * Double(fps))))
     }
+    static let balanced = StoryEncodingProfile(width: 720, height: 1280,
+                                                fps: 20, bitRate: 2_800_000)
+    static let economical = StoryEncodingProfile(width: 540, height: 960,
+                                                  fps: 15, bitRate: 1_600_000)
+    static func recommended() -> Self {
+        ProcessInfo.processInfo.isLowPowerModeEnabled ? .economical : .balanced
+    }
+}
 
-    private static func renderVideo(
-        _ request: StoryVideoRequest, artwork: UIImage?,
-        onProgress: @escaping @MainActor (Double) -> Void
-    ) async throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NightcoreStory-\(UUID().uuidString).mp4")
-        let width = 1080, height = 1920
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
+/// Writes pixels/encodes *away* from MainActor. One in-flight frame only.
+private actor StoryPixelWriter {
+    private let writer: AVAssetWriter
+    private let input: AVAssetWriterInput
+    private let adapter: AVAssetWriterInputPixelBufferAdaptor
+    private let profile: StoryEncodingProfile
+
+    init(url: URL, profile: StoryEncodingProfile) throws {
+        self.profile = profile
+        writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width, AVVideoHeightKey: height,
+            AVVideoWidthKey: profile.width,
+            AVVideoHeightKey: profile.height,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 6_000_000,
-                AVVideoExpectedSourceFrameRateKey: 30,
-                AVVideoMaxKeyFrameIntervalKey: 30
+                AVVideoAverageBitRateKey: profile.bitRate,
+                AVVideoExpectedSourceFrameRateKey: Int(profile.fps),
+                AVVideoMaxKeyFrameIntervalKey: Int(profile.fps)
             ]
         ])
-        videoInput.expectsMediaDataInRealTime = false
-        guard writer.canAdd(videoInput) else { throw StoryVideoError.writerFailed }
-        writer.add(videoInput)
-        let adapter = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: videoInput,
+        input.expectsMediaDataInRealTime = false
+        // Pixel buffers carry upright portrait content; do not rotate in metadata.
+        input.transform = .identity
+        guard writer.canAdd(input) else { throw StoryVideoError.writerFailed }
+        writer.add(input)
+        adapter = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
             sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32ARGB),
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferWidthKey as String: profile.width,
+                kCVPixelBufferHeightKey as String: profile.height,
                 kCVPixelBufferCGImageCompatibilityKey as String: true,
                 kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
             ])
+    }
+
+    func start() throws {
         guard writer.startWriting() else {
             throw writer.error ?? StoryVideoError.writerFailed
         }
         writer.startSession(atSourceTime: .zero)
-        do {
-            for index in 0..<request.frameCount {
-                try Task.checkCancellation()
-                let seconds = Double(index) / Double(StoryVideoRequest.fps)
-                let frame = StorySceneView(request: request, artwork: artwork, elapsed: seconds)
-                let renderer = ImageRenderer(content: frame)
-                renderer.proposedSize = ProposedViewSize(StoryVideoRequest.size)
-                renderer.scale = 2
-                guard let cgImage = renderer.uiImage?.cgImage else {
-                    throw StoryVideoError.renderFailed
-                }
-                guard let pool = adapter.pixelBufferPool else {
-                    throw StoryVideoError.invalidPixelBuffer
-                }
-                var maybeBuffer: CVPixelBuffer?
-                guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &maybeBuffer)
-                        == kCVReturnSuccess, let buffer = maybeBuffer else {
-                    throw StoryVideoError.invalidPixelBuffer
-                }
-                try draw(cgImage, into: buffer, width: width, height: height)
-                while !videoInput.isReadyForMoreMediaData {
-                    try Task.checkCancellation()
-                    if writer.status == .failed {
-                        throw writer.error ?? StoryVideoError.writerFailed
-                    }
-                    try await Task.sleep(for: .milliseconds(10))
-                }
-                let time = CMTime(value: CMTimeValue(index), timescale: StoryVideoRequest.fps)
-                guard adapter.append(buffer, withPresentationTime: time) else {
-                    throw writer.error ?? StoryVideoError.writerFailed
-                }
-                if index.isMultiple(of: 5) {
-                    onProgress(Double(index + 1) / Double(request.frameCount))
-                }
-                await Task.yield()
-            }
-            videoInput.markAsFinished()
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                writer.finishWriting {
-                    if writer.status == .completed { continuation.resume(returning: ()) }
-                    else { continuation.resume(throwing: writer.error ?? StoryVideoError.writerFailed) }
-                }
-            }
+    }
+
+    func append(_ image: CGImage, at index: Int) async throws {
+        try Task.checkCancellation()
+        guard let pool = adapter.pixelBufferPool else {
+            throw StoryVideoError.invalidPixelBuffer
+        }
+        var buffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &buffer)
+                == kCVReturnSuccess, let buffer else {
+            throw StoryVideoError.invalidPixelBuffer
+        }
+        try Self.paint(image: image, into: buffer,
+                       width: profile.width, height: profile.height)
+        while !input.isReadyForMoreMediaData {
             try Task.checkCancellation()
-            return url
-        } catch {
-            writer.cancelWriting()
-            try? FileManager.default.removeItem(at: url)
-            throw error
+            if writer.status == .failed {
+                throw writer.error ?? StoryVideoError.writerFailed
+            }
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        let time = CMTime(value: CMTimeValue(index), timescale: profile.fps)
+        guard adapter.append(buffer, withPresentationTime: time) else {
+            throw writer.error ?? StoryVideoError.writerFailed
         }
     }
 
-    private static func draw(_ image: CGImage, into buffer: CVPixelBuffer,
-                             width: Int, height: Int) throws {
+    func finish() async throws {
+        input.markAsFinished()
+        let assetWriter = writer
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            assetWriter.finishWriting {
+                if assetWriter.status == .completed {
+                    cont.resume(returning: ())
+                } else {
+                    cont.resume(throwing: assetWriter.error ?? StoryVideoError.writerFailed)
+                }
+            }
+        }
+    }
+
+    func cancel() { writer.cancelWriting() }
+
+    /// Bitmap memory is row-major; its first row is written directly to the
+    /// first row of the video frame. Avoid the previous extra Y inversion.
+    static func paint(image: CGImage, into buffer: CVPixelBuffer,
+                      width: Int, height: Int) throws {
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
         guard let bytes = CVPixelBufferGetBaseAddress(buffer),
@@ -153,9 +135,107 @@ enum StoryVideoExporter {
                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
               ) else { throw StoryVideoError.invalidPixelBuffer }
         ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
-        ctx.translateBy(x: 0, y: CGFloat(height))
-        ctx.scaleBy(x: 1, y: -1)
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+}
+
+@MainActor
+enum StoryVideoExporter {
+    static func export(_ request: StoryVideoRequest, audioSource: StoryAudioSource?,
+                       progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        let image = await ShareRenderer.loadArtwork(request.artworkURL)
+        try Task.checkCancellation()
+        var audioURL: URL?
+        if request.includeAudio {
+            guard let audioSource else { throw AudioEngineError.noFileLoaded }
+            progress(0.02)
+            audioURL = try await AudioEngineManager.exportStorySegment(
+                source: audioSource, startTime: request.playbackTime,
+                duration: request.duration)
+        }
+        defer { if let audioURL { try? FileManager.default.removeItem(at: audioURL) } }
+        progress(0.12)
+        let videoURL = try await renderVideo(request, artwork: image) {
+            progress(0.12 + 0.78 * $0)
+        }
+        guard let audioURL else {
+            progress(1)
+            return videoURL
+        }
+        do {
+            try Task.checkCancellation()
+            let combined = try await mixAudio(videoURL: videoURL, audioURL: audioURL)
+            try? FileManager.default.removeItem(at: videoURL)
+            progress(1)
+            return combined
+        } catch {
+            try? FileManager.default.removeItem(at: videoURL)
+            throw error
+        }
+    }
+
+    private static func renderVideo(
+        _ request: StoryVideoRequest, artwork: UIImage?,
+        onProgress: @escaping @MainActor (Double) -> Void
+    ) async throws -> URL {
+        let profile = StoryEncodingProfile.recommended()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NightcoreStory-\(UUID().uuidString).mp4")
+        let encoder = try StoryPixelWriter(url: url, profile: profile)
+        try await encoder.start()
+        let count = profile.frameCount(duration: request.duration)
+        do {
+            for index in 0..<count {
+                try Task.checkCancellation()
+                let seconds = Double(index) / Double(profile.fps)
+                // The Metal-backed SwiftUI view must be drawn on MainActor.
+                // Only the drawing happens here; bitmap conversion and H.264
+                // compression are executed by the worker actor above.
+                let cgImage: CGImage = try autoreleasepool {
+                    let scene = StorySceneView(request: request, artwork: artwork,
+                                               elapsed: seconds)
+                    let renderer = ImageRenderer(content: scene)
+                    renderer.proposedSize = ProposedViewSize(StoryVideoRequest.size)
+                    renderer.scale = profile.scale
+                    guard let image = renderer.uiImage?.cgImage else {
+                        throw StoryVideoError.renderFailed
+                    }
+                    return image
+                }
+                try await encoder.append(cgImage, at: index)
+                if index.isMultiple(of: 4) {
+                    onProgress(Double(index + 1) / Double(count))
+                }
+                // Reserve main-thread time for player, scrolling and cancel taps.
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try await encoder.finish()
+            try Task.checkCancellation()
+            return url
+        } catch {
+            await encoder.cancel()
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+    }
+
+    /// In tests, encode a tiny orientation chart through the SAME code path.
+    static func encodeOrientationProbe(_ image: CGImage) async throws -> URL {
+        let profile = StoryEncodingProfile(width: image.width, height: image.height,
+                                           fps: 1, bitRate: 500_000)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NightcoreOrientation-\(UUID().uuidString).mp4")
+        let encoder = try StoryPixelWriter(url: url, profile: profile)
+        try await encoder.start()
+        do {
+            try await encoder.append(image, at: 0)
+            try await encoder.finish()
+            return url
+        } catch {
+            await encoder.cancel()
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
     }
 
     private static func mixAudio(videoURL: URL, audioURL: URL) async throws -> URL {
@@ -171,7 +251,6 @@ enum StoryVideoExporter {
               let audio = composition.addMutableTrack(withMediaType: .audio,
                                                       preferredTrackID: kCMPersistentTrackID_Invalid)
         else { throw StoryVideoError.muxFailed }
-
         let videoDuration = try await videoAsset.load(.duration)
         let audioDuration = try await audioAsset.load(.duration)
         try video.insertTimeRange(CMTimeRange(start: .zero, duration: videoDuration),
@@ -189,10 +268,10 @@ enum StoryVideoExporter {
         exporter.outputURL = url
         exporter.outputFileType = .mp4
         do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                 exporter.exportAsynchronously {
-                    if exporter.status == .completed { continuation.resume(returning: ()) }
-                    else { continuation.resume(throwing: exporter.error ?? StoryVideoError.muxFailed) }
+                    if exporter.status == .completed { cont.resume(returning: ()) }
+                    else { cont.resume(throwing: exporter.error ?? StoryVideoError.muxFailed) }
                 }
             }
             try Task.checkCancellation()

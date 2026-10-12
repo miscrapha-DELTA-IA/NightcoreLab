@@ -34,7 +34,7 @@ enum StoryLyricTypography: String, CaseIterable, Identifiable, Sendable {
 struct StoryVideoRequest: Sendable {
     static let maxSeconds: TimeInterval = 15
     static let size = CGSize(width: 540, height: 960)
-    static let fps: Int32 = 30
+    static let fps: Int32 = 20
 
     let mode: StoryMode
     let trackID: String

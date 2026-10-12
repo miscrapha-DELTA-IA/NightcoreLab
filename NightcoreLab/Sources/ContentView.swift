@@ -188,6 +188,7 @@ struct ContentView: View {
             track: TrackInfo(track: currentTrack, fileName: audio.fileName, coverURL: coverURL),
             clock: audio.lyricsClock,
             audio: audio,
+            isScrollDisabled: isAdjustingSlider,
             isPlaying: audio.isPlaying,
             isTrackLoaded: hasTrack,
             canShowKaraoke: currentTrack != nil,
@@ -392,7 +393,6 @@ struct ContentView: View {
 
     // Pull the long list out of body, keeping the view hierarchy unchanged.
     private var mainScrollContent: some View {
-            ScrollView {
                 VStack(spacing: DS.Spacing.l) {
                     header.hideablePanel(.header, edge: .top)
                     musicWorkspace
@@ -420,10 +420,7 @@ struct ContentView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 32)
                 .animation(.easeInOut(duration: 0.18), value: downloader.isDownloading)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollDisabled(isAdjustingSlider)
-            .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
+                .onPreferenceChange(SliderAdjustingKey.self) { isAdjustingSlider = $0 }
     }
 
     /// Uma superfície única para busca, descoberta e próximas faixas.

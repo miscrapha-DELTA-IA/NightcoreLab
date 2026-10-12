@@ -123,9 +123,9 @@ struct StorySceneView: View {
         .padding(22)
         .background {
             if request.playerStyle == .turbulent {
-                TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
-                                    speed: 0, maxFPS: 1, isPaused: true,
-                                    extendIntoSafeArea: false, frozenTime: phase)
+                // One animated shader per exported frame: the fullscreen marble
+                // already moves behind this transparent glass panel.
+                Color.black.opacity(0.28)
             } else if let artwork {
                 Image(uiImage: artwork).resizable().scaledToFill()
                     .blur(radius: request.playerStyle == .sharp ? 0 : 20)
