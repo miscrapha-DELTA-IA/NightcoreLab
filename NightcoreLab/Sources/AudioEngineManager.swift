@@ -167,6 +167,7 @@ final class AudioEngineManager {
         do {
             if !engine.isRunning { try engine.start() }
             if needsScheduling { schedule(file) }
+            lyricsClock.refreshOutputLatency()
             player.play()
             isPlaying = true
             setupNowPlaying()
@@ -443,6 +444,8 @@ final class AudioEngineManager {
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] note in
+            // Any route change can change output latency (speaker ↔ Bluetooth).
+            Task { @MainActor in self?.lyricsClock.refreshOutputLatency() }
             guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
             Task { @MainActor in self?.pause() }

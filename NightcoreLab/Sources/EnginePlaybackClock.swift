@@ -19,12 +19,27 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
         var anchorHost: UInt64 = 0
         var hasAnchor = false
         var frozen: TimeInterval = 0
+        /// Cached AVAudioSession.outputLatency (Stage 10C). Reading the session
+        /// on every lyricTime query (up to 120 Hz per TimelineView, plus the
+        /// reactive loop) was unnecessary: it only changes with the route.
+        var outputLatency: TimeInterval = 0
     }
 
     private let player: AVAudioPlayerNode
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(player: AVAudioPlayerNode) { self.player = player }
+    init(player: AVAudioPlayerNode) {
+        self.player = player
+        refreshOutputLatency()
+    }
+
+    /// Call when playback starts and on every audio route change
+    /// (Bluetooth can exceed 200 ms).
+    func refreshOutputLatency() {
+        let latency = AVAudioSession.sharedInstance().outputLatency
+        let safe = latency.isFinite ? max(0, latency) : 0
+        state.withLock { $0.outputLatency = safe }
+    }
 
     // MARK: Chamar do seu engine
 
@@ -58,7 +73,6 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
 
     var lyricTime: TimeInterval {
         let playing = player.isPlaying
-        let latency = AVAudioSession.sharedInstance().outputLatency   // BT pode passar de 200 ms
         let rt = playing ? player.lastRenderTime : nil
         let pt = rt.flatMap { $0.isSampleTimeValid ? player.playerTime(forNodeTime: $0) : nil }
 
@@ -73,7 +87,7 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
 
             let delta = Int64(bitPattern: mach_absolute_time() &- s.anchorHost)
             let secs = AVAudioTime.seconds(forHostTime: delta.magnitude) * (delta < 0 ? -1 : 1)
-            let t = max(0, s.anchorMedia + min(max(secs, 0), 0.15) * s.speed - latency)
+            let t = max(0, s.anchorMedia + min(max(secs, 0), 0.15) * s.speed - s.outputLatency)
             s.frozen = t
             return t
         }

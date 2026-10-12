@@ -7,9 +7,16 @@ struct StorySceneView: View {
     let artwork: UIImage?
     let frame: StoryRenderFrame
     let visualTimeline: AudioFeatureTimeline?
-    /// The preview may supply a resolved frame; export resolves it through the
-    /// same runtime when constructing this same StorySceneView.
-    let suppliedCompositionFrame: ResolvedCompositionFrame?
+    /// Resolved ONCE per scene (Stage 10C). Previously these were computed
+    /// properties evaluated several times per body (background + lyrics), each
+    /// recompiling the composition. The preview may supply the composition
+    /// frame; export resolves it here through the request's frozen runtime.
+    let resolvedCompositionFrame: ResolvedCompositionFrame?
+    /// The active line's typography, with or without a reactive composition.
+    /// Both branches run TypographyLayer.resolve with the request's frozen
+    /// preset and audio reaction off, so they yield the same frame; the
+    /// composition result is preferred so layer wiring has one source.
+    let typographyFrame: TypographyFrame?
 
     /// Backwards-compatible initializer for existing StorySceneView users.
     /// Encoders and previews use the shared frame-grid initializer instead.
@@ -27,45 +34,44 @@ struct StorySceneView: View {
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
-        self.suppliedCompositionFrame = resolvedCompositionFrame
-    }
-
-    /// One deterministic query for both the scrub preview and the MP4 encoder.
-    /// Null/offline feature sources produce exactly the original shader.
-    private var typographyLayer: TypographyLayer? {
-        TypographyLayer.forStory(
+        // One deterministic query for both the scrub preview and the MP4 encoder.
+        let layer = TypographyLayer.forStory(
             lines: request.lines, lyricTime: frame.lyricTime,
             lyricOffset: request.lyricOffset,
-            preset: request.typographyPreset)
-    }
-
-    /// The active line's typography, with or without a reactive composition.
-    /// Both branches run TypographyLayer.resolve with the request's frozen
-    /// preset and audio reaction off, so they yield the same frame; the
-    /// composition result is preferred so layer wiring has one source.
-    var typographyFrame: TypographyFrame? {
-        if request.visualComposition != nil,
-           let composed = resolvedCompositionFrame?.typographyFrame {
-            return composed
+            preset: request.typographyPreset,
+            prepared: request.preparedLyrics)
+        let composed = Self.composition(
+            request: request, frame: frame, visualTimeline: visualTimeline,
+            supplied: resolvedCompositionFrame, typography: layer)
+        self.resolvedCompositionFrame = composed
+        if request.compositionRuntime != nil,
+           let typography = composed?.typographyFrame {
+            self.typographyFrame = typography
+        } else {
+            self.typographyFrame = layer?.resolve(at: frame.lyricTime, features: nil)
         }
-        return typographyLayer?.resolve(at: frame.lyricTime, features: nil)
     }
 
-    var resolvedCompositionFrame: ResolvedCompositionFrame? {
-        guard let composition = request.visualComposition else { return nil }
-        if let suppliedCompositionFrame,
+    /// Null/offline feature sources produce exactly the original shader.
+    private static func composition(
+        request: StoryVideoRequest, frame: StoryRenderFrame,
+        visualTimeline: AudioFeatureTimeline?,
+        supplied: ResolvedCompositionFrame?,
+        typography: TypographyLayer?
+    ) -> ResolvedCompositionFrame? {
+        guard let runtime = request.compositionRuntime else { return nil }
+        if let supplied,
            ResolvedFrameRendererAdapter.matches(
-                suppliedCompositionFrame, composition: composition,
+                supplied, composition: runtime.composition,
                 elapsed: frame.elapsed) {
-            return suppliedCompositionFrame
+            return supplied
         }
-        return CompositionRuntime(composition: composition).frame(
-            at: frame.elapsed, audioTimeline: visualTimeline,
-            typography: typographyLayer)
+        return runtime.frame(at: frame.elapsed, audioTimeline: visualTimeline,
+                             typography: typography)
     }
 
     var reactiveDistortion: Double {
-        if request.visualComposition != nil {
+        if request.compositionRuntime != nil {
             return ResolvedFrameRendererAdapter.marbleDistortion(
                 from: resolvedCompositionFrame)
         }

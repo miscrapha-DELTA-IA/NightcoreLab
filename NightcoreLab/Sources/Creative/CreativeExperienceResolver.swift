@@ -26,7 +26,8 @@ enum CreativeExperienceResolver {
                 font: authored.font)
             return TypographyLayer(
                 layerID: input.layerID, state: input.state,
-                preset: mapped, lyricOffset: input.lyricOffset)
+                preset: mapped, lyricOffset: input.lyricOffset,
+                prepared: input.prepared)
         }
 
         let runtime = CompositionRuntime(composition: preset.composition)

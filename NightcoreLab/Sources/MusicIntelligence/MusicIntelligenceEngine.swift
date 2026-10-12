@@ -7,23 +7,30 @@ final class MusicIntelligenceEngine: Sendable {
 
     typealias Analyzer = @Sendable (URL) throws -> AudioFeatureTimeline
     typealias OnsetExtractor = @Sendable (AudioFeatureTimeline) throws -> [TimeInterval]
-    typealias RhythmExtractor = @Sendable (AudioFeatureTimeline) throws -> RhythmAnalysisResult
+    /// Rhythm v2 decodes the source itself at ~11.6 ms resolution; the energy
+    /// timeline bounds it to the same analyzed coverage.
+    typealias RhythmExtractor = @Sendable (URL, AudioFeatureTimeline) throws -> RhythmAnalysisResult
 
     private let cache: MusicAnalysisCache
     private let scheduler: AnalysisScheduler
+    private let identities: AssetIdentityCache
     private let analyze: Analyzer
     private let extractOnsets: OnsetExtractor
     private let extractRhythm: RhythmExtractor
 
     init(cache: MusicAnalysisCache = MusicAnalysisCache(),
          scheduler: AnalysisScheduler = AnalysisScheduler(),
+         identities: AssetIdentityCache = AssetIdentityCache(),
          analyze: @escaping Analyzer = { try AudioFeatureAnalyzer.analyzeFile(at: $0) },
          extractOnsets: @escaping OnsetExtractor = { timeline in
              timeline.points.filter { $0.features.beatDetected }.map(\.time)
          },
-         extractRhythm: @escaping RhythmExtractor = { try RhythmAnalyzer.analyze(timeline: $0) }) {
+         extractRhythm: @escaping RhythmExtractor = { url, timeline in
+             try RhythmAnalyzer.analyzeFile(at: url, through: timeline.duration)
+         }) {
         self.cache = cache
         self.scheduler = scheduler
+        self.identities = identities
         self.analyze = analyze
         self.extractOnsets = extractOnsets
         self.extractRhythm = extractRhythm
@@ -34,12 +41,12 @@ final class MusicIntelligenceEngine: Sendable {
         guard url.isFileURL else { throw AudioFeatureAnalysisError.unsupportedAudio }
         let source = AudioAssetDescriptor.canonicalURL(url)
         return try await scheduler.run(key: source.absoluteString, onUpdate: onUpdate) { [self] emit in
-            let asset = try AudioAssetDescriptor.read(at: source)
+            let asset = try await identities.descriptor(for: source)
             let cached = await cache.load(for: asset)
             try Task.checkCancellation()
             if let cached, cached.capabilities[.onsets] == .available,
                cached.capabilities[.rhythm] == .available {
-                try asset.validateSource()
+                try await identities.validate(asset)
                 await emit(cached)
                 return cached
             }
@@ -60,7 +67,7 @@ final class MusicIntelligenceEngine: Sendable {
                 return failed
             }
             try Task.checkCancellation()
-            try asset.validateSource()
+            try await identities.validate(asset)
 
             let existingOnsets = cached?.capabilities[.onsets] == .available
                 ? cached?.onsetEvents : nil
@@ -101,15 +108,17 @@ final class MusicIntelligenceEngine: Sendable {
                 rhythmAnalysis: existingRhythm)
             await emit(rhythmPending)
 
-            // Stage 2: separate recoverable capability. Uses spectral bands
-            // already computed in the energy timeline, never a second FFT.
+            // Stage 2: separate recoverable capability. Rhythm v2 needs a finer
+            // onset envelope than the 83 ms visual timeline, so it decodes the
+            // same source once more; energy is never recomputed and the result
+            // is cached with its own algorithm version.
             let rhythmStatus: MusicAnalysisResult.CapabilityStatus
             var rhythm = existingRhythm
             if rhythm != nil {
                 rhythmStatus = .available
             } else {
                 do {
-                    let candidate = try extractRhythm(timeline)
+                    let candidate = try extractRhythm(source, timeline)
                     guard candidate.algorithmVersion == RhythmAnalysisResult.algorithmVersion,
                           candidate.isValid(through: timeline.duration) else {
                         throw AnalysisError.invalidRhythm
@@ -122,7 +131,7 @@ final class MusicIntelligenceEngine: Sendable {
                 }
             }
             try Task.checkCancellation()
-            try asset.validateSource()
+            try await identities.validate(asset)
             let result = MusicAnalysisResult(asset: asset, energy: .available,
                 onsets: onsetStatus, timeline: timeline, onsetEvents: onsets,
                 rhythm: rhythmStatus, rhythmAnalysis: rhythm)

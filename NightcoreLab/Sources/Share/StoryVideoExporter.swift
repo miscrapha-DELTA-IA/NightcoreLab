@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreGraphics
 import CoreVideo
+import os
 import SwiftUI
 import UIKit
 
@@ -141,6 +142,11 @@ private actor StoryPixelWriter {
 
 @MainActor
 enum StoryVideoExporter {
+    /// Stage 10C: Instruments "Points of Interest"/os_signpost intervals for
+    /// per-frame cost on a real iPhone (render on MainActor vs. encode).
+    private static let signposter = OSSignposter(
+        subsystem: "com.nightcorelab.app", category: "StoryExport")
+
     static func export(_ request: StoryVideoRequest, audioSource: StoryAudioSource?,
                        progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         let image = await ShareRenderer.loadArtwork(request.artworkURL)
@@ -206,6 +212,7 @@ enum StoryVideoExporter {
                 let frame = timeline.frame(index: index)
                 // One timestamp-derived scene for the scrub preview, single
                 // frame captures, and MP4. Encoding stays on the worker actor.
+                let renderInterval = signposter.beginInterval("Story frame render")
                 let cgImage: CGImage = try autoreleasepool {
                     try StoryFrameRenderer.render(
                         request: request, artwork: artwork,
@@ -213,7 +220,10 @@ enum StoryVideoExporter {
                         visualTimeline: visualTimeline
                     )
                 }
+                signposter.endInterval("Story frame render", renderInterval)
+                let encodeInterval = signposter.beginInterval("Story frame encode")
                 try await encoder.append(cgImage, at: index)
+                signposter.endInterval("Story frame encode", encodeInterval)
                 if index.isMultiple(of: 4) {
                     onProgress(Double(index + 1) / Double(count))
                 }
