@@ -145,6 +145,16 @@ enum StoryVideoExporter {
                        progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         let image = await ShareRenderer.loadArtwork(request.artworkURL)
         try Task.checkCancellation()
+        return try await export(request, audioSource: audioSource, artwork: image,
+                                profile: .recommended(), progress: progress)
+    }
+
+    /// The draft preview supplies its already-loaded cover and frozen encoding
+    /// profile. Do not fetch artwork again or change FPS after preview approval.
+    static func export(_ request: StoryVideoRequest, audioSource: StoryAudioSource?,
+                       artwork: UIImage?, profile: StoryEncodingProfile,
+                       progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        try Task.checkCancellation()
         var audioURL: URL?
         if request.includeAudio {
             guard let audioSource else { throw AudioEngineError.noFileLoaded }
@@ -155,7 +165,7 @@ enum StoryVideoExporter {
         }
         defer { if let audioURL { try? FileManager.default.removeItem(at: audioURL) } }
         progress(0.12)
-        let videoURL = try await renderVideo(request, artwork: image) {
+        let videoURL = try await renderVideo(request, artwork: artwork, profile: profile) {
             progress(0.12 + 0.78 * $0)
         }
         guard let audioURL else {
@@ -176,31 +186,26 @@ enum StoryVideoExporter {
 
     private static func renderVideo(
         _ request: StoryVideoRequest, artwork: UIImage?,
+        profile: StoryEncodingProfile,
         onProgress: @escaping @MainActor (Double) -> Void
     ) async throws -> URL {
-        let profile = StoryEncodingProfile.recommended()
+        let timeline = StoryRenderTimeline(request: request, profile: profile)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("NightcoreStory-\(UUID().uuidString).mp4")
         let encoder = try StoryPixelWriter(url: url, profile: profile)
         try await encoder.start()
-        let count = profile.frameCount(duration: request.duration)
+        let count = timeline.frameCount
         do {
             for index in 0..<count {
                 try Task.checkCancellation()
-                let seconds = Double(index) / Double(profile.fps)
-                // The Metal-backed SwiftUI view must be drawn on MainActor.
-                // Only the drawing happens here; bitmap conversion and H.264
-                // compression are executed by the worker actor above.
+                let frame = timeline.frame(index: index)
+                // One timestamp-derived scene for the scrub preview, single
+                // frame captures, and MP4. Encoding stays on the worker actor.
                 let cgImage: CGImage = try autoreleasepool {
-                    let scene = StorySceneView(request: request, artwork: artwork,
-                                               elapsed: seconds)
-                    let renderer = ImageRenderer(content: scene)
-                    renderer.proposedSize = ProposedViewSize(StoryVideoRequest.size)
-                    renderer.scale = profile.scale
-                    guard let image = renderer.uiImage?.cgImage else {
-                        throw StoryVideoError.renderFailed
-                    }
-                    return image
+                    try StoryFrameRenderer.render(
+                        request: request, artwork: artwork,
+                        frame: frame, profile: profile
+                    )
                 }
                 try await encoder.append(cgImage, at: index)
                 if index.isMultiple(of: 4) {
