@@ -159,8 +159,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
-                        pulseDriver: pulse,
-                        material: selectedMaterial
+                        material: selectedMaterial,
+
+                        pulseDriver: pulse
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -656,8 +657,9 @@ private struct BackgroundLayer: View {
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
                                     reactiveDistortion: reactiveDistortion,
-                                    pulseDriver: pulseDriver,
-                                     material: material)
+                                    material: material,
+
+                                    pulseDriver: pulseDriver)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)

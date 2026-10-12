@@ -66,8 +66,9 @@ struct PlayerBackgroundView: View {
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
                     reactiveDistortion: reactiveDistortion,
-                    pulseDriver: frozenTime == nil ? pulseDriver : nil,
-                    material: material
+                    material: material,
+
+                    pulseDriver: frozenTime == nil ? pulseDriver : nil
                 )
                 .overlay(Color.black.opacity(0.4))
             } else if let imageURL {
