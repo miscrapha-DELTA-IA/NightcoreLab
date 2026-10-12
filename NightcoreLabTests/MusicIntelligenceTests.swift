@@ -91,6 +91,72 @@ final class MusicIntelligenceTests: XCTestCase {
         XCTAssertEqual(counter.value, 2)
     }
 
+
+    func testWarmDescriptorDetectsSameStampContentReplacement() async throws {
+        let url = try audio(amplitude: 0.2)
+        let identities = AssetIdentityCache()
+        let original = try await identities.descriptor(for: url)
+        let before = try AudioAssetDescriptor.FileStamp(url)
+        _ = try audio(amplitude: 0.7)
+        try FileManager.default.setAttributes([.modificationDate: try XCTUnwrap(before.modified)],
+                                              ofItemAtPath: url.path)
+        XCTAssertEqual(try AudioAssetDescriptor.FileStamp(url), before,
+                       "Mutation fixture must preserve size, mtime and inode")
+        let replacement = try await identities.descriptor(for: url)
+        XCTAssertEqual(replacement.assetID, original.assetID)
+        XCTAssertNotEqual(replacement.sourceRevision, original.sourceRevision)
+        do {
+            try await identities.validate(original)
+            XCTFail("The old source revision must never be validated")
+        } catch AudioAssetDescriptor.IdentityError.sourceChanged { }
+    }
+
+    func testCorruptedSourceWithUnchangedStampCannotReuseAnalysis() async throws {
+        let url = try audio()
+        let counter = LockedCounter()
+        let engine = service(counter: counter)
+        _ = try await engine.analysis(for: url)
+        let stamp = try AudioAssetDescriptor.FileStamp(url)
+
+        // Overwrite the CAF header in place: do not replace the inode or size.
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seek(toOffset: 0)
+        try handle.write(contentsOf: Data(repeating: 0, count: 32))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: try XCTUnwrap(stamp.modified)],
+                                              ofItemAtPath: url.path)
+        XCTAssertEqual(try AudioAssetDescriptor.FileStamp(url), stamp)
+        do {
+            _ = try await engine.analysis(for: url)
+            XCTFail("An invalid audio header must not receive cached results")
+        } catch { }
+        XCTAssertEqual(counter.value, 1, "Corrupt replacement cannot decode or reuse prior FFT")
+    }
+
+    func testConcurrentRequestsShareOneAnalysis() async throws {
+        let url = try audio()
+        let counter = LockedCounter()
+        let engine = MusicIntelligenceEngine(
+            cache: MusicAnalysisCache(directory: cacheDirectory),
+            analyze: { source in
+                counter.increment()
+                // Keep the worker active while other consumers join its URL job.
+                Thread.sleep(forTimeInterval: 0.2)
+                return try AudioFeatureAnalyzer.analyzeFile(at: source)
+            })
+        let results = try await withThrowingTaskGroup(of: MusicAnalysisResult.self) { group in
+            for _ in 0..<8 {
+                group.addTask { try await engine.analysis(for: url) }
+            }
+            var collected: [MusicAnalysisResult] = []
+            for try await result in group { collected.append(result) }
+            return collected
+        }
+        XCTAssertEqual(results.count, 8)
+        XCTAssertEqual(counter.value, 1, "All consumers must share one decode/FFT job")
+        XCTAssertTrue(results.allSatisfy { $0 == results[0] })
+    }
+
     func testFailedTrackReplacementClearsPreviousVisualTimeline() async throws {
         let url = try audio()
         let bridge = AudioFeatureEngine(intelligence: service(counter: LockedCounter()))
