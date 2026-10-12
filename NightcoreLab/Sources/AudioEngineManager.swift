@@ -290,11 +290,18 @@ final class AudioEngineManager {
     nonisolated static func exportStorySegment(source: StoryAudioSource,
                                                startTime: TimeInterval,
                                                duration: TimeInterval) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
+        let renderTask = Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: source.url, settings: source.settings,
                                    format: .m4a, progress: { _ in },
                                    startTime: startTime, maxDuration: duration)
-        }.value
+        }
+        // Detached tasks do not inherit cancellation automatically.
+        // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.
+        return try await withTaskCancellationHandler {
+            try await renderTask.value
+        } onCancel: {
+            renderTask.cancel()
+        }
     }
 
     // MARK: - Privado: playback

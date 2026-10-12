@@ -49,6 +49,7 @@ struct PlayerBackgroundView: View {
     let style: PlayerBackgroundStyle
     let imageURL: URL?
     let theme: AppTheme
+    var frozenTime: Float? = nil
 
     var body: some View {
         ZStack {
@@ -59,7 +60,8 @@ struct PlayerBackgroundView: View {
                     theme: MarbleTheme(appTheme: theme),
                     speed: 0.6,
                     maxFPS: 30,
-                    extendIntoSafeArea: false
+                    extendIntoSafeArea: false,
+                    frozenTime: frozenTime
                 )
                 .overlay(Color.black.opacity(0.4))
             } else if let imageURL {

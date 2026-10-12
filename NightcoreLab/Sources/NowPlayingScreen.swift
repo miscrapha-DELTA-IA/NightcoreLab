@@ -93,6 +93,7 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var marbleStartedAt = Date()
     @State private var isBuildingShare = false
+    @State private var frozenShareMarblePhase: Float?
     @State private var shareResult: ShareExportPayload?
     @State private var showShareError = false
     @State private var shareErrorDetails: String?
@@ -114,7 +115,8 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                     style: backgroundStyle,
                     theme: MarbleTheme(appTheme: appTheme),
                     coverURL: track.coverURL,
-                    marbleStartedAt: marbleStartedAt
+                    marbleStartedAt: marbleStartedAt,
+                    frozenTime: frozenShareMarblePhase
                 )
                 .transition(.opacity)
             } else {
@@ -125,7 +127,8 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                     theme: MarbleTheme(appTheme: appTheme),
                     speed: 0.6,
                     maxFPS: 30,
-                    startedAt: marbleStartedAt
+                    startedAt: marbleStartedAt,
+                    frozenTime: frozenShareMarblePhase
                 )
                 .overlay(Color.black.opacity(0.4))
                 .allowsHitTesting(false)
@@ -278,7 +281,8 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
             if !showsKaraoke {
                 PlayerBackgroundView(style: playerBackgroundStyle,
                                      imageURL: track.coverURL,
-                                     theme: appTheme)
+                                     theme: appTheme,
+                                     frozenTime: frozenShareMarblePhase)
                     .id(track.coverURL)
                     .allowsHitTesting(false)
             }
@@ -286,6 +290,18 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
         .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous),
                       theme: appTheme, isActive: isPlaying, pulses: false, depth: 0.7)
+    }
+
+    /// Freeze only the live visuals while exporting. The audio keeps playing.
+    private func beginShare(at instant: Date) {
+        frozenShareMarblePhase = Float(max(0, instant.timeIntervalSince(marbleStartedAt)) *
+                                       (showsKaraoke ? 0.8 : 0.6))
+        isBuildingShare = true
+    }
+
+    private func finishShare() {
+        isBuildingShare = false
+        frozenShareMarblePhase = nil
     }
 
     /// Congela a fase exibida agora; nunca reinicia o áudio nem cria outro shader animado.
@@ -302,9 +318,9 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
             speed: showsKaraoke ? 0.8 : 0.6,
             capturedAt: capturedAt
         )
-        isBuildingShare = true
+        beginShare(at: capturedAt)
         Task { @MainActor in
-            defer { isBuildingShare = false }
+            defer { finishShare() }
             do {
                 let image = try await ShareRenderer.render(snapshot)
                 try Task.checkCancellation()
@@ -335,10 +351,10 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             storyProgress = 0
-            isBuildingShare = true
+            beginShare(at: capturedAt)
             storyTask = Task { @MainActor in
                 defer {
-                    isBuildingShare = false
+                    finishShare()
                     storyTask = nil
                 }
                 do {
@@ -508,6 +524,7 @@ private struct BackgroundLayer: View {
     let theme: MarbleTheme
     let coverURL: URL?
     let marbleStartedAt: Date
+    var frozenTime: Float? = nil
 
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
@@ -517,7 +534,8 @@ private struct BackgroundLayer: View {
             case .marble:
                 TurbulentMarbleView(theme: theme, speed: 0.8,
                                     maxFPS: lowPower ? 30 : 60,
-                                    startedAt: marbleStartedAt)
+                                    startedAt: marbleStartedAt,
+                                    frozenTime: frozenTime)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)
