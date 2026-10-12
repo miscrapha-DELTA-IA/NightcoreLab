@@ -3,6 +3,8 @@ import XCTest
 @testable import NightcoreLab
 
 final class AnalysisSchedulerTests: XCTestCase {
+    // macOS hosted runners may pause task scheduling during simulator boot.
+    // These waits detect an actual never-started worker, not a 2-second SLA.
     private func fixture() -> MusicAnalysisResult {
         MusicAnalysisResult(asset: AudioAssetDescriptor(
             url: URL(fileURLWithPath: "/fixture.caf"), assetID: "fixture", sourceRevision: "revision",
@@ -24,14 +26,14 @@ final class AnalysisSchedulerTests: XCTestCase {
                 return result
             }
         }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 12)
         let second = Task {
             try await scheduler.run(key: "same", onUpdate: { _ in joined.fulfill() }) { _ in
                 XCTFail("Shared work must not execute twice")
                 return result
             }
         }
-        await fulfillment(of: [joined], timeout: 2)
+        await fulfillment(of: [joined], timeout: 12)
         first.cancel()
         do { _ = try await first.value; XCTFail("Consumer must be cancelled promptly") }
         catch is CancellationError { }
@@ -59,11 +61,11 @@ final class AnalysisSchedulerTests: XCTestCase {
                 return result
             }
         }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 12)
         consumer.cancel()
         do { _ = try await consumer.value; XCTFail("Expected cancellation") }
         catch is CancellationError { }
-        await fulfillment(of: [cancelled], timeout: 2)
+        await fulfillment(of: [cancelled], timeout: 12)
         let next = try await scheduler.run(key: "same") { _ in result }
         XCTAssertEqual(next, result)
     }
@@ -80,7 +82,7 @@ final class AnalysisSchedulerTests: XCTestCase {
                 return result
             }
         }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 12)
         let queued = Task {
             try await scheduler.run(key: "queued") { _ in
                 XCTFail("A cancelled queued request cannot execute")
