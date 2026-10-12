@@ -94,3 +94,48 @@ enum CreativePresetCatalog {
         return CreativeVisualProgram(preset: configured, rules: recipe.rules)
     }
 }
+
+
+// MARK: - Stage 7 authoring packages (opt-in; original selection is unchanged)
+
+extension CreativePresetCatalog {
+    /// All four current recipes wrapped with their FULL visual programs.
+    /// Template timeline is neutral; applying it to an actual asset will
+    /// require a separately frozen composition/snapshot.
+    static func builtInPackage(for id: String) -> CreativePresetPackage? {
+        guard let program = all.first(where: { $0.id == id }),
+              let timeline = try? CompositionTimeline(
+                sourceStart: 0, playbackSpeed: 1, duration: 15) else {
+            return nil
+        }
+        return try? CreativePresetPackage.wrap(
+            program, author: "NightcoreLab", timeline: timeline)
+    }
+
+    /// Internal presets first, then locally authored packages in stable order.
+    /// No network, account, marketplace, or application state mutation.
+    static func availablePackages(
+        from store: CreativePresetPackageStore) async -> [CreativePresetPackage] {
+        let builtIns = all.compactMap { builtInPackage(for: $0.id) }
+        let authored = await store.userPackages()
+        return builtIns + authored
+    }
+
+    /// Unknown, corrupt or incomplete user packages yield an explicit safe
+    /// Original fallback. The existing program(for:) API is never changed.
+    static func resolvePackage(id: String,
+                               from store: CreativePresetPackageStore) async
+        -> CreativePresetPackageSelection? {
+        if let builtIn = builtInPackage(for: id) {
+            return CreativePresetPackageSelection(
+                package: builtIn, usedFallback: false)
+        }
+        if let user = await store.load(id: id) {
+            return CreativePresetPackageSelection(
+                package: user, usedFallback: false)
+        }
+        guard let original = builtInPackage(for: defaultID) else { return nil }
+        return CreativePresetPackageSelection(
+            package: original, usedFallback: true)
+    }
+}
