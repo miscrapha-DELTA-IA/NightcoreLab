@@ -1,22 +1,8 @@
 import Foundation
 import SwiftUI
 
-/// Karaoke-only visual templates. Does not change AppTheme or the timed lyric engine.
-enum KaraokeTypographyStyle: String, Codable, CaseIterable, Identifiable {
-    case neon
-    case magazineCutout
-
-    static let storageKey = "karaokeTypography"
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .neon: return "Neon"
-        case .magazineCutout: return "Magazine Cutout"
-        }
-    }
-}
-
+/// Magazine Cutout per-word details. The effect selection itself is
+/// `TypographyStyle`; these types only describe the cutout tiles.
 enum MagazineCutoutFont: Int, CaseIterable {
     case system, serif, monospaced
 

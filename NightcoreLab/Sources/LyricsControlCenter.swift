@@ -15,7 +15,7 @@ struct LyricsControlCenter: View {
     let onDismiss: () -> Void
 
     @Environment(LyricsStore.self) private var lyricsStore
-    @AppStorage("karaokeTypography") private var typographyStyle: KaraokeTypographyStyle = .neon
+    @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
 
     var body: some View {
@@ -33,7 +33,7 @@ struct LyricsControlCenter: View {
 
                 Section {
                     Picker("Template das letras", selection: $typographyStyle) {
-                        ForEach(KaraokeTypographyStyle.allCases) { option in
+                        ForEach(TypographyStyle.allCases) { option in
                             Text(option.title).tag(option)
                         }
                     }

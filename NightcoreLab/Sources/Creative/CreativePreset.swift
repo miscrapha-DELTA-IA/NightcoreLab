@@ -1,8 +1,5 @@
 import Foundation
 
-// Same-module conformance; karaoke rendering and preferences remain unchanged.
-extension KaraokeTypographyStyle: Sendable {}
-
 /// A portable visual recipe referring to the EXISTING AppTheme and karaoke style.
 struct CreativePreset: Codable, Equatable, Sendable, Identifiable {
     enum AudioReaction: String, Codable, CaseIterable, Sendable {
@@ -14,12 +11,12 @@ struct CreativePreset: Codable, Equatable, Sendable, Identifiable {
     let id: String
     let name: String
     let theme: AppTheme
-    let typographyStyle: KaraokeTypographyStyle
+    let typographyStyle: TypographyStyle
     let visualStyle: VisualPreset
     let audioReaction: AudioReaction
 
     init(id: String, name: String, theme: AppTheme,
-         typographyStyle: KaraokeTypographyStyle,
+         typographyStyle: TypographyStyle,
          visualStyle: VisualPreset,
          audioReaction: AudioReaction = .off) {
         self.id = id
@@ -31,7 +28,7 @@ struct CreativePreset: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// Default is descriptive, not an activated effect or editor selection.
-    static func current(theme: AppTheme, typographyStyle: KaraokeTypographyStyle,
+    static func current(theme: AppTheme, typographyStyle: TypographyStyle,
                         playerBackground: PlayerBackgroundStyle) -> CreativePreset {
         CreativePreset(
             id: "current",
@@ -60,7 +57,7 @@ struct CreativePreset: Codable, Equatable, Sendable, Identifiable {
         self.init(id: try c.decode(String.self, forKey: .id),
                   name: try c.decode(String.self, forKey: .name),
                   theme: theme,
-                  typographyStyle: try c.decode(KaraokeTypographyStyle.self, forKey: .typographyStyle),
+                  typographyStyle: try c.decode(TypographyStyle.self, forKey: .typographyStyle),
                   visualStyle: try c.decode(VisualPreset.self, forKey: .visualStyle),
                   audioReaction: try c.decode(AudioReaction.self, forKey: .audioReaction))
     }

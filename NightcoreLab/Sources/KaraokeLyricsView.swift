@@ -170,8 +170,8 @@ enum KaraokeLayoutMetrics {
 
 struct KaraokeLyricsView: View {
     @Environment(LyricsStore.self) private var store
-    @AppStorage("story.lyricTypography") private var typography: StoryLyricTypography = .classic
-    @AppStorage("karaokeTypography") private var typographyStyle: KaraokeTypographyStyle = .neon
+    @AppStorage("story.lyricTypography") private var typography: TypographyFont = .classic
+    @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var followsPlayback = true
@@ -208,7 +208,8 @@ struct KaraokeLyricsView: View {
                                 accent: accent,
                                 maxWordWidth: wordLimit,
                                 fontSize: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
-                                typographyStyle: typographyStyle
+                                typographyStyle: typographyStyle,
+                                typographyFont: typography
                             )
                             .frame(maxWidth: .infinity)
                             .opacity(emphasis.opacity)
@@ -322,10 +323,12 @@ private struct KaraokeLineView: View {
     let accent: Color?
     let maxWordWidth: CGFloat
     let fontSize: CGFloat
-    let typographyStyle: KaraokeTypographyStyle
+    let typographyStyle: TypographyStyle
+    let typographyFont: TypographyFont
     private let preparedTypography: TypographyPreparedLine
+    /// Same helper the Story freezes, so app and MP4 resolve identical frames.
     private var typographyPreset: TypographyPreset {
-        TypographyPreset(legacy: typographyStyle)
+        TypographyPreset.current(style: typographyStyle, font: typographyFont)
     }
 
     private var lyricState: LyricsState {
@@ -341,7 +344,7 @@ private struct KaraokeLineView: View {
     init(line: TimedLyricLine, status: Status, isPlaying: Bool,
          offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
          accent: Color?, maxWordWidth: CGFloat, fontSize: CGFloat,
-         typographyStyle: KaraokeTypographyStyle) {
+         typographyStyle: TypographyStyle, typographyFont: TypographyFont) {
         self.line = line
         self.status = status
         self.isPlaying = isPlaying
@@ -352,6 +355,7 @@ private struct KaraokeLineView: View {
         self.maxWordWidth = maxWordWidth
         self.fontSize = fontSize
         self.typographyStyle = typographyStyle
+        self.typographyFont = typographyFont
         preparedTypography = TypographyPreparedLine(line)
     }
 
@@ -407,21 +411,32 @@ struct KaraokeWordView: View {
     let theme: KaraokeTheme
     let maxWordWidth: CGFloat
     let fontSize: CGFloat
-    let typographyStyle: KaraokeTypographyStyle
+    let typographyStyle: TypographyStyle
     let magazineAppearance: MagazineWordAppearance?
     let isCurrentLine: Bool
     let isPastLine: Bool
     /// All creative decisions are resolved by TypographyAnimationEngine.
     /// nil is reserved for external callers using the existing legacy API.
     var animation: TypographyAnimationState? = nil
+    /// Appearance-only inputs so the Story can reuse this exact renderer.
+    /// Defaults are the live karaoke values and leave its pixels unchanged.
+    var tracking: CGFloat = 0
+    var glowRadius: CGFloat = 10
+    var minimumScaleFactor: CGFloat = 0.52
+
+    /// Tracking is applied only when requested, so the karaoke Text is
+    /// byte-for-byte the pre-10B glyph (nonzero tracking can alter shaping).
+    private var trackedText: Text {
+        let text = Text(word.text).font(theme.font)
+        return tracking == 0 ? text : text.tracking(tracking)
+    }
 
     /// One line per word. Long words shrink instead of spilling outside the viewport.
     /// Both copies share the exact same metrics, preserving left-to-right sync.
     private var glyph: some View {
-        Text(word.text)
-            .font(theme.font)
+        trackedText
             .lineLimit(1)
-            .minimumScaleFactor(0.52)
+            .minimumScaleFactor(minimumScaleFactor)
             .frame(maxWidth: maxWordWidth)
     }
 
@@ -455,7 +470,7 @@ struct KaraokeWordView: View {
                             Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
                         }
                         .shadow(color: glow ? theme.glow : .clear,
-                                radius: glow ? (animation?.glow ?? 1) * 10 : 0)
+                                radius: glow ? (animation?.glow ?? 1) * glowRadius : 0)
                 }
             }
     }
@@ -502,7 +517,7 @@ struct KaraokeWordView: View {
         Text(word.text)
             .font(appearance.font.font(size: fontSize))
             .lineLimit(1)
-            .minimumScaleFactor(0.52)
+            .minimumScaleFactor(minimumScaleFactor)
             .foregroundStyle(tone.text)
             .padding(.horizontal, 7)
             .padding(.vertical, 5)

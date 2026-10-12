@@ -78,7 +78,7 @@ enum CreativePresetCatalog {
     /// reaction parameters and future visual targets; the current UI binds
     /// the player outline and the existing Marble distortion uniform.
     static func effectiveProgram(id: String, theme: AppTheme,
-                                 typography: KaraokeTypographyStyle,
+                                 typography: TypographyStyle,
                                  background: PlayerBackgroundStyle,
                                  reaction: CreativePreset.AudioReaction) -> CreativeVisualProgram {
         let recipe = program(for: id)
@@ -154,7 +154,7 @@ extension CreativePresetCatalog {
         // Reuse the exact existing visual program rules and shader vocabulary.
         let renamed = CreativePreset(
             id: id, name: name, theme: original.theme,
-            typographyStyle: typography.legacyStyle,
+            typographyStyle: typography.style,
             visualStyle: original.visualStyle,
             audioReaction: original.audioReaction)
         let program = CreativeVisualProgram(

@@ -6,31 +6,6 @@ enum StoryMode: String, Sendable {
     case player, lyrics
 }
 
-enum StoryLyricTypography: String, CaseIterable, Identifiable, Sendable {
-    case classic, neon, mono, cinematic, typewriter
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .classic: return "Clássica"
-        case .neon: return "Neon"
-        case .mono: return "Mono"
-        case .cinematic: return "Cinema"
-        case .typewriter: return "Máquina"
-        }
-    }
-    func font(size: CGFloat) -> Font {
-        switch self {
-        case .classic: return .system(size: size, weight: .heavy, design: .rounded)
-        case .neon: return .system(size: size, weight: .black, design: .rounded)
-        case .mono: return .system(size: size * 0.90, weight: .bold, design: .monospaced)
-        case .cinematic: return .system(size: size * 1.06, weight: .bold, design: .serif)
-        case .typewriter: return .system(size: size * 0.90, weight: .semibold, design: .monospaced)
-        }
-    }
-    var font: Font { font(size: 35) }
-    var tracking: CGFloat { self == .cinematic ? 0.6 : 0 }
-}
-
 struct StoryVideoRequest: Sendable {
     static let maxSeconds: TimeInterval = 15
     static let size = CGSize(width: 540, height: 960)
@@ -52,7 +27,9 @@ struct StoryVideoRequest: Sendable {
     let totalSourceDuration: TimeInterval
     let lines: [TimedLyricLine]
     let lyricOffset: TimeInterval
-    let typography: StoryLyricTypography
+    /// Frozen effect + font. The same value the live karaoke resolves with,
+    /// so the Story reproduces the user's typography instead of a fixed Neon.
+    let typographyPreset: TypographyPreset
     let includeAudio: Bool
     /// Frozen declarative recipe; nil means the pre-existing Marble appearance.
     let reactiveProgram: CreativeVisualProgram?
@@ -78,6 +55,8 @@ struct StoryVideoRequest: Sendable {
         return lines.last(where: { $0.start <= t && t < $0.end })
     }
     var canExportLyrics: Bool { !lines.isEmpty }
+    /// Font family, kept for existing callers; derived from the frozen preset.
+    var typography: TypographyFont { typographyPreset.font }
 }
 
 enum StoryRequestError: LocalizedError {
@@ -95,7 +74,9 @@ enum StoryRequestBuilder {
                      playerStyle: PlayerBackgroundStyle, karaokeBackground: BackgroundStyle,
                      marblePhase: Float, playbackTime: TimeInterval, sourceDuration: TimeInterval,
                      speed: Float, lines: [TimedLyricLine], lyricOffset: TimeInterval,
-                     typography: StoryLyricTypography, includeAudio: Bool,
+                     typography: TypographyFont,
+                     typographyStyle: TypographyStyle = .neon,
+                     includeAudio: Bool,
                      reactiveProgram: CreativeVisualProgram? = nil,
                      reactiveSourceURL: URL? = nil) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
@@ -110,7 +91,8 @@ enum StoryRequestBuilder {
             marbleSpeed: mode == .lyrics ? 0.8 : 0.6,
             playbackTime: start, speed: speed, duration: seconds,
             totalSourceDuration: sourceDuration, lines: lines, lyricOffset: lyricOffset,
-            typography: typography, includeAudio: includeAudio,
+            typographyPreset: .current(style: typographyStyle, font: typography),
+            includeAudio: includeAudio,
             reactiveProgram: reactiveProgram,
             reactiveSourceURL: reactiveSourceURL
         )

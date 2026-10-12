@@ -38,7 +38,8 @@ struct StoryDraftPreview: View {
         guard let composition = draft.request.visualComposition else { return nil }
         let typography = TypographyLayer.forStory(
             lines: draft.request.lines, lyricTime: currentFrame.lyricTime,
-            lyricOffset: draft.request.lyricOffset)
+            lyricOffset: draft.request.lyricOffset,
+            preset: draft.request.typographyPreset)
         return CompositionRuntime(composition: composition).frame(
             at: currentFrame.elapsed, audioTimeline: visualTimeline,
             typography: typography)

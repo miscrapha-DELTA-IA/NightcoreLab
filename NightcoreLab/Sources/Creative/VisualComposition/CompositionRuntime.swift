@@ -48,9 +48,8 @@ struct CompositionRuntime: Sendable {
               }) else { return base }
         let lyricTime = base.timestamp.sourceTime + typography.lyricOffset
         guard lyricTime.isFinite else { return base }
-        return base.withTypography(TypographyResolver.resolve(
-            typography.state, at: lyricTime, features: features,
-            preset: typography.preset))
+        return base.withTypography(
+            typography.resolve(at: lyricTime, features: features))
     }
 
     /// Existing preview/export consumers use the SAME overload after

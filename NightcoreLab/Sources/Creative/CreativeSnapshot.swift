@@ -25,7 +25,7 @@ struct CreativeSnapshot: Equatable, Sendable {
     /// Captures current *values* only. No AVAudioEngine, SwiftUI or UserDefaults
     /// dependency, and no effect is activated when this function is called.
     static func capture(track: Track?, theme: AppTheme,
-                        typographyStyle: KaraokeTypographyStyle,
+                        typographyStyle: TypographyStyle,
                         playerBackground: PlayerBackgroundStyle,
                         playbackTime: TimeInterval,
                         marblePhase: Float,

@@ -22,7 +22,8 @@ enum CreativeExperienceResolver {
                 audioReaction: authored.audioReaction,
                 effectIntensity: intensity,
                 audioMapping: authored.audioMapping,
-                deterministicSeed: authored.deterministicSeed)
+                deterministicSeed: authored.deterministicSeed,
+                font: authored.font)
             return TypographyLayer(
                 layerID: input.layerID, state: input.state,
                 preset: mapped, lyricOffset: input.lyricOffset)

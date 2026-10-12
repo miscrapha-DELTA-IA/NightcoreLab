@@ -17,7 +17,7 @@ struct CreativeReactiveAccent: View {
     @AppStorage("creativeReactionMode")
     private var reaction: CreativePreset.AudioReaction = .off
     @AppStorage("karaokeTypography")
-    private var typography: KaraokeTypographyStyle = .neon
+    private var typography: TypographyStyle = .neon
     @AppStorage(CreativePresetCatalog.storageKey)
     private var selectedProgramID = CreativePresetCatalog.defaultID
 

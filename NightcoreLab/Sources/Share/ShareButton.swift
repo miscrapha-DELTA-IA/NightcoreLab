@@ -4,7 +4,7 @@ import SwiftUI
 struct ShareButton: View {
     let isWorking: Bool
     let canExportLyrics: Bool
-    @Binding var typography: StoryLyricTypography
+    @Binding var typography: TypographyFont
     let onImage: () -> Void
     let onVideo: (StoryMode, Bool) -> Void
 
@@ -29,9 +29,10 @@ struct ShareButton: View {
                 }
                 .disabled(!canExportLyrics)
             }
-            Section("Fonte do Story de letras") {
+            // Same font axis as the live karaoke (TypographyFont).
+            Section("Fonte das letras") {
                 Picker("Tipografia", selection: $typography) {
-                    ForEach(StoryLyricTypography.allCases) { style in
+                    ForEach(TypographyFont.allCases) { style in
                         Text(style.title).tag(style)
                     }
                 }

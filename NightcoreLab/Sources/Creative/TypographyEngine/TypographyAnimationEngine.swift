@@ -30,7 +30,7 @@ enum TypographyAnimationEngine {
         let scaled = min(1.25, max(0.5, word.scale))
         let glowing = min(1.5, max(0, word.glowStrength))
 
-        switch TypographyEffectStyle(preset.style) {
+        switch preset.style {
         case .neon:
             // Identical default appearance. Word fill and active-line emphasis
             // remain those produced by the existing TypographyResolver.
