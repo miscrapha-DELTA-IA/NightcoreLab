@@ -125,14 +125,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         ZStack {
             Color.black.ignoresSafeArea()
             if showsKaraoke {
-                LiveMarbleDistortion(uniforms: liveUniforms) { distortion in
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
                     BackgroundLayer(
                         style: backgroundStyle,
                         theme: MarbleTheme(appTheme: appTheme),
                         coverURL: track.coverURL,
                         marbleStartedAt: marbleStartedAt,
                         frozenTime: frozenShareMarblePhase,
-                        reactiveDistortion: distortion
+                        reactiveDistortion: distortion,
+                        pulseDriver: pulse
                     )
                 }
                 .transition(.opacity)
@@ -140,14 +141,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 // Keep the Liquid Marble visible when panels are collapsed.
                 // One full-screen shader is enough; it pauses with Reduce Motion
                 // and when the app moves out of the foreground.
-                LiveMarbleDistortion(uniforms: liveUniforms) { distortion in
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
                     TurbulentMarbleView(
                         theme: MarbleTheme(appTheme: appTheme),
                         speed: 0.6,
                         maxFPS: 30,
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
-                        reactiveDistortion: distortion
+                        reactiveDistortion: distortion,
+                        pulseDriver: pulse
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -261,10 +263,11 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .sheet(item: $storyDraft) { draft in
             StoryDraftPreview(
                 draft: draft,
-                onExport: { artwork, visualTimeline in
+                onExport: { artwork, visualTimeline, visualRhythm in
                     storyDraft = nil
                     exportApprovedDraft(draft, artwork: artwork,
-                                        visualTimeline: visualTimeline)
+                                        visualTimeline: visualTimeline,
+                                        visualRhythm: visualRhythm)
                 },
                 onCancel: { storyDraft = nil }
             )
@@ -326,12 +329,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .padding(.vertical, showsKaraoke ? 10 : 11)
         .background {
             if !showsKaraoke {
-                LiveMarbleDistortion(uniforms: liveUniforms) { distortion in
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
                     PlayerBackgroundView(style: playerBackgroundStyle,
                                          imageURL: track.coverURL,
                                          theme: appTheme,
                                          frozenTime: frozenShareMarblePhase,
-                                         reactiveDistortion: distortion)
+                                         reactiveDistortion: distortion,
+                                         pulseDriver: pulse)
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -347,7 +351,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 theme: appTheme,
                 backgroundStyle: playerBackgroundStyle,
                 featureEngine: visualEngine,
-                onParameters: { next in liveUniforms.update(next) }
+                onParameters: { next in liveUniforms.update(next) },
+                onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) }
             )
         }
     }
@@ -437,7 +442,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     }
 
     private func exportApprovedDraft(_ draft: StoryVideoDraft, artwork: UIImage?,
-                                     visualTimeline: AudioFeatureTimeline?) {
+                                     visualTimeline: AudioFeatureTimeline?,
+                                     visualRhythm: RhythmAnalysisResult?) {
         guard !isBuildingShare else { return }
         storyProgress = 0
         beginShare(at: Date())
@@ -451,6 +457,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                     draft.request, audioSource: draft.audioSource,
                     artwork: artwork, profile: draft.profile,
                     visualTimeline: visualTimeline,
+                    visualRhythm: visualRhythm,
                     progress: { storyProgress = $0 }
                 )
                 try Task.checkCancellation()
@@ -619,6 +626,7 @@ private struct BackgroundLayer: View {
     let marbleStartedAt: Date
     var frozenTime: Float? = nil
     var reactiveDistortion: Double = 0
+    var pulseDriver: MarblePulseDriver? = nil
 
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
@@ -630,7 +638,8 @@ private struct BackgroundLayer: View {
                                     maxFPS: lowPower ? 30 : 60,
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
-                                    reactiveDistortion: reactiveDistortion)
+                                    reactiveDistortion: reactiveDistortion,
+                                    pulseDriver: pulseDriver)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)

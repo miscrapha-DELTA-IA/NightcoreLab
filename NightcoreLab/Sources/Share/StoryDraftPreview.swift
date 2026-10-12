@@ -16,13 +16,14 @@ struct StoryVideoDraft: Identifiable {
 /// audio or install any TimelineView.
 struct StoryDraftPreview: View {
     let draft: StoryVideoDraft
-    let onExport: (UIImage?, AudioFeatureTimeline?) -> Void
+    let onExport: (UIImage?, AudioFeatureTimeline?, RhythmAnalysisResult?) -> Void
     let onCancel: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var artwork: UIImage?
     @State private var artworkIsLoaded = false
     @State private var visualTimeline: AudioFeatureTimeline?
+    @State private var visualRhythm: RhythmAnalysisResult?
     @State private var visualIsReady = false
     @State private var elapsed: TimeInterval = 0
 
@@ -57,6 +58,7 @@ struct StoryDraftPreview: View {
                     StorySceneView(request: draft.request, artwork: artwork,
                                    frame: currentFrame,
                                    visualTimeline: visualTimeline,
+                                   visualRhythm: visualRhythm,
                                    resolvedCompositionFrame: compositionFrame)
                         .scaleEffect(scale, anchor: .topLeading)
                         .frame(width: original.width * scale,
@@ -91,7 +93,7 @@ struct StoryDraftPreview: View {
                 }
 
                 Button {
-                    onExport(artwork, visualTimeline)
+                    onExport(artwork, visualTimeline, visualRhythm)
                 } label: {
                     Label("Gerar vídeo MP4", systemImage: "film")
                         .frame(maxWidth: .infinity)
@@ -133,9 +135,11 @@ struct StoryDraftPreview: View {
                 }
                 // A separate subscription shares identity/FFT/cache work with the
                 // live reader, while cancellation affects only this preview.
-                let result = try? await draft.featureEngine.analysisTimeline(for: url)
+                // Energy timeline AND rhythm (Marble beat pulse) in one request.
+                let result = try? await draft.featureEngine.analysisResult(for: url)
                 guard !Task.isCancelled else { return }
-                visualTimeline = result
+                visualTimeline = result?.energyTimeline
+                visualRhythm = result?.rhythmAnalysis
                 visualIsReady = true
             }
         }

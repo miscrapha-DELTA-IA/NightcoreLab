@@ -6,11 +6,13 @@ import Foundation
 actor AudioFeatureEngine {
     private var current: AudioFeatures = .silent
     private var timeline: AudioFeatureTimeline?
+    /// Stage 11/12: rhythm from the same cached analysis, for the Marble pulse.
+    private var rhythm: RhythmAnalysisResult?
     private var preparedURL: URL?
     private var throttle = VisualResponseThrottle()
     private var generation = 0
     private var lastVisualSampleTime: TimeInterval?
-    private var analysisTask: Task<AudioFeatureTimeline?, Error>?
+    private var analysisTask: Task<MusicAnalysisResult, Error>?
     private let intelligence: MusicIntelligenceEngine
 
     init(intelligence: MusicIntelligenceEngine = .shared) {
@@ -23,6 +25,11 @@ actor AudioFeatureEngine {
         try await intelligence.analysis(for: url).energyTimeline
     }
 
+    /// Story preview/export: energy timeline AND rhythm from one request.
+    nonisolated func analysisResult(for url: URL) async throws -> MusicAnalysisResult {
+        try await intelligence.analysis(for: url)
+    }
+
     /// Existing frame-input contract from Creative Engine Block 1.
     func snapshot() -> AudioFeatures { current }
 
@@ -33,6 +40,7 @@ actor AudioFeatureEngine {
         analysisTask = nil
         generation &+= 1
         timeline = nil
+        rhythm = nil
         preparedURL = nil
         throttle.reset()
         lastVisualSampleTime = nil
@@ -56,6 +64,7 @@ actor AudioFeatureEngine {
         generation &+= 1
         let request = generation
         timeline = nil
+        rhythm = nil
         preparedURL = nil
         current = .silent
         throttle.reset()
@@ -64,7 +73,7 @@ actor AudioFeatureEngine {
         // No automatic analysis during system Low Power Mode.
         guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
         let work = Task { [intelligence] in
-            try await intelligence.analysis(for: url).energyTimeline
+            try await intelligence.analysis(for: url)
         }
         analysisTask = work
         defer {
@@ -77,7 +86,8 @@ actor AudioFeatureEngine {
         }
         try Task.checkCancellation()
         guard request == generation else { return }
-        timeline = result
+        timeline = result.energyTimeline
+        rhythm = result.rhythmAnalysis
         preparedURL = url
         analysisTask = nil
     }
@@ -86,6 +96,12 @@ actor AudioFeatureEngine {
     /// A new session/export must use analysisTimeline to revalidate file contents.
     func cachedTimeline(for url: URL) -> AudioFeatureTimeline? {
         preparedURL == url ? timeline : nil
+    }
+
+    /// Rhythm from the most recent successful preparation (nil when the
+    /// analysis was insufficient or failed: no pulse is invented).
+    func cachedRhythm(for url: URL) -> RhythmAnalysisResult? {
+        preparedURL == url ? rhythm : nil
     }
 
     /// Seekable feature envelope, aligned to EnginePlaybackClock.lyricTime,
@@ -133,6 +149,7 @@ actor AudioFeatureEngine {
         analysisTask = nil
         generation &+= 1
         timeline = nil
+        rhythm = nil
         preparedURL = nil
         current = .silent
         throttle.reset()

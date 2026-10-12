@@ -160,6 +160,7 @@ enum StoryVideoExporter {
     static func export(_ request: StoryVideoRequest, audioSource: StoryAudioSource?,
                        artwork: UIImage?, profile: StoryEncodingProfile,
                        visualTimeline: AudioFeatureTimeline? = nil,
+                       visualRhythm: RhythmAnalysisResult? = nil,
                        progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         try Task.checkCancellation()
         var audioURL: URL?
@@ -174,7 +175,7 @@ enum StoryVideoExporter {
         progress(0.12)
         let videoURL = try await renderVideo(
             request, artwork: artwork, profile: profile,
-            visualTimeline: visualTimeline
+            visualTimeline: visualTimeline, visualRhythm: visualRhythm
         ) {
             progress(0.12 + 0.78 * $0)
         }
@@ -198,6 +199,7 @@ enum StoryVideoExporter {
         _ request: StoryVideoRequest, artwork: UIImage?,
         profile: StoryEncodingProfile,
         visualTimeline: AudioFeatureTimeline?,
+        visualRhythm: RhythmAnalysisResult?,
         onProgress: @escaping @MainActor (Double) -> Void
     ) async throws -> URL {
         let timeline = StoryRenderTimeline(request: request, profile: profile)
@@ -217,7 +219,8 @@ enum StoryVideoExporter {
                     try StoryFrameRenderer.render(
                         request: request, artwork: artwork,
                         frame: frame, profile: profile,
-                        visualTimeline: visualTimeline
+                        visualTimeline: visualTimeline,
+                        visualRhythm: visualRhythm
                     )
                 }
                 signposter.endInterval("Story frame render", renderInterval)

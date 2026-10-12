@@ -107,6 +107,12 @@ struct TurbulentMarbleView: View {
     /// 0 retains the original Metal effect; evaluated by CreativeParameterResolver
     /// outside the shader and clamped again before binding.
     var reactiveDistortion: Double = 0
+    /// Stage 12 Marble material: deterministic beat pulse (0 = previous look).
+    /// Story/MP4 pass a value resolved from the frame's source time.
+    var beatPulse: Double = 0
+    /// Live player only: evaluated once per rendered frame from the playback
+    /// clock, because the 12 Hz reactive loop is too coarse for a beat pulse.
+    var pulseDriver: MarblePulseDriver? = nil
 
     @State private var start = Date()
     @Environment(\.scenePhase) private var scenePhase
@@ -116,7 +122,7 @@ struct TurbulentMarbleView: View {
         Group {
             if let frozenTime {
                 // Export: a single GPU frame, with no TimelineView or animation clock.
-                marbleFrame(time: frozenTime)
+                marbleFrame(time: frozenTime, pulse: beatPulse)
             } else {
                 TimelineView(.animation(
                     minimumInterval: 1.0 / max(maxFPS, 1.0),
@@ -124,7 +130,8 @@ struct TurbulentMarbleView: View {
                 )) { context in
                     let elapsed = isPaused || reduceMotion ? 0 :
                         context.date.timeIntervalSince(startedAt ?? start)
-                    marbleFrame(time: Float(elapsed * speed))
+                    marbleFrame(time: Float(elapsed * speed),
+                                pulse: pulseDriver?.pulse() ?? beatPulse)
                 }
             }
         }
@@ -136,8 +143,9 @@ struct TurbulentMarbleView: View {
         .accessibilityHidden(true)
     }
 
-    private func marbleFrame(time: Float) -> some View {
+    private func marbleFrame(time: Float, pulse: Double) -> some View {
         let palette = theme.palette
+        let safePulse = Float(pulse.isFinite ? min(1, max(0, pulse)) : 0)
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
@@ -149,7 +157,8 @@ struct TurbulentMarbleView: View {
                         .color(palette.body),
                         .color(palette.glow),
                         .float(Float(reactiveDistortion.isFinite
-                                     ? min(1, max(0, reactiveDistortion)) : 0))
+                                     ? min(1, max(0, reactiveDistortion)) : 0)),
+                        .float(safePulse)
                     )
                 )
             }
