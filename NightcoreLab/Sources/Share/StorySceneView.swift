@@ -35,7 +35,8 @@ struct StorySceneView: View {
     private var typographyLayer: TypographyLayer? {
         TypographyLayer.forStory(
             lines: request.lines, lyricTime: frame.lyricTime,
-            lyricOffset: request.lyricOffset)
+            lyricOffset: request.lyricOffset,
+            preset: request.frozenKaraokeTypography)
     }
 
     var resolvedCompositionFrame: ResolvedCompositionFrame? {
@@ -46,7 +47,8 @@ struct StorySceneView: View {
                 elapsed: frame.elapsed) {
             return suppliedCompositionFrame
         }
-        return CompositionRuntime(composition: composition).frame(
+        guard let runtime = request.compositionRuntime else { return nil }
+        return runtime.frame(
             at: frame.elapsed, audioTimeline: visualTimeline,
             typography: typographyLayer)
     }
