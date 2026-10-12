@@ -74,10 +74,11 @@ struct StorySceneView: View {
     }
 
     var body: some View {
-        ZStack {
-            background.storyLayer(.background, frame: resolvedCompositionFrame)
+        let resolved = resolvedCompositionFrame
+        return ZStack {
+            background(resolved: resolved).storyLayer(.background, frame: resolved)
             Color.black.opacity(0.40)
-                .storyLayer(.overlay, frame: resolvedCompositionFrame)
+                .storyLayer(.overlay, frame: resolved)
 
             VStack(spacing: 0) {
                 HStack {
@@ -94,11 +95,11 @@ struct StorySceneView: View {
 
                 if request.mode == .player {
                     Spacer(minLength: 25)
-                    playerCard
+                    playerCard(resolved: resolved)
                     Spacer(minLength: 45)
                 } else {
                     Spacer(minLength: 70)
-                    lyricsCard.storyLayer(.typography, frame: resolvedCompositionFrame)
+                    lyricsCard(resolved: resolved).storyLayer(.typography, frame: resolved)
                     Spacer(minLength: 70)
                 }
 
@@ -122,7 +123,7 @@ struct StorySceneView: View {
     }
 
     @ViewBuilder
-    private var background: some View {
+    private func background(resolved: ResolvedCompositionFrame?) -> some View {
         if request.mode == .lyrics && request.karaokeBackground == .cover,
            let artwork {
             Image(uiImage: artwork)
@@ -134,16 +135,18 @@ struct StorySceneView: View {
             TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
                                 speed: 0, maxFPS: 1, isPaused: true,
                                 extendIntoSafeArea: false, frozenTime: phase,
-                                reactiveDistortion: reactiveDistortion)
+                                reactiveDistortion: resolved == nil && request.visualComposition == nil
+                                    ? reactiveDistortion
+                                    : ResolvedFrameRendererAdapter.marbleDistortion(from: resolved))
                 .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
         }
     }
 
-    private var playerCard: some View {
+    private func playerCard(resolved: ResolvedCompositionFrame?) -> some View {
         VStack(spacing: 13) {
             artworkTile
                 .frame(width: 230, height: 230)
-                .storyLayer(.artwork, frame: resolvedCompositionFrame)
+                .storyLayer(.artwork, frame: resolved)
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
             VStack(spacing: 3) {
@@ -201,7 +204,7 @@ struct StorySceneView: View {
         .glassSurface(shape, theme: request.theme, isActive: false, pulses: false, depth: 0.7)
     }
 
-    private var lyricsCard: some View {
+    private func lyricsCard(resolved: ResolvedCompositionFrame?) -> some View {
         VStack(spacing: 28) {
             if let line = request.lines.last(where: {
                 $0.start <= frame.lyricTime && frame.lyricTime < $0.end
@@ -214,7 +217,7 @@ struct StorySceneView: View {
                 }
                 StoryLyricLine(line: line, time: frame.lyricTime,
                                theme: request.theme, typography: request.typography,
-                               resolved: resolvedCompositionFrame?.typographyFrame)
+                               resolved: resolved?.typographyFrame)
                 if let next = request.lines.first(where: { $0.start >= line.end && !$0.words.isEmpty }) {
                     Text(next.text)
                         .font(.system(size: 23, weight: .semibold, design: .rounded))
