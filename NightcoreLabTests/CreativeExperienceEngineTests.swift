@@ -179,13 +179,13 @@ final class CreativeExperienceEngineTests: XCTestCase {
     }
 
     func testInvalidOrMismatchedRuntimeCompositionIsRejected() throws {
-        let selected = try selected()
+        let chosen = try selected()
         let other = try selected("liquid-dream")
-        let runtime = CompositionRuntime(composition: selected.composition)
+        let runtime = CompositionRuntime(composition: chosen.composition)
         XCTAssertNil(runtime.experienceFrame(
             at: 1.0, preset: other, features: audio()))
         XCTAssertNotNil(runtime.experienceFrame(
-            at: 1.0, preset: selected, features: audio()))
+            at: 1.0, preset: chosen, features: audio()))
     }
 
     func testAllThreeCuratedPresetsUseExistingProgramsAndTypedStyles() throws {
