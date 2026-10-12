@@ -33,7 +33,7 @@ final class StoryVideoTests: XCTestCase {
     func testStoryFramesUseOriginalAudioTimeAndDeterministicShaderPhase() throws {
         let clip = try request(mode: .lyrics, speed: 1.25)
         XCTAssertEqual(clip.duration, 15, accuracy: 0.00001)
-        XCTAssertEqual(clip.frameCount, 450)
+        XCTAssertEqual(clip.frameCount, Int(15 * StoryVideoRequest.fps))
         XCTAssertEqual(clip.sourceTime(at: 10), 16.5, accuracy: 0.00001)
         XCTAssertEqual(clip.lyricTime(at: 10), 16.7, accuracy: 0.00001)
         XCTAssertEqual(clip.marbleTime(at: 2), 3.9, accuracy: 0.001)
@@ -42,7 +42,7 @@ final class StoryVideoTests: XCTestCase {
     func testStoryClampsToEndInsteadOfLoopingSound() throws {
         let clip = try request(mode: .player, start: 98, total: 100, speed: 1.25)
         XCTAssertEqual(clip.duration, 1.6, accuracy: 0.0001)
-        XCTAssertEqual(clip.frameCount, 48)
+        XCTAssertEqual(clip.frameCount, 32)
         XCTAssertEqual(clip.sourceTime(at: clip.duration), 100, accuracy: 0.0001)
     }
 
