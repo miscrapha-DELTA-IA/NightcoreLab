@@ -7,6 +7,9 @@ struct StorySceneView: View {
     let artwork: UIImage?
     let frame: StoryRenderFrame
     let visualTimeline: AudioFeatureTimeline?
+    /// The preview may supply a resolved frame; export resolves it through the
+    /// same runtime when constructing this same StorySceneView.
+    let suppliedCompositionFrame: ResolvedCompositionFrame?
 
     /// Backwards-compatible initializer for existing StorySceneView users.
     /// Encoders and previews use the shared frame-grid initializer instead.
@@ -18,17 +21,37 @@ struct StorySceneView: View {
     }
 
     init(request: StoryVideoRequest, artwork: UIImage?, frame: StoryRenderFrame,
-         visualTimeline: AudioFeatureTimeline? = nil) {
+         visualTimeline: AudioFeatureTimeline? = nil,
+         resolvedCompositionFrame: ResolvedCompositionFrame? = nil) {
         self.request = request
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
+        self.suppliedCompositionFrame = resolvedCompositionFrame
     }
 
     /// One deterministic query for both the scrub preview and the MP4 encoder.
     /// Null/offline feature sources produce exactly the original shader.
+    var resolvedCompositionFrame: ResolvedCompositionFrame? {
+        guard let composition = request.visualComposition else { return nil }
+        if let suppliedCompositionFrame,
+           ResolvedFrameRendererAdapter.matches(
+                suppliedCompositionFrame, composition: composition,
+                elapsed: frame.elapsed) {
+            return suppliedCompositionFrame
+        }
+        return CompositionRuntime(composition: composition).frame(
+            at: frame.elapsed, audioTimeline: visualTimeline)
+    }
+
     var reactiveDistortion: Double {
-        CreativeMarbleFrameResolver.resolve(
+        if request.visualComposition != nil {
+            return ResolvedFrameRendererAdapter.marbleDistortion(
+                from: resolvedCompositionFrame)
+        }
+        // Legacy callers constructing StoryVideoRequest directly, or inputs
+        // incompatible with the new timeline, retain the exact old behavior.
+        return CreativeMarbleFrameResolver.resolve(
             program: request.reactiveProgram,
             timeline: visualTimeline,
             sourceTime: frame.sourceTime).marbleDistortion

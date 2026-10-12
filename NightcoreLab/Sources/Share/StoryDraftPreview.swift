@@ -32,6 +32,14 @@ struct StoryDraftPreview: View {
 
     private var currentFrame: StoryRenderFrame { timeline.frame(at: elapsed) }
 
+    /// Explicit preview-side request; export uses the identical runtime from
+    /// StorySceneView via the same frozen request and frame grid.
+    private var compositionFrame: ResolvedCompositionFrame? {
+        guard let composition = draft.request.visualComposition else { return nil }
+        return CompositionRuntime(composition: composition).frame(
+            at: currentFrame.elapsed, audioTimeline: visualTimeline)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 13) {
@@ -41,7 +49,8 @@ struct StoryDraftPreview: View {
                                     proxy.size.height / original.height)
                     StorySceneView(request: draft.request, artwork: artwork,
                                    frame: currentFrame,
-                                   visualTimeline: visualTimeline)
+                                   visualTimeline: visualTimeline,
+                                   resolvedCompositionFrame: compositionFrame)
                         .scaleEffect(scale, anchor: .topLeading)
                         .frame(width: original.width * scale,
                                height: original.height * scale,

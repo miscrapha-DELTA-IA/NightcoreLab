@@ -58,6 +58,9 @@ struct StoryVideoRequest: Sendable {
     let reactiveProgram: CreativeVisualProgram?
     /// The same local source file already loaded by the player.
     let reactiveSourceURL: URL?
+    /// Frozen only by StoryRequestBuilder. The original reactiveProgram stays
+    /// available for callers still using the legacy compatibility contract.
+    var visualComposition: VisualComposition? = nil
 
     /// Source audio and word timings refer to the original unaccelerated timeline.
     var frameCount: Int { max(1, Int(ceil(duration * Double(Self.fps)))) }
@@ -100,7 +103,7 @@ enum StoryRequestBuilder {
         let start = min(max(playbackTime, 0), sourceDuration)
         let seconds = min(StoryVideoRequest.maxSeconds, max(0, sourceDuration - start) / safeSpeed)
         guard seconds > 0.05 else { throw StoryRequestError.noRemainingAudio }
-        return StoryVideoRequest(
+        var request = StoryVideoRequest(
             mode: mode, trackID: track.id, title: track.title, artist: track.artist,
             artworkURL: track.coverURL, theme: theme, playerStyle: playerStyle,
             karaokeBackground: karaokeBackground, marblePhase: marblePhase,
@@ -111,5 +114,11 @@ enum StoryRequestBuilder {
             reactiveProgram: reactiveProgram,
             reactiveSourceURL: reactiveSourceURL
         )
+        // One immutable source of truth for preview and the StoryFrameRenderer
+        // scene. Do not rebuild from a potentially changed preset during export.
+        request.visualComposition = CompositionRuntime.freeze(
+            program: reactiveProgram, sourceStart: start,
+            speed: Double(speed), duration: seconds)
+        return request
     }
 }
