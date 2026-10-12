@@ -7,13 +7,18 @@ struct TypographyLayer: Sendable {
     let state: LyricsState
     let preset: TypographyPreset
     let lyricOffset: TimeInterval
+    /// Optional precomputed seeds/looks for `state.line` (Stage 10C cache).
+    /// Purely an optimization: the resolved frame is identical without it.
+    let prepared: TypographyPreparedLine?
 
     init(layerID: String = "typography", state: LyricsState,
-         preset: TypographyPreset, lyricOffset: TimeInterval = 0) {
+         preset: TypographyPreset, lyricOffset: TimeInterval = 0,
+         prepared: TypographyPreparedLine? = nil) {
         self.layerID = layerID
         self.state = state
         self.preset = preset
         self.lyricOffset = lyricOffset
+        self.prepared = prepared
     }
 
     /// The Story's active line with the preset frozen in its request. There
@@ -21,13 +26,15 @@ struct TypographyLayer: Sendable {
     static func forStory(lines: [TimedLyricLine],
                          lyricTime: TimeInterval,
                          lyricOffset: TimeInterval,
-                         preset: TypographyPreset) -> TypographyLayer? {
+                         preset: TypographyPreset,
+                         prepared: [Int: TypographyPreparedLine] = [:]) -> TypographyLayer? {
         guard let line = lines.last(where: { $0.start <= lyricTime && lyricTime < $0.end })
         else { return nil }
         return TypographyLayer(
             state: LyricsState(line: line, status: .active),
             preset: preset,
-            lyricOffset: lyricOffset)
+            lyricOffset: lyricOffset,
+            prepared: prepared[line.id])
     }
 
     /// Single resolution entry point for this layer, shared by
@@ -35,6 +42,7 @@ struct TypographyLayer: Sendable {
     func resolve(at lyricTime: TimeInterval,
                  features: AudioFeatures?) -> TypographyFrame {
         TypographyResolver.resolve(state, at: lyricTime,
-                                   features: features, preset: preset)
+                                   features: features, preset: preset,
+                                   prepared: prepared)
     }
 }

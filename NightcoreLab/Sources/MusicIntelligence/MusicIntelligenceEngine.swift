@@ -11,12 +11,14 @@ final class MusicIntelligenceEngine: Sendable {
 
     private let cache: MusicAnalysisCache
     private let scheduler: AnalysisScheduler
+    private let identities: AssetIdentityCache
     private let analyze: Analyzer
     private let extractOnsets: OnsetExtractor
     private let extractRhythm: RhythmExtractor
 
     init(cache: MusicAnalysisCache = MusicAnalysisCache(),
          scheduler: AnalysisScheduler = AnalysisScheduler(),
+         identities: AssetIdentityCache = AssetIdentityCache(),
          analyze: @escaping Analyzer = { try AudioFeatureAnalyzer.analyzeFile(at: $0) },
          extractOnsets: @escaping OnsetExtractor = { timeline in
              timeline.points.filter { $0.features.beatDetected }.map(\.time)
@@ -24,6 +26,7 @@ final class MusicIntelligenceEngine: Sendable {
          extractRhythm: @escaping RhythmExtractor = { try RhythmAnalyzer.analyze(timeline: $0) }) {
         self.cache = cache
         self.scheduler = scheduler
+        self.identities = identities
         self.analyze = analyze
         self.extractOnsets = extractOnsets
         self.extractRhythm = extractRhythm
@@ -34,12 +37,12 @@ final class MusicIntelligenceEngine: Sendable {
         guard url.isFileURL else { throw AudioFeatureAnalysisError.unsupportedAudio }
         let source = AudioAssetDescriptor.canonicalURL(url)
         return try await scheduler.run(key: source.absoluteString, onUpdate: onUpdate) { [self] emit in
-            let asset = try AudioAssetDescriptor.read(at: source)
+            let asset = try await identities.descriptor(for: source)
             let cached = await cache.load(for: asset)
             try Task.checkCancellation()
             if let cached, cached.capabilities[.onsets] == .available,
                cached.capabilities[.rhythm] == .available {
-                try asset.validateSource()
+                try await identities.validate(asset)
                 await emit(cached)
                 return cached
             }
@@ -60,7 +63,7 @@ final class MusicIntelligenceEngine: Sendable {
                 return failed
             }
             try Task.checkCancellation()
-            try asset.validateSource()
+            try await identities.validate(asset)
 
             let existingOnsets = cached?.capabilities[.onsets] == .available
                 ? cached?.onsetEvents : nil
@@ -122,7 +125,7 @@ final class MusicIntelligenceEngine: Sendable {
                 }
             }
             try Task.checkCancellation()
-            try asset.validateSource()
+            try await identities.validate(asset)
             let result = MusicAnalysisResult(asset: asset, energy: .available,
                 onsets: onsetStatus, timeline: timeline, onsetEvents: onsets,
                 rhythm: rhythmStatus, rhythmAnalysis: rhythm)

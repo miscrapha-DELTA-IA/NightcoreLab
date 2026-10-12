@@ -35,9 +35,19 @@ struct StoryVideoRequest: Sendable {
     let reactiveProgram: CreativeVisualProgram?
     /// The same local source file already loaded by the player.
     let reactiveSourceURL: URL?
-    /// Frozen only by StoryRequestBuilder. The original reactiveProgram stays
-    /// available for callers still using the legacy compatibility contract.
-    var visualComposition: VisualComposition? = nil
+    /// Frozen and compiled ONCE by StoryRequestBuilder (Stage 10C): preview
+    /// scrubbing and every exported frame reuse it instead of recompiling.
+    /// The original reactiveProgram stays available for callers still using
+    /// the legacy compatibility contract.
+    var compositionRuntime: CompositionRuntime? = nil
+    /// Per-line stable word seeds and Magazine looks, prepared once.
+    var preparedLyrics: [Int: TypographyPreparedLine] = [:]
+
+    /// Source-compatible view of the frozen composition.
+    var visualComposition: VisualComposition? {
+        get { compositionRuntime?.composition }
+        set { compositionRuntime = newValue.map { CompositionRuntime(composition: $0) } }
+    }
 
     /// Source audio and word timings refer to the original unaccelerated timeline.
     var frameCount: Int { max(1, Int(ceil(duration * Double(Self.fps)))) }
@@ -101,6 +111,9 @@ enum StoryRequestBuilder {
         request.visualComposition = CompositionRuntime.freeze(
             program: reactiveProgram, sourceStart: start,
             speed: Double(speed), duration: seconds)
+        request.preparedLyrics = Dictionary(
+            lines.map { ($0.id, TypographyPreparedLine($0)) },
+            uniquingKeysWith: { first, _ in first })
         return request
     }
 }

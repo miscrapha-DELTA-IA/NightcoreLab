@@ -95,8 +95,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var marbleStartedAt = Date()
     @State private var visualEngine = AudioFeatureEngine()
-    @State private var liveCreativeFrame = CreativeParameterFrame.neutral
-    @State private var frozenCreativeDistortion: Double?
+    /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
+    /// updates no longer re-evaluate this whole screen at 12 Hz.
+    @State private var liveUniforms = CreativeLiveUniforms()
     @AppStorage("creativeReactionMode")
     private var reactionMode: CreativePreset.AudioReaction = .off
     @AppStorage(CreativePresetCatalog.storageKey)
@@ -104,9 +105,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @AppStorage("karaokeTypography")
     private var karaokeTypography: TypographyStyle = .neon
 
-    private var marbleDistortion: Double {
-        frozenCreativeDistortion ?? liveCreativeFrame.marbleDistortion
-    }
     @State private var isBuildingShare = false
     @State private var frozenShareMarblePhase: Float?
     @State private var shareResult: ShareExportPayload?
@@ -127,27 +125,31 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         ZStack {
             Color.black.ignoresSafeArea()
             if showsKaraoke {
-                BackgroundLayer(
-                    style: backgroundStyle,
-                    theme: MarbleTheme(appTheme: appTheme),
-                    coverURL: track.coverURL,
-                    marbleStartedAt: marbleStartedAt,
-                    frozenTime: frozenShareMarblePhase,
-                    reactiveDistortion: marbleDistortion
-                )
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion in
+                    BackgroundLayer(
+                        style: backgroundStyle,
+                        theme: MarbleTheme(appTheme: appTheme),
+                        coverURL: track.coverURL,
+                        marbleStartedAt: marbleStartedAt,
+                        frozenTime: frozenShareMarblePhase,
+                        reactiveDistortion: distortion
+                    )
+                }
                 .transition(.opacity)
             } else {
                 // Keep the Liquid Marble visible when panels are collapsed.
                 // One full-screen shader is enough; it pauses with Reduce Motion
                 // and when the app moves out of the foreground.
-                TurbulentMarbleView(
-                    theme: MarbleTheme(appTheme: appTheme),
-                    speed: 0.6,
-                    maxFPS: 30,
-                    frozenTime: frozenShareMarblePhase,
-                    startedAt: marbleStartedAt,
-                    reactiveDistortion: marbleDistortion
-                )
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion in
+                    TurbulentMarbleView(
+                        theme: MarbleTheme(appTheme: appTheme),
+                        speed: 0.6,
+                        maxFPS: 30,
+                        frozenTime: frozenShareMarblePhase,
+                        startedAt: marbleStartedAt,
+                        reactiveDistortion: distortion
+                    )
+                }
                 .overlay(Color.black.opacity(0.4))
                 .allowsHitTesting(false)
             }
@@ -324,13 +326,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .padding(.vertical, showsKaraoke ? 10 : 11)
         .background {
             if !showsKaraoke {
-                PlayerBackgroundView(style: playerBackgroundStyle,
-                                     imageURL: track.coverURL,
-                                     theme: appTheme,
-                                     frozenTime: frozenShareMarblePhase,
-                                     reactiveDistortion: marbleDistortion)
-                    .id(track.coverURL)
-                    .allowsHitTesting(false)
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion in
+                    PlayerBackgroundView(style: playerBackgroundStyle,
+                                         imageURL: track.coverURL,
+                                         theme: appTheme,
+                                         frozenTime: frozenShareMarblePhase,
+                                         reactiveDistortion: distortion)
+                }
+                .id(track.coverURL)
+                .allowsHitTesting(false)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
@@ -343,16 +347,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 theme: appTheme,
                 backgroundStyle: playerBackgroundStyle,
                 featureEngine: visualEngine,
-                onParameters: { next in
-                    if liveCreativeFrame != next { liveCreativeFrame = next }
-                }
+                onParameters: { next in liveUniforms.update(next) }
             )
         }
     }
 
     /// Freeze only the live visuals while exporting. The audio keeps playing.
     private func beginShare(at instant: Date) {
-        frozenCreativeDistortion = liveCreativeFrame.marbleDistortion
+        liveUniforms.freeze()
         frozenShareMarblePhase = Float(max(0, instant.timeIntervalSince(marbleStartedAt)) *
                                        (showsKaraoke ? 0.8 : 0.6))
         isBuildingShare = true
@@ -361,7 +363,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     private func finishShare() {
         isBuildingShare = false
         frozenShareMarblePhase = nil
-        frozenCreativeDistortion = nil
+        liveUniforms.unfreeze()
     }
 
     /// Congela a fase exibida agora; nunca reinicia o áudio nem cria outro shader animado.

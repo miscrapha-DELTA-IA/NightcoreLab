@@ -18,19 +18,25 @@ enum CompositionAudioSampler {
 
 /// Immutable runtime coordinator; no rendering, UI, audio engine, clock or
 /// frame history. Repeated/out-of-order requests always return the same data.
+///
+/// Stage 10C: the composition is compiled once here (sorted layers, keyframe
+/// tracks, binding index, validation). Keep ONE runtime per frozen composition
+/// (StoryVideoRequest does) instead of constructing one per frame.
 struct CompositionRuntime: Sendable {
     let composition: VisualComposition
+    private let compiled: CompiledComposition
 
     init(composition: VisualComposition) {
         self.composition = composition
+        self.compiled = CompiledComposition(composition)
     }
 
     /// An already frozen feature sample. The caller must supply one measured
     /// at the composition's sourceTime, not the video's elapsed time.
     func frame(at elapsed: TimeInterval,
                features: AudioFeatures?) -> ResolvedCompositionFrame? {
-        CompositionFrameResolver.resolve(composition, elapsed: elapsed,
-                                         features: features)
+        CompositionFrameResolver.resolve(compiled, of: composition,
+                                         elapsed: elapsed, features: features)
     }
 
     /// Frozen AudioFeatures path used by CreativeExperienceResolver and
