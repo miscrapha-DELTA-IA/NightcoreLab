@@ -127,8 +127,8 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                     theme: MarbleTheme(appTheme: appTheme),
                     speed: 0.6,
                     maxFPS: 30,
-                    startedAt: marbleStartedAt,
-                    frozenTime: frozenShareMarblePhase
+                    frozenTime: frozenShareMarblePhase,
+                    startedAt: marbleStartedAt
                 )
                 .overlay(Color.black.opacity(0.4))
                 .allowsHitTesting(false)
@@ -534,8 +534,8 @@ private struct BackgroundLayer: View {
             case .marble:
                 TurbulentMarbleView(theme: theme, speed: 0.8,
                                     maxFPS: lowPower ? 30 : 60,
-                                    startedAt: marbleStartedAt,
-                                    frozenTime: frozenTime)
+                                    frozenTime: frozenTime,
+                                    startedAt: marbleStartedAt)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)
