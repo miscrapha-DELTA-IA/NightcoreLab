@@ -75,8 +75,9 @@ struct StorySceneView: View {
 
     var body: some View {
         ZStack {
-            background
+            background.storyLayer(.background, frame: resolvedCompositionFrame)
             Color.black.opacity(0.40)
+                .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             VStack(spacing: 0) {
                 HStack {
@@ -97,7 +98,7 @@ struct StorySceneView: View {
                     Spacer(minLength: 45)
                 } else {
                     Spacer(minLength: 70)
-                    lyricsCard
+                    lyricsCard.storyLayer(.typography, frame: resolvedCompositionFrame)
                     Spacer(minLength: 70)
                 }
 
@@ -142,6 +143,7 @@ struct StorySceneView: View {
         VStack(spacing: 13) {
             artworkTile
                 .frame(width: 230, height: 230)
+                .storyLayer(.artwork, frame: resolvedCompositionFrame)
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
             VStack(spacing: 3) {
@@ -285,5 +287,25 @@ private struct StoryLyricLine: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
+    }
+}
+
+
+// The view ONLY applies fully resolved values. Identity is a true bypass,
+// retaining the exact legacy SwiftUI hierarchy for pixel-equality tests.
+private extension View {
+    @ViewBuilder
+    func storyLayer(_ kind: PresetLayerKind,
+                    frame: ResolvedCompositionFrame?) -> some View {
+        let values = ResolvedLayerFrame.storyModifiers(kind: kind, frame: frame)
+        if values.isIdentity {
+            self
+        } else {
+            self
+                .opacity(values.opacity)
+                .scaleEffect(values.scale, anchor: .center)
+                .offset(x: values.offsetX, y: values.offsetY)
+                .rotationEffect(.radians(values.rotation))
+        }
     }
 }
