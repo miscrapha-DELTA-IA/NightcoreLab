@@ -75,6 +75,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     let isPlaying: Bool
     let isTrackLoaded: Bool
     let canShowKaraoke: Bool
+    let hasPreviousTrack: Bool
     let canSkipNext: Bool
     @Binding var appTheme: AppTheme
     @Binding var isKaraokeMode: Bool
@@ -281,6 +282,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 track: track,
                 isPlaying: isPlaying,
                 compact: showsKaraoke,
+                hasPreviousTrack: hasPreviousTrack,
                 canSkipNext: canSkipNext,
                 onPlayPause: onPlayPause,
                 onPrevious: onPrevious,
@@ -448,6 +450,7 @@ private struct PlayerHeader: View {
     let track: TrackInfo
     let isPlaying: Bool
     let compact: Bool
+    let hasPreviousTrack: Bool
     let canSkipNext: Bool
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
@@ -470,7 +473,8 @@ private struct PlayerHeader: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: compact ? .leading : .center)
 
-            Transport(isPlaying: isPlaying, compact: compact, canSkipNext: canSkipNext,
+            Transport(isPlaying: isPlaying, compact: compact,
+                      hasPreviousTrack: hasPreviousTrack, canSkipNext: canSkipNext,
                       onPlayPause: onPlayPause, onPrevious: onPrevious, onNext: onNext)
         }
     }
@@ -479,6 +483,7 @@ private struct PlayerHeader: View {
 private struct Transport: View {
     let isPlaying: Bool
     let compact: Bool
+    let hasPreviousTrack: Bool
     let canSkipNext: Bool
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
@@ -486,7 +491,9 @@ private struct Transport: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            skip("backward.fill", label: "Reiniciar faixa", enabled: true, action: onPrevious)
+            skip("backward.fill",
+                 label: hasPreviousTrack ? "Faixa anterior" : "Reiniciar faixa",
+                 enabled: true, action: onPrevious)
 
             Button(action: onPlayPause) {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")

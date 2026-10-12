@@ -124,6 +124,7 @@ struct ContentView: View {
     @StateObject private var downloader = AudioDownloadManager.shared
     @StateObject private var playbackQueue = PlaybackQueue()
     @StateObject private var playbackTransition = PlaybackTransitionCoordinator()
+    @StateObject private var navigationHistory = PlaybackNavigationHistory()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
     @State private var playingTrackID: String?
@@ -192,19 +193,17 @@ struct ContentView: View {
             isPlaying: audio.isPlaying,
             isTrackLoaded: hasTrack,
             canShowKaraoke: currentTrack != nil,
-            canSkipNext: !playbackQueue.upNextQueue.isEmpty,
+            hasPreviousTrack: navigationHistory.previousTrack != nil,
+            canSkipNext: navigationHistory.forwardTrack != nil ||
+                !playbackQueue.upNextQueue.isEmpty,
             appTheme: $currentTheme,
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
             playerBackgroundStyle: bgStyle,
             onPlayPause: { audio.togglePlayback() },
-            onPrevious: { audio.seek(to: 0) },
-            onNext: {
-                if let next = playbackQueue.upNextQueue.first {
-                    playFromQueue(next)
-                }
-            },
+            onPrevious: { goToPreviousTrack() },
+            onNext: { goToNextTrack() },
             header: { header },
             playerDetails: { integratedPlaybackBar },
             normalExtras: { mainScrollContent },
@@ -955,16 +954,40 @@ struct ContentView: View {
         playTrack(track, automaticAdvance: automatic)
     }
 
+    /// Previous always navigates to the most recently played different
+    /// track. With no prior track, fall back to restarting the current one.
+    private func goToPreviousTrack() {
+        guard !audio.isExporting else { return }
+        if let previous = navigationHistory.previousTrack {
+            playTrack(previous, navigation: .backward)
+        } else {
+            audio.seek(to: 0)
+        }
+    }
+
+    /// After going back, Next returns to the forward track before resuming
+    /// the recommendation queue. Neither history action consumes queue items.
+    private func goToNextTrack() {
+        guard !audio.isExporting else { return }
+        if let forward = navigationHistory.forwardTrack {
+            playTrack(forward, navigation: .forward)
+        } else if let next = playbackQueue.upNextQueue.first {
+            playFromQueue(next)
+        }
+    }
+
     /// Playback is deliberately independent from radio discovery and queue
     /// replacement. All queue edits happen after play() really starts.
-    private func playTrack(_ track: Track, automaticAdvance: Bool = false) {
+    private func playTrack(_ track: Track, automaticAdvance: Bool = false,
+                           navigation: PlaybackNavigationHistory.Direction = .regular) {
         guard !audio.isExporting else { return }
         if !automaticAdvance {
             autoplayWhenRadioReady = false
         }
         let pendingSkip = playHistory.pendingSkip(position: audio.playbackTime,
-            duration: audio.duration, automaticAdvance: automaticAdvance)
-        let resumingPrevious = resumeTrack?.id == track.id
+            duration: audio.duration,
+            automaticAdvance: automaticAdvance || navigation != .regular)
+        let resumingPrevious = navigation == .regular && resumeTrack?.id == track.id
         let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
         resumeTrack = nil
         let token = playbackTransition.begin(trackID: track.id)
@@ -985,12 +1008,18 @@ struct ContentView: View {
                     return
                 }
                 guard playbackTransition.didStart(token, trackID: track.id) else { return }
-                // Commit only the selected entry. Search, URLs and queue taps
-                // never clear or reorder the remaining queue.
-                playbackQueue.commitPlaying(track)
+                // History changes only after a successful start, never at
+                // download selection time. Back/forward leave Up Next intact.
+                let priorTrack = currentTrack
+                let committedTrack = downloader.cachedTrack(track)
+                navigationHistory.commitStarted(committedTrack, replacing: priorTrack,
+                                                direction: navigation)
+                if navigation == .regular {
+                    playbackQueue.commitPlaying(track)
+                }
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
-                currentTrack = downloader.cachedTrack(track)
+                currentTrack = committedTrack
                 if let currentTrack {
                     playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
                                               replacing: pendingSkip)
@@ -1146,6 +1175,7 @@ struct ContentView: View {
             resumeTrack = nil
             downloader.clearLastTrack()
             playbackQueue.clear()
+            navigationHistory.clear()
             playbackTransition.reset()
             downloader.cancel()
             resetRelatedVideos()
