@@ -34,7 +34,27 @@ jobs:
             -parallel-testing-enabled NO \
             -resultBundlePath ShareCard.xcresult \
             -only-testing:NightcoreLabTests/ShareSnapshotTests \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-test.log
+
+      - name: Resumo de falhas como anotações
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import re, os
+          path = 'xcodebuild-test.log'
+          lines = open(path, errors='replace').read().splitlines() if os.path.exists(path) else []
+          pattern = re.compile(r"(error:|fatal error|Test Case .* failed|XCTAssert|Testing failed|crashed|unexpected exit|TEST FAILED|TEST EXECUTE FAILED)")
+          hits, seen = [], set()
+          for line in lines:
+              line = line.strip()
+              if pattern.search(line) and line not in seen:
+                  seen.add(line); hits.append(line)
+          if not hits:
+              hits = [l.strip() for l in lines[-40:]]
+          def esc(x): return x.replace('%', '%25').replace('\r', '')[:500]
+          for i in range(0, min(len(hits), 90), 9):
+              print("::error title=xcodebuild::" + "%0A".join(esc(x) for x in hits[i:i+9]))
+          PY
 
       - name: Save visual catalog for review
         if: always()
