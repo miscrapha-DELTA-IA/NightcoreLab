@@ -252,7 +252,8 @@ struct StorySceneView: View {
     }
 }
 
-/// Uses the same parsed word timing and flow layout as the live karaoke.
+/// Uses StoryLyricTypography's existing font but consumes the frozen
+/// per-word animation state, including Magazine's shared tone decisions.
 private struct StoryLyricLine: View {
     let line: TimedLyricLine
     let time: TimeInterval
@@ -265,31 +266,93 @@ private struct StoryLyricLine: View {
             ForEach(line.words) { word in
                 let fraction = resolved?.word(id: word.id)?.progress ??
                     (line.precision == .word ? word.progress(at: time) : 1.0)
-                Text(word.text)
-                    .font(typography.font)
-                    .tracking(typography.tracking)
-                    .foregroundStyle(.white.opacity(0.46))
-                    .overlay(alignment: .leading) {
-                        Text(word.text)
-                            .font(typography.font)
-                            .tracking(typography.tracking)
-                            .foregroundStyle(theme.accent)
-                            .mask(alignment: .leading) {
-                                Rectangle()
-                                    .scaleEffect(x: fraction, y: 1, anchor: .leading)
-                            }
-                            .shadow(color: theme.accent.opacity(0.7), radius: 7)
+                let animation = resolved?.animation(for: word.id)
+                Group {
+                    if resolved?.preset.style == .magazineCutout,
+                       let animation {
+                        magazineWord(word, progress: fraction, animation: animation)
+                    } else {
+                        neonWord(word, progress: fraction)
+                            .storyWordAnimation(animation)
                     }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-                    .gapAfter(word.spaceAfter ? 10 : 0)
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .gapAfter(word.spaceAfter ? 10 : 0)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
     }
+
+    /// Exact legacy text, fill mask and shadow. Neutral state bypasses
+    /// all modifiers to preserve the already shipped pixels.
+    private func neonWord(_ word: WordSync, progress: Double) -> some View {
+        Text(word.text)
+            .font(typography.font)
+            .tracking(typography.tracking)
+            .foregroundStyle(.white.opacity(0.46))
+            .overlay(alignment: .leading) {
+                Text(word.text)
+                    .font(typography.font)
+                    .tracking(typography.tracking)
+                    .foregroundStyle(theme.accent)
+                    .mask(alignment: .leading) {
+                        Rectangle()
+                            .scaleEffect(x: progress, y: 1, anchor: .leading)
+                    }
+                    .shadow(color: theme.accent.opacity(0.7), radius: 7)
+            }
+    }
+
+    /// Reuses MagazineCutoutTone and the already resolved word fill/seed.
+    /// Fonts remain StoryLyricTypography until the separate Stage 10C.
+    private func magazineWord(_ word: WordSync, progress: Double,
+                              animation: TypographyAnimationState) -> some View {
+        let tone = MagazineCutoutTone(rawValue:
+            animation.magazineToneIndex ?? MagazineCutoutTone.black.rawValue) ?? .black
+        return Text(word.text)
+            .font(typography.font)
+            .tracking(typography.tracking)
+            .foregroundStyle(tone.text)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 2)
+            .background(tone.background(accent: theme.accent))
+            .overlay(alignment: .leading) {
+                if animation.magazineFillEnabled && progress > 0 {
+                    Text(word.text)
+                        .font(typography.font)
+                        .tracking(typography.tracking)
+                        .foregroundStyle(theme.accent)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 2)
+                        .mask(alignment: .leading) {
+                            Rectangle()
+                                .scaleEffect(x: progress, y: 1, anchor: .leading)
+                        }
+                }
+            }
+            .storyWordAnimation(animation)
+    }
 }
 
+// SwiftUI applies animation values; the creative/temporal decision lives only
+// in TypographyAnimationEngine. Neutral Neon uses the untouched baseline.
+private extension View {
+    @ViewBuilder
+    func storyWordAnimation(_ animation: TypographyAnimationState?) -> some View {
+        if let animation, !animation.isTransformNeutral {
+            self
+                .opacity(animation.opacity)
+                .scaleEffect(animation.scale, anchor: .center)
+                .rotationEffect(.degrees(animation.rotation))
+                .offset(x: animation.offsetX * 35, y: animation.offsetY * 35)
+                .blur(radius: animation.blur)
+        } else {
+            self
+        }
+    }
+}
 
 // The view ONLY applies fully resolved values. Identity is a true bypass,
 // retaining the exact legacy SwiftUI hierarchy for pixel-equality tests.

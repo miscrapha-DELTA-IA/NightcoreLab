@@ -33,10 +33,14 @@ enum MagazineCutoutTone: Int, CaseIterable {
     case black, white, accent
 
     func background(theme: KaraokeTheme) -> Color {
+        background(accent: theme.fill)
+    }
+
+    func background(accent: Color) -> Color {
         switch self {
         case .black: return .black
         case .white: return .white
-        case .accent: return theme.fill
+        case .accent: return accent
         }
     }
 
