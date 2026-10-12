@@ -34,15 +34,20 @@ struct StoryDraftPreview: View {
 
     /// Explicit preview-side request; export uses the identical runtime from
     /// StorySceneView via the same frozen request and frame grid.
-    private var compositionFrame: ResolvedCompositionFrame? {
-        guard let runtime = draft.request.compositionRuntime else { return nil }
+    static func resolveFrame(request: StoryVideoRequest, frame: StoryRenderFrame,
+                             visualTimeline: AudioFeatureTimeline?) -> ResolvedCompositionFrame? {
+        guard let runtime = request.compositionRuntime else { return nil }
         let typography = TypographyLayer.forStory(
-            lines: draft.request.lines, lyricTime: currentFrame.lyricTime,
-            lyricOffset: draft.request.lyricOffset,
-            preset: draft.request.frozenKaraokeTypography)
-        return runtime.frame(
-            at: currentFrame.elapsed, audioTimeline: visualTimeline,
-            typography: typography)
+            lines: request.lines, lyricTime: frame.lyricTime,
+            lyricOffset: request.lyricOffset,
+            preset: request.frozenKaraokeTypography)
+        return runtime.frame(at: frame.elapsed, audioTimeline: visualTimeline,
+                             typography: typography)
+    }
+
+    private var compositionFrame: ResolvedCompositionFrame? {
+        Self.resolveFrame(request: draft.request, frame: currentFrame,
+                          visualTimeline: visualTimeline)
     }
 
     var body: some View {
