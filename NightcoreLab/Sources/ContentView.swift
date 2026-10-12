@@ -205,6 +205,7 @@ struct ContentView: View {
                     playFromQueue(next)
                 }
             },
+            header: { header },
             playerDetails: { integratedPlaybackBar },
             normalExtras: { mainScrollContent },
             karaokeContent: {
@@ -394,7 +395,6 @@ struct ContentView: View {
     // Pull the long list out of body, keeping the view hierarchy unchanged.
     private var mainScrollContent: some View {
                 VStack(spacing: DS.Spacing.l) {
-                    header.hideablePanel(.header, edge: .top)
                     musicWorkspace
                     resumeSection
                     if downloader.isDownloading {

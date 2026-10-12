@@ -67,7 +67,7 @@ struct TrackInfo: Equatable {
 
 // MARK: - Tela
 
-struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>: View {
+struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsContent: View>: View {
     let track: TrackInfo
     let clock: PlaybackClock
     let audio: AudioEngineManager
@@ -84,6 +84,7 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
+    @ViewBuilder var header: () -> Header
     @ViewBuilder var playerDetails: () -> PlayerDetails
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
@@ -154,22 +155,37 @@ struct NowPlayingScreen<PlayerDetails: View, Extras: View, LyricsContent: View>:
                     }
                 }
 
-                // A single scroll surface places the normal player in the CENTER
-                // of the first viewport, then lets users scroll down to Music/Audio.
-                // SearchView stays mounted in the same scroll hierarchy.
+                // Header always precedes the centered player. The Music, Audio
+                // and Export sections remain below the first viewport in order.
+                // Both header and player still obey the eye visibility controls.
                 GeometryReader { viewport in
                     ScrollView {
                         VStack(spacing: 0) {
                             if isTrackLoaded {
-                                unifiedPlayerCard
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                                    .frame(minHeight: viewport.size.height,
-                                           alignment: .center)
+                                VStack(spacing: 0) {
+                                    header()
+                                        .padding(.horizontal, 20)
+                                        .padding(.top, 74)
+                                        .hideablePanel(.header, edge: .top)
+                                    Spacer(minLength: 12)
+                                    unifiedPlayerCard
+                                        .frame(maxWidth: .infinity, alignment: .center)
+                                        .padding(.horizontal, 20)
+                                        .hideablePanel(.player, edge: .top)
+                                    Spacer(minLength: 12)
+                                }
+                                .frame(minHeight: viewport.size.height)
+                            } else {
+                                // Keep the import shortcut close to discovery
+                                // when no track is loaded, without a blank hero.
+                                header()
                                     .padding(.horizontal, 20)
-                                    .hideablePanel(.player, edge: .top)
+                                    .padding(.top, 74)
+                                    .padding(.bottom, 12)
+                                    .hideablePanel(.header, edge: .top)
                             }
                             normalExtras()
-                                .padding(.top, isTrackLoaded ? 0 : 74)
+                                .padding(.top, isTrackLoaded ? 0 : 8)
                         }
                         .frame(maxWidth: .infinity)
                     }
