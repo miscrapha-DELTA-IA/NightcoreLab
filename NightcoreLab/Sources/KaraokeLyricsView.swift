@@ -173,13 +173,34 @@ struct KaraokeLyricsView: View {
     @AppStorage("story.lyricTypography") private var typography: TypographyFont = .classic
     @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
+    @AppStorage(CreativePresetCatalog.storageKey)
+    private var creativePresetID = CreativePresetCatalog.defaultID
+    @AppStorage("creativeReactionMode")
+    private var reactionMode: CreativePreset.AudioReaction = .off
+    /// Present inside NowPlayingScreen; elsewhere the karaoke gets no features.
+    @Environment(CreativeLiveUniforms.self) private var liveUniforms: CreativeLiveUniforms?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var followsPlayback = true
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
 
+    /// Same catalog helpers the StoryRequestBuilder freezes (Stage 12.5).
+    private var typographyPreset: TypographyPreset {
+        CreativePresetCatalog.typographyPreset(
+            selection: creativePresetID, style: typographyStyle,
+            font: typography, reacts: reactionMode != .off)
+    }
+
+    private var typographyMapping: CreativeAudioMapping {
+        CreativePresetCatalog.typographyAudioMapping(
+            selection: creativePresetID, style: typographyStyle,
+            reacts: reactionMode != .off)
+    }
+
     var body: some View {
+        let preset = typographyPreset
+        let mapping = typographyMapping
         GeometryReader { viewport in
             let inset = KaraokeLayoutMetrics.horizontalInset(for: viewport.size.width)
             let wordLimit = KaraokeLayoutMetrics.textWidth(for: viewport.size.width)
@@ -208,8 +229,9 @@ struct KaraokeLyricsView: View {
                                 accent: accent,
                                 maxWordWidth: wordLimit,
                                 fontSize: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
-                                typographyStyle: typographyStyle,
-                                typographyFont: typography
+                                typographyPreset: preset,
+                                typographyMapping: mapping,
+                                liveUniforms: liveUniforms
                             )
                             .frame(maxWidth: .infinity)
                             .opacity(emphasis.opacity)
@@ -323,13 +345,13 @@ private struct KaraokeLineView: View {
     let accent: Color?
     let maxWordWidth: CGFloat
     let fontSize: CGFloat
-    let typographyStyle: TypographyStyle
-    let typographyFont: TypographyFont
+    /// Same preset and envelope the Story freezes, so app and MP4 resolve
+    /// identical frames for the same source time and features.
+    let typographyPreset: TypographyPreset
+    let typographyMapping: CreativeAudioMapping
+    let liveUniforms: CreativeLiveUniforms?
     private let preparedTypography: TypographyPreparedLine
-    /// Same helper the Story freezes, so app and MP4 resolve identical frames.
-    private var typographyPreset: TypographyPreset {
-        TypographyPreset.current(style: typographyStyle, font: typographyFont)
-    }
+    private var typographyStyle: TypographyStyle { typographyPreset.style }
 
     private var lyricState: LyricsState {
         let phase: TypographyLineStatus
@@ -344,7 +366,8 @@ private struct KaraokeLineView: View {
     init(line: TimedLyricLine, status: Status, isPlaying: Bool,
          offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
          accent: Color?, maxWordWidth: CGFloat, fontSize: CGFloat,
-         typographyStyle: TypographyStyle, typographyFont: TypographyFont) {
+         typographyPreset: TypographyPreset, typographyMapping: CreativeAudioMapping,
+         liveUniforms: CreativeLiveUniforms?) {
         self.line = line
         self.status = status
         self.isPlaying = isPlaying
@@ -354,9 +377,19 @@ private struct KaraokeLineView: View {
         self.accent = accent
         self.maxWordWidth = maxWordWidth
         self.fontSize = fontSize
-        self.typographyStyle = typographyStyle
-        self.typographyFont = typographyFont
+        self.typographyPreset = typographyPreset
+        self.typographyMapping = typographyMapping
+        self.liveUniforms = liveUniforms
         preparedTypography = TypographyPreparedLine(line)
+    }
+
+    /// The Story's single entry point (TypographyLayer.resolve), with this
+    /// line's status. Features are sampled at the SOURCE time, as in a Story.
+    private func resolve(sourceTime: TimeInterval, features: AudioFeatures?) -> TypographyFrame {
+        TypographyLayer(state: lyricState, preset: typographyPreset,
+                        lyricOffset: offset, prepared: preparedTypography,
+                        experienceMapping: typographyMapping)
+            .resolve(at: sourceTime + offset, features: features)
     }
 
     var body: some View {
@@ -364,15 +397,12 @@ private struct KaraokeLineView: View {
             Color.clear.frame(height: 14)                   // pausa instrumental
         } else if status == .active && line.precision == .word {
             TimelineView(.animation(paused: !isPlaying)) { _ in
-                let t = clock.lyricTime + offset            // lido direto do engine, a cada frame
-                layout(frame: TypographyResolver.resolve(
-                    lyricState, at: t, features: nil, preset: typographyPreset,
-                    prepared: preparedTypography))
+                let source = clock.lyricTime                // lido direto do engine, a cada frame
+                layout(frame: resolve(sourceTime: source,
+                                      features: liveUniforms?.typographyFeatures(at: source)))
             }
         } else {
-            layout(frame: TypographyResolver.resolve(
-                lyricState, at: 0, features: nil, preset: typographyPreset,
-                prepared: preparedTypography))
+            layout(frame: resolve(sourceTime: -offset, features: nil))
             .scaleEffect(status == .upcoming ? 0.96 : 1.0)
             .animation(.smooth(duration: 0.3), value: status)
         }

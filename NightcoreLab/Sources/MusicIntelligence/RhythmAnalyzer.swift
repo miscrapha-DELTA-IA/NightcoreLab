@@ -2,7 +2,8 @@ import Accelerate
 import AVFoundation
 import Foundation
 
-/// Rhythm Intelligence v2 (Stage 11). Deterministic, offline, no dependency.
+/// Rhythm Intelligence v3 (Stage 12.5; v2 = Stage 11). Deterministic,
+/// offline, no dependency.
 ///
 /// v1 derived tempo from intervals between onsets quantized to the 83 ms
 /// visual envelope; any tempo that was not a multiple of that hop came out
@@ -18,10 +19,21 @@ import Foundation
 ///    sub-frame interpolation of the chosen peak.
 /// 3. Beats: dynamic-programming tracking (Ellis 2007) with log-interval
 ///    penalty, then sub-frame refinement on the onset curve.
+/// 3b. Metrical checks (v3, from genre fixtures — see
+///    docs/RHYTHM_REAL_WORLD_VALIDATION_STAGE12_5.md):
+///    - octave: a > 160 BPM pick moves to half tempo when the double lag keeps
+///      ≥ 50 % of the periodicity; a < 80 BPM pick moves to double when the
+///      half lag does (drum patterns repeat every 2 beats);
+///    - doubling: half-beats as strong as beats (both bands, or either band
+///      below 80 BPM) mean the tracked level is half the tempo;
+///    - phase: when the low band (kick) sits clearly on the half-beat, loud
+///      off-beat hats pulled the beats off phase; shift by half a period.
 /// 4. Downbeat (4/4 assumption): the bar phase with the most low-band
 ///    (< 150 Hz) energy at its beats; confidence = its margin over the next.
 /// 5. Confidence: periodicity (ACF at the tempo), beat/off-beat contrast and
-///    inter-beat stability. Below 0.25 no beats are published.
+///    inter-beat stability. Without beat/off-beat contrast (v3) confidence is
+///    scaled down to 40 %: periodic textures without drums are not a pulse.
+///    Below 0.25 no beats are published.
 enum RhythmAnalyzer {
     static let maxAnalysisSeconds = AudioFeatureAnalyzer.maxAnalysisSeconds
 
@@ -93,6 +105,8 @@ enum RhythmAnalyzer {
         let flux: [Double]
         /// Linear low-band (< 150 Hz) energy per frame, for downbeats.
         let lowEnergy: [Double]
+        /// Low-band (< 150 Hz) part of the flux: kick onsets, for phase checks.
+        let lowFlux: [Double]
         /// Seconds between frames.
         let hop: Double
         /// Frame t is reported at (t·H + H) / sampleRate: the centre of the newer
@@ -121,6 +135,7 @@ enum RhythmAnalyzer {
         private var written = 0
         private var flux: [Double] = []
         private var lowEnergy: [Double] = []
+        private var lowFlux: [Double] = []
         private var frameScratch: [Float]
         private var logScratch: [Float]
 
@@ -164,6 +179,7 @@ enum RhythmAnalyzer {
         private mutating func emitFrame(channels: Int) {
             var frameFlux = 0.0
             var frameLow = 0.0
+            var frameLowFlux = 0.0
             let scale = Float(2) / Float(size)
             let bins = size / 2 - 1
             for channel in 0..<channels {
@@ -182,11 +198,16 @@ enum RhythmAnalyzer {
                 }
                 if hasPrevious[channel] {
                     var sum = 0.0
+                    var low = 0.0
                     for k in 0..<bins {
                         let rise = logScratch[k] - previous[channel][k]
-                        if rise > 0 { sum += Double(rise) }
+                        if rise > 0 {
+                            sum += Double(rise)
+                            if k < lowBins { low += Double(rise) }
+                        }
                     }
                     frameFlux += sum
+                    frameLowFlux += low
                 }
                 // Element copy: keeps both buffers uniquely owned (no per-frame
                 // copy-on-write allocation).
@@ -195,10 +216,11 @@ enum RhythmAnalyzer {
             }
             flux.append(frameFlux)
             lowEnergy.append(frameLow)
+            lowFlux.append(frameLowFlux)
         }
 
         func finish(duration: TimeInterval) -> OnsetEnvelope {
-            OnsetEnvelope(flux: flux, lowEnergy: lowEnergy,
+            OnsetEnvelope(flux: flux, lowEnergy: lowEnergy, lowFlux: lowFlux,
                           hop: Double(hop) / sampleRate,
                           frameOffset: Double(hop) / sampleRate,
                           duration: duration)
@@ -257,11 +279,45 @@ enum RhythmAnalyzer {
             if bestLag < 0 || score > bestScore { bestLag = lag; bestScore = score }
         }
         guard bestLag > 0 else { return empty }
+        // Same rounding as the prototype (ties to even) for half lags.
+        func nearestLag(_ lag: Double) -> Int { Int(lag.rounded(.toNearestOrEven)) }
+        func acfNear(_ lag: Double) -> Double {
+            let center = nearestLag(lag)
+            guard center >= 1, center + 1 < normalized.count else { return -1 }
+            return max(normalized[center - 1], normalized[center], normalized[center + 1])
+        }
+        func bestNear(_ lag: Double) -> Int {
+            let center = nearestLag(lag)
+            var best = -1
+            for k in (center - 1)...(center + 1) where k >= 1 && k < normalized.count - 1 {
+                if best < 0 || normalized[k] > normalized[best] { best = k }
+            }
+            return best
+        }
+        // Octave correction toward 80…160 BPM when the other octave keeps at
+        // least half of the periodicity (v3; v2 picked 64 for EDM at 128).
+        for _ in 0..<2 {
+            let lagBPM = 60 / (Double(bestLag) * hop)
+            let halfLag = Double(bestLag) / 2
+            if lagBPM < 80, halfLag >= Double(max(lagMin, 1)),
+               acfNear(halfLag) >= 0.5 * normalized[bestLag] {
+                let moved = bestNear(halfLag)
+                guard moved > 0 else { break }
+                bestLag = moved
+            } else if lagBPM > 160, 2 * bestLag <= lagMax,
+                      acfNear(Double(2 * bestLag)) >= 0.5 * normalized[bestLag] {
+                let moved = bestNear(Double(2 * bestLag))
+                guard moved > 0 else { break }
+                bestLag = moved
+            } else {
+                break
+            }
+        }
         let (a, b, c) = (normalized[bestLag - 1], normalized[bestLag], normalized[bestLag + 1])
         let curvature = a - 2 * b + c
         let shift = abs(curvature) > 1e-12 ? min(0.5, max(-0.5, 0.5 * (a - c) / curvature)) : 0
-        let period = Double(bestLag) + shift
-        let bpm = 60 / (period * hop)
+        var period = Double(bestLag) + shift
+        var bpm = 60 / (period * hop)
         try Task.checkCancellation()
 
         // 3. Dynamic-programming beat tracking.
@@ -298,6 +354,58 @@ enum RhythmAnalyzer {
         while let last = beatFrames.last, backlink[last] >= 0 { beatFrames.append(backlink[last]) }
         beatFrames.reverse()
 
+        // 3b. Metrical checks on the tracked beats (v3).
+        func peak(_ curve: [Double], around frame: Int) -> Double {
+            curve[max(0, frame - 1)...min(frames - 1, frame + 1)].max() ?? 0
+        }
+        /// Beat/half-beat ratios in the full band and in the low band, and the
+        /// low-band half-beat/beat ratio.
+        func contrasts(_ tracked: [Int], period: Double)
+            -> (broad: Double, low: Double, lowOffRatio: Double) {
+            let half = nearestLag(period / 2)
+            var broadOn = 0.0, broadOff = 0.0, lowOn = 0.0, lowOff = 0.0, count = 0
+            for frame in tracked where frame + half + 1 < frames {
+                broadOn += peak(ose, around: frame)
+                broadOff += peak(ose, around: frame + half)
+                lowOn += peak(envelope.lowFlux, around: frame)
+                lowOff += peak(envelope.lowFlux, around: frame + half)
+                count += 1
+            }
+            guard count > 0 else { return (1, 1, 1) }
+            let n = Double(count)
+            let (bOn, bOff) = (broadOn / n, broadOff / n)
+            let (lOn, lOff) = (lowOn / n, lowOff / n)
+            return ((bOn + 1e-9) / (bOff + 1e-9), (lOn + 1e-9) / (lOff + 1e-9),
+                    (lOff + 1e-9) / (lOn + 1e-9))
+        }
+        var metrics = contrasts(beatFrames, period: period)
+        // Half-beats as strong as beats: the tracked level is half the tempo.
+        let flat = max(metrics.broad, metrics.low) < 1.4
+            || (bpm < 80 && min(metrics.broad, metrics.low) < 1.4)
+        if flat, 60 / (period / 2 * hop) <= 210,
+           acfNear(period / 2) >= 0.25 * normalized[bestLag], beatFrames.count >= 2 {
+            var doubled: [Int] = []
+            for (index, frame) in beatFrames.enumerated() {
+                doubled.append(frame)
+                if index + 1 < beatFrames.count {
+                    let middle = Int((Double(frame + beatFrames[index + 1]) / 2)
+                        .rounded(.toNearestOrEven))
+                    if middle > frame, middle < beatFrames[index + 1] { doubled.append(middle) }
+                }
+            }
+            beatFrames = doubled
+            period /= 2
+            bpm = 60 / (period * hop)
+            metrics = contrasts(beatFrames, period: period)
+        }
+        // Loud off-beat hats can out-flux the kick: when the low band sits
+        // clearly on the half-beat, the beats are on the wrong phase.
+        if metrics.lowOffRatio > 2 {
+            let half = nearestLag(period / 2)
+            beatFrames = beatFrames.map { $0 + half }.filter { $0 < frames }
+            metrics = contrasts(beatFrames, period: period)
+        }
+
         var beats: [(frame: Int, time: TimeInterval)] = []
         for frame in beatFrames {
             var offset = 0.0
@@ -316,19 +424,9 @@ enum RhythmAnalyzer {
         }
 
         // 5. Confidence: periodicity, beat/off-beat contrast, stability.
-        let half = Int((period / 2).rounded())
-        var onBeat: [Double] = []
-        var offBeat: [Double] = []
-        func peak(around frame: Int) -> Double {
-            ose[max(0, frame - 1)...min(frames - 1, frame + 1)].max() ?? 0
-        }
-        for beat in beats {
-            onBeat.append(peak(around: beat.frame))
-            let probe = beat.frame + half
-            if probe + 1 < frames { offBeat.append(peak(around: probe)) }
-        }
-        let salience = offBeat.isEmpty || onBeat.isEmpty ? 1 :
-            (average(onBeat) + 1e-9) / (average(offBeat) + 1e-9)
+        let onBeat = beats.map { peak(ose, around: $0.frame) }
+        // Either band may carry the contrast (kick-only accents live in the low band).
+        let salience = max(metrics.broad, metrics.low)
         let intervals = zip(beats.dropFirst(), beats).map { $0.time - $1.time }
         let spread: Double
         if intervals.count > 1 {
@@ -341,6 +439,9 @@ enum RhythmAnalyzer {
         let stability = clamp(1 - spread * 4)
         var confidence = clamp(0.6 * periodicity + 0.25 * contrast + 0.15 * stability)
         if periodicity < 0.3 { confidence *= periodicity / 0.3 }
+        // Beats must stand out from the half-beat between them (songs without
+        // drums showed contrast 0 with periodicity up to 0.73).
+        confidence *= min(1, 0.4 + 4 * contrast)
         if beats.count < 4 { confidence = 0 }
         let reliable = RhythmAnalysisResult.quality(for: Float(confidence)) != .insufficient
 

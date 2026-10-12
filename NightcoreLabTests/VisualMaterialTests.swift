@@ -169,4 +169,65 @@ final class VisualMaterialTests: XCTestCase {
         uniforms.setPulseDriver(nil)
         XCTAssertNil(uniforms.livePulseDriver)
     }
+
+    // MARK: Stage 12.5 — Marble tuning lives in the material
+
+    func testTuningDefaultsAreTheStage12Look() {
+        let legacy = VisualMaterial.legacyMarble
+        // The former shader constants (0.18 warp, 0.10 glow) and accent.
+        XCTAssertEqual(legacy.warpAmount, 0.18)
+        XCTAssertEqual(legacy.brightnessBoost, 0.10)
+        XCTAssertEqual(legacy.offbeatScale, 0.7)
+        XCTAssertEqual(legacy.pulseDecay, 6)
+        XCTAssertEqual(legacy.downbeatBoost, 0.3, accuracy: 1e-12)
+        // Program-derived materials keep the defaults.
+        let responsive = VisualMaterial.marble(for: program(.responsive))
+        XCTAssertEqual(responsive.beatPulseIntensity, responsive.beatPulse)
+        XCTAssertEqual(responsive.warpAmount, VisualMaterial.defaultWarpAmount)
+        XCTAssertEqual(responsive.brightnessBoost, VisualMaterial.defaultBrightnessBoost)
+        XCTAssertEqual(responsive.offbeatScale, VisualMaterial.defaultOffbeatScale)
+        // The tuning initializer with omitted values is bit-identical.
+        XCTAssertEqual(VisualMaterial(beatPulseIntensity: 0.64), VisualMaterial(beatPulse: 0.64))
+    }
+
+    func testTuningParametersAreBoundedAndReachTheUniforms() throws {
+        let tuned = VisualMaterial(beatPulseIntensity: 1, pulseDecay: 6, downbeatBoost: 0.5,
+                                   warpAmount: 0.3, brightnessBoost: 0.2)
+        XCTAssertEqual(tuned.offbeatScale, 0.5, accuracy: 1e-12)
+        let source = rhythm()
+        XCTAssertEqual(MaterialResolver.beatPulse(tuned, rhythm: RhythmFrame.at(1.5, in: source)),
+                       0.5, accuracy: 1e-12, "downbeatBoost lowers the other beats")
+        XCTAssertEqual(MaterialResolver.beatPulse(tuned, rhythm: RhythmFrame.at(1.0, in: source)),
+                       1, accuracy: 1e-12)
+        let parameters = CreativeParameterFrame(playerGlow: 0, marbleDistortion: 0.2,
+                                                lyricKinetics: 0, particleEmission: 0)
+        let uniforms = MaterialResolver.marble(tuned, parameters: parameters,
+                                               rhythm: RhythmFrame.at(1.0, in: source))
+        XCTAssertEqual(uniforms.warpAmount, 0.3)
+        XCTAssertEqual(uniforms.brightnessBoost, 0.2)
+
+        let wild = VisualMaterial(beatPulseIntensity: 1, downbeatBoost: 9,
+                                  warpAmount: -1, brightnessBoost: .infinity)
+        XCTAssertEqual(wild.offbeatScale, 0)
+        XCTAssertEqual(wild.warpAmount, 0)
+        XCTAssertEqual(wild.brightnessBoost, VisualMaterial.defaultBrightnessBoost)
+        XCTAssertEqual(VisualMaterial(beatPulse: 1, warpAmount: 2).warpAmount, 0.5)
+
+        XCTAssertEqual(try JSONDecoder().decode(
+            VisualMaterial.self, from: JSONEncoder().encode(tuned)), tuned)
+        // Stage 12 payloads (no tuning keys) decode to the Stage 12 look.
+        let old = Data(#"{"kind":"marble","beatPulse":0.5,"pulseDecay":6,"offbeatScale":0.7}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(VisualMaterial.self, from: old),
+                       VisualMaterial(beatPulse: 0.5))
+    }
+
+    func testStorySceneCarriesTheMaterialTuning() throws {
+        let request = try story(reactive: true)
+        let frame = StoryRenderTimeline(request: request, profile: .balanced).frame(index: 4)
+        let scene = StorySceneView(request: request, artwork: nil, frame: frame,
+                                   visualRhythm: rhythm())
+        XCTAssertEqual(scene.marbleMaterial, VisualMaterial.marble(for: request.reactiveProgram))
+        let legacy = StorySceneView(request: try story(reactive: false), artwork: nil, frame: frame)
+        XCTAssertEqual(legacy.marbleMaterial, .legacyMarble)
+    }
 }

@@ -10,6 +10,8 @@ struct StorySceneView: View {
     /// Stage 12: Marble beat pulse resolved from this frame's SOURCE time, so
     /// the scrub preview and every MP4 frame agree, at any frame rate.
     let beatPulse: Double
+    /// The material behind `beatPulse` (its warp/glow tuning reaches the shader).
+    let marbleMaterial: VisualMaterial
     /// Resolved ONCE per scene (Stage 10C). Previously these were computed
     /// properties evaluated several times per body (background + lyrics), each
     /// recompiling the composition. The preview may supply the composition
@@ -17,8 +19,9 @@ struct StorySceneView: View {
     let resolvedCompositionFrame: ResolvedCompositionFrame?
     /// The active line's typography, with or without a reactive composition.
     /// Both branches run TypographyLayer.resolve with the request's frozen
-    /// preset and audio reaction off, so they yield the same frame; the
-    /// composition result is preferred so layer wiring has one source.
+    /// preset; the composition result (features sampled at the frame's source
+    /// time) is preferred so layer wiring has one source. Without a runtime
+    /// (legacy direct requests) the preset carries no audio reaction.
     let typographyFrame: TypographyFrame?
 
     /// Backwards-compatible initializer for existing StorySceneView users.
@@ -38,15 +41,13 @@ struct StorySceneView: View {
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
+        let material = VisualMaterial.marble(for: request.reactiveProgram)
+        self.marbleMaterial = material
         self.beatPulse = MaterialResolver.beatPulse(
-            VisualMaterial.marble(for: request.reactiveProgram),
+            material,
             rhythm: visualRhythm.flatMap { RhythmFrame.at(frame.sourceTime, in: $0) })
         // One deterministic query for both the scrub preview and the MP4 encoder.
-        let layer = TypographyLayer.forStory(
-            lines: request.lines, lyricTime: frame.lyricTime,
-            lyricOffset: request.lyricOffset,
-            preset: request.typographyPreset,
-            prepared: request.preparedLyrics)
+        let layer = request.typographyLayer(atLyricTime: frame.lyricTime)
         let composed = Self.composition(
             request: request, frame: frame, visualTimeline: visualTimeline,
             supplied: resolvedCompositionFrame, typography: layer)
@@ -161,7 +162,8 @@ struct StorySceneView: View {
                                 speed: 0, maxFPS: 1, isPaused: true,
                                 extendIntoSafeArea: false, frozenTime: phase,
                                 reactiveDistortion: reactiveDistortion,
-                                beatPulse: beatPulse)
+                                beatPulse: beatPulse,
+                                material: marbleMaterial)
                 .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
         }
     }

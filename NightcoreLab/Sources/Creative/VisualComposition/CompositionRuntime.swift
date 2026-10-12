@@ -85,14 +85,17 @@ struct CompositionRuntime: Sendable {
 
     /// Freeze a program once at StoryRequestBuilder time so preview and export
     /// receive exactly the same composition, clock and existing visual rules.
+    /// `deterministicSeed` carries a selected experience's composition seed.
     static func freeze(program: CreativeVisualProgram?,
                        sourceStart: TimeInterval, speed: Double,
-                       duration: TimeInterval) -> VisualComposition? {
+                       duration: TimeInterval,
+                       deterministicSeed: UInt64 = 0) -> VisualComposition? {
         guard let program,
               let timeline = try? CompositionTimeline(
                 sourceStart: sourceStart, playbackSpeed: speed, duration: duration) else {
             return nil
         }
-        return try? CreativeSnapshotAdapter.wrap(program, timeline: timeline)
+        return try? CreativeSnapshotAdapter.wrap(program, timeline: timeline,
+                                                 deterministicSeed: deterministicSeed)
     }
 }
