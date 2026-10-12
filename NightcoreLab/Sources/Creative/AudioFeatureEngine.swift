@@ -10,7 +10,18 @@ actor AudioFeatureEngine {
     private var throttle = VisualResponseThrottle()
     private var generation = 0
     private var lastVisualSampleTime: TimeInterval?
-    private var analysisTask: Task<AudioFeatureTimeline, Error>?
+    private var analysisTask: Task<AudioFeatureTimeline?, Error>?
+    private let intelligence: MusicIntelligenceEngine
+
+    init(intelligence: MusicIntelligenceEngine = .shared) {
+        self.intelligence = intelligence
+    }
+
+    /// Independent consumer for exports: does not replace this bridge's live state.
+    /// Every request verifies source identity before reusing persistent analysis.
+    nonisolated func analysisTimeline(for url: URL) async throws -> AudioFeatureTimeline? {
+        try await intelligence.analysis(for: url).energyTimeline
+    }
 
     /// Existing frame-input contract from Creative Engine Block 1.
     func snapshot() -> AudioFeatures { current }
@@ -39,14 +50,8 @@ actor AudioFeatureEngine {
     /// Analyzes a LOCAL copy of the same audio source the player loads,
     /// without creating/reconfiguring an AVAudioEngine or changing sound.
     /// Expensive file decoding and envelope processing run at utility QoS.
-    /// Caller cancellation and track replacement cancel stale computations.
+    /// Caller cancellation and track replacement detach only this consumer.
     func prepareAudio(at url: URL) async throws {
-        // Return to a previously analyzed file without redecoding.
-        if preparedURL == url && timeline != nil {
-            throttle.reset()
-            lastVisualSampleTime = nil
-            return
-        }
         analysisTask?.cancel()
         generation &+= 1
         let request = generation
@@ -58,8 +63,8 @@ actor AudioFeatureEngine {
 
         // No automatic analysis during system Low Power Mode.
         guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
-        let work = Task.detached(priority: .utility) {
-            try AudioFeatureAnalyzer.analyzeFile(at: url)
+        let work = Task { [intelligence] in
+            try await intelligence.analysis(for: url).energyTimeline
         }
         analysisTask = work
         defer {
@@ -77,7 +82,8 @@ actor AudioFeatureEngine {
         analysisTask = nil
     }
 
-    /// Export can reuse cached, immutable feature samples for this exact URL.
+    /// Snapshot from the most recent successful preparation, for the live reader.
+    /// A new session/export must use analysisTimeline to revalidate file contents.
     func cachedTimeline(for url: URL) -> AudioFeatureTimeline? {
         preparedURL == url ? timeline : nil
     }

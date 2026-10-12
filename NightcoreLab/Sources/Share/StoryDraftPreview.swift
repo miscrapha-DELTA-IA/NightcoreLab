@@ -115,27 +115,9 @@ struct StoryDraftPreview: View {
                     visualIsReady = true
                     return
                 }
-                // Reuse the live cached envelope if available; otherwise
-                // decode on utility QoS. Failure produces the same neutral
-                // appearance in the preview and MP4.
-                if let cached = await draft.featureEngine.cachedTimeline(for: url) {
-                    visualTimeline = cached
-                    visualIsReady = true
-                    return
-                }
-                let worker = Task.detached(priority: .utility) {
-                    try AudioFeatureAnalyzer.analyzeFile(at: url)
-                }
-                let result: AudioFeatureTimeline?
-                do {
-                    result = try await withTaskCancellationHandler {
-                        try await worker.value
-                    } onCancel: {
-                        worker.cancel()
-                    }
-                } catch {
-                    result = nil
-                }
+                // A separate subscription shares identity/FFT/cache work with the
+                // live reader, while cancellation affects only this preview.
+                let result = try? await draft.featureEngine.analysisTimeline(for: url)
                 guard !Task.isCancelled else { return }
                 visualTimeline = result
                 visualIsReady = true

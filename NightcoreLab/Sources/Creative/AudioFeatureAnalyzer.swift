@@ -3,12 +3,12 @@ import AVFoundation
 
 /// A cheap, source-time-indexed envelope. No AVAudioEngine, taps, live
 /// callback allocations, timers or SwiftUI publications are involved.
-struct AudioFeaturePoint: Equatable, Sendable {
+struct AudioFeaturePoint: Codable, Equatable, Sendable {
     let time: TimeInterval
     let features: AudioFeatures
 }
 
-struct AudioFeatureTimeline: Sendable {
+struct AudioFeatureTimeline: Codable, Equatable, Sendable {
     let points: [AudioFeaturePoint]
     let duration: TimeInterval
 
