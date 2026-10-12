@@ -204,11 +204,12 @@ final class CreativeIntegrationTests: XCTestCase {
     // MARK: Helpers
 
     private func rhythm() -> RhythmAnalysisResult {
-        let grid = (0..<40).map { index in
-            RhythmAnalysisResult.BeatEvent(time: 0.5 + 0.48 * Double(index), index: index,
-                                           strength: 1, isDownbeat: index % 4 == 0)
+        let grid: [RhythmAnalysisResult.BeatEvent] = (0..<40).map { (index: Int) in
+            let time: Double = 0.5 + 0.48 * Double(index)
+            return RhythmAnalysisResult.BeatEvent(time: time, index: index,
+                                                  strength: 1, isDownbeat: index % 4 == 0)
         }
-        return RhythmAnalysisResult(onsetEvents: grid.map(\.time),
+        return RhythmAnalysisResult(onsetEvents: grid.map { $0.time },
                                     bpmCandidates: [.init(bpm: 125, confidence: 0.9)],
                                     beatGrid: grid, confidence: 0.9,
                                     downbeatConfidence: 0.8)

@@ -7,11 +7,12 @@ final class VisualMaterialTests: XCTestCase {
     /// 120 BPM from 1.0 s, downbeats on indices 0, 4, ...
     private func rhythm(confidence: Float = 0.9,
                         downbeatConfidence: Float = 0.7) -> RhythmAnalysisResult {
-        let grid = (0..<16).map { index in
-            RhythmAnalysisResult.BeatEvent(time: 1 + 0.5 * Double(index), index: index,
-                                           strength: 1, isDownbeat: index % 4 == 0)
+        let grid: [RhythmAnalysisResult.BeatEvent] = (0..<16).map { (index: Int) in
+            let time: Double = 1 + 0.5 * Double(index)
+            return RhythmAnalysisResult.BeatEvent(time: time, index: index,
+                                                  strength: 1, isDownbeat: index % 4 == 0)
         }
-        return RhythmAnalysisResult(onsetEvents: grid.map(\.time),
+        return RhythmAnalysisResult(onsetEvents: grid.map { $0.time },
                                     bpmCandidates: [.init(bpm: 120, confidence: confidence)],
                                     beatGrid: grid, confidence: confidence,
                                     downbeatConfidence: downbeatConfidence)
