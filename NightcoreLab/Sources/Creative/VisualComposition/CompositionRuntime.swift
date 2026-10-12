@@ -24,19 +24,35 @@ enum CompositionAudioSampler {
 /// (StoryVideoRequest does) instead of constructing one per frame.
 struct CompositionRuntime: Sendable {
     let composition: VisualComposition
+    let material: VisualMaterial
+    private let hasAuthoredMaterial: Bool
     private let compiled: CompiledComposition
 
-    init(composition: VisualComposition) {
+    init(composition: VisualComposition, material: VisualMaterial? = nil) {
         self.composition = composition
+        self.material = material ?? .marble(for: composition.program)
+        self.hasAuthoredMaterial = material != nil
         self.compiled = CompiledComposition(composition)
     }
 
     /// An already frozen feature sample. The caller must supply one measured
     /// at the composition's sourceTime, not the video's elapsed time.
     func frame(at elapsed: TimeInterval,
-               features: AudioFeatures?) -> ResolvedCompositionFrame? {
-        CompositionFrameResolver.resolve(compiled, of: composition,
-                                         elapsed: elapsed, features: features)
+               features: AudioFeatures?,
+               rhythm: RhythmFrame? = nil) -> ResolvedCompositionFrame? {
+        guard let base = CompositionFrameResolver.resolve(compiled, of: composition,
+                                                          elapsed: elapsed, features: features) else {
+            return nil
+        }
+        // Legacy materials already embed reaction gain in beatPulse. Authored
+        // materials receive the same off/subtle gate as the existing program.
+        let reaction = composition.program.preset.audioReaction
+        let gain: Double = reaction == .off ? 0 :
+            (hasAuthoredMaterial && reaction == .subtle ? 0.35 : 1)
+        return base.withMaterial(MaterialResolver.resolve(
+            material, features: features, rhythm: rhythm,
+            timestamp: base.timestamp.sourceTime,
+            parameters: base.programParameters, reactionGain: gain))
     }
 
     /// Frozen AudioFeatures path used by CreativeExperienceResolver and
@@ -44,8 +60,9 @@ struct CompositionRuntime: Sendable {
     /// The original frame(at:features:) remains backward-compatible.
     func frame(at elapsed: TimeInterval,
                features: AudioFeatures?,
-               typography: TypographyLayer?) -> ResolvedCompositionFrame? {
-        guard let base = frame(at: elapsed, features: features) else {
+               typography: TypographyLayer?,
+               rhythm: RhythmFrame? = nil) -> ResolvedCompositionFrame? {
+        guard let base = frame(at: elapsed, features: features, rhythm: rhythm) else {
             return nil
         }
         guard let typography,
@@ -62,13 +79,15 @@ struct CompositionRuntime: Sendable {
     /// sampling the already-cached audio timeline at sourceTime.
     func frame(at elapsed: TimeInterval,
                audioTimeline: AudioFeatureTimeline?,
-               typography: TypographyLayer? = nil) -> ResolvedCompositionFrame? {
+               typography: TypographyLayer? = nil,
+               rhythmAnalysis: RhythmAnalysisResult? = nil) -> ResolvedCompositionFrame? {
         guard let timestamp = composition.timeline.timestamp(at: elapsed) else {
             return nil
         }
         let features = CompositionAudioSampler.sample(
             audioTimeline, at: timestamp.sourceTime)
-        return frame(at: elapsed, features: features, typography: typography)
+        return frame(at: elapsed, features: features, typography: typography,
+                     rhythm: rhythmAnalysis.flatMap { RhythmFrame.at(timestamp.sourceTime, in: $0) })
     }
 
     /// Opt-in experience entry point; no effect on the Story renderer or

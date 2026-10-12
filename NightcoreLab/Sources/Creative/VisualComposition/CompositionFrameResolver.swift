@@ -50,8 +50,7 @@ enum CompositionFrameResolver {
     static func resolve(_ composition: VisualComposition,
                         elapsed: TimeInterval,
                         features: AudioFeatures? = nil) -> ResolvedCompositionFrame? {
-        resolve(CompiledComposition(composition), of: composition,
-                elapsed: elapsed, features: features)
+        CompositionRuntime(composition: composition).frame(at: elapsed, features: features)
     }
 
     static func resolve(_ compiled: CompiledComposition,

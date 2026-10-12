@@ -149,7 +149,7 @@ extension CreativePresetCatalog {
     private static func authoredExperience(
         id: String, name: String, description: String,
         sourceID: String, typography: TypographyPreset,
-        seed: UInt64, mapping: CreativeAudioMapping
+        seed: UInt64, material: VisualMaterial, mapping: CreativeAudioMapping
     ) -> CreativeExperiencePreset? {
         let source = program(for: sourceID)
         let original = source.preset
@@ -175,7 +175,7 @@ extension CreativePresetCatalog {
         }
         return try? CreativeExperiencePreset(
             package: package, description: description,
-            audioMapping: mapping, exportStyle: .portrait)
+            audioMapping: mapping, exportStyle: .portrait, material: material)
     }
 
     /// These presets are complete DATA recipes but never auto-select
@@ -188,7 +188,7 @@ extension CreativePresetCatalog {
             typography: TypographyPreset(
                 style: .glitch, effectIntensity: 0.7,
                 deterministicSeed: 0xC1B3),
-            seed: 0xC1B3,
+            seed: 0xC1B3, material: VisualMaterialCatalog.cyberChrome,
             mapping: CreativeAudioMapping(enabled: true, bindings: [
                 CreativeExperienceAudioBinding(
                     signal: .bass, target: .visualIntensity, gain: 0.3),
@@ -204,7 +204,7 @@ extension CreativePresetCatalog {
             typography: TypographyPreset(
                 style: .magazineCutout, effectIntensity: 0.3,
                 deterministicSeed: 0xD123),
-            seed: 0xD123,
+            seed: 0xD123, material: VisualMaterialCatalog.liquidDream,
             mapping: CreativeAudioMapping(enabled: true, bindings: [
                 CreativeExperienceAudioBinding(
                     signal: .energy, target: .movement, gain: 0.2),
@@ -218,7 +218,7 @@ extension CreativePresetCatalog {
             typography: TypographyPreset(
                 style: .kinetic, audioReaction: .responsive,
                 effectIntensity: 0.55, deterministicSeed: 0xB455),
-            seed: 0xB455,
+            seed: 0xB455, material: VisualMaterialCatalog.neonPulse,
             mapping: CreativeAudioMapping(enabled: true, bindings: [
                 CreativeExperienceAudioBinding(
                     signal: .beat, target: .typographyIntensity, gain: 0.35),

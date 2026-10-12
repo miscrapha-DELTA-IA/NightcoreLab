@@ -41,7 +41,7 @@ struct StoryDraftPreview: View {
         let typography = draft.request.typographyLayer(atLyricTime: currentFrame.lyricTime)
         return runtime.frame(
             at: currentFrame.elapsed, audioTimeline: visualTimeline,
-            typography: typography)
+            typography: typography, rhythmAnalysis: visualRhythm)
     }
 
     var body: some View {

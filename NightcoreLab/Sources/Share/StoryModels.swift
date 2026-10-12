@@ -138,6 +138,11 @@ enum StoryRequestBuilder {
             speed: Double(speed), duration: seconds,
             deterministicSeed: CreativePresetCatalog.selectedExperience(id: creativePresetID)?
                 .composition.deterministicSeed ?? 0)
+        if let composition = request.visualComposition {
+            request.compositionRuntime = CompositionRuntime(
+                composition: composition,
+                material: CreativePresetCatalog.selectedExperience(id: creativePresetID)?.material)
+        }
         request.typographyAudioMapping = CreativePresetCatalog.typographyAudioMapping(
             selection: creativePresetID, style: typographyStyle, reacts: reacts)
         request.preparedLyrics = Dictionary(

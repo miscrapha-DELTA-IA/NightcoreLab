@@ -6,7 +6,8 @@ enum CreativeExperienceResolver {
     static func resolve(_ preset: CreativeExperiencePreset,
                         elapsed: TimeInterval,
                         features: AudioFeatures? = nil,
-                        typography: TypographyLayer? = nil) -> CreativeExperienceFrame? {
+                        typography: TypographyLayer? = nil,
+                        rhythm: RhythmFrame? = nil) -> CreativeExperienceFrame? {
         guard preset.isValid else { return nil }
         let audioState = preset.audioMapping.resolve(features: features)
 
@@ -23,9 +24,9 @@ enum CreativeExperienceResolver {
                 prepared: input.prepared)
         }
 
-        let runtime = CompositionRuntime(composition: preset.composition)
+        let runtime = CompositionRuntime(composition: preset.composition, material: preset.material)
         guard let compositionFrame = runtime.frame(
-            at: elapsed, features: features, typography: effectiveTypography) else {
+            at: elapsed, features: features, typography: effectiveTypography, rhythm: rhythm) else {
             return nil
         }
 

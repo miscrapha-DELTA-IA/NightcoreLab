@@ -23,18 +23,21 @@ struct CreativeExperiencePreset: Codable, Equatable, Sendable, Identifiable {
     var typographyPreset: TypographyPreset { package.typographyPreset }
     var composition: VisualComposition { package.composition }
     var author: String { package.author }
-    /// Stage 12 chain: experience → program → material → MarbleUniforms.
-    var visualMaterial: VisualMaterial { .marble(for: composition.program) }
+    /// Optional additive field: old schema-1 experiences retain their derived Marble.
+    let material: VisualMaterial?
+    var visualMaterial: VisualMaterial { material ?? .marble(for: composition.program) }
 
     init(package: CreativePresetPackage,
          description: String = "",
          audioMapping: CreativeAudioMapping = .disabled,
-         exportStyle: CreativePresetCanvasHint = .portrait) throws {
+         exportStyle: CreativePresetCanvasHint = .portrait,
+         material: VisualMaterial? = nil) throws {
         self.schemaVersion = Self.supportedSchemaVersion
         self.package = package
         self.description = description
         self.audioMapping = audioMapping
         self.exportStyle = exportStyle
+        self.material = material
         guard isValid else { throw ExperienceError.invalidExperience }
     }
 
@@ -55,7 +58,7 @@ struct CreativeExperiencePreset: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, package, description, audioMapping, exportStyle
+        case schemaVersion, package, description, audioMapping, exportStyle, material
     }
 
     init(from decoder: Decoder) throws {
@@ -72,7 +75,8 @@ struct CreativeExperiencePreset: Codable, Equatable, Sendable, Identifiable {
                 description: c.decode(String.self, forKey: .description),
                 audioMapping: c.decode(CreativeAudioMapping.self, forKey: .audioMapping),
                 exportStyle: c.decode(CreativePresetCanvasHint.self,
-                                      forKey: .exportStyle))
+                                      forKey: .exportStyle),
+                material: c.decodeIfPresent(VisualMaterial.self, forKey: .material))
         } catch let error as DecodingError {
             throw error
         } catch {

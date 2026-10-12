@@ -22,13 +22,20 @@ struct ResolvedCompositionFrame: Equatable, Sendable {
     let layers: [ResolvedLayerFrame]
     /// Optional, independent lyric result for the active typography layer.
     let typographyFrame: TypographyFrame?
+    var materialFrame: MaterialFrame? = nil
+
+    func withMaterial(_ frame: MaterialFrame) -> ResolvedCompositionFrame {
+        var copy = self
+        copy.materialFrame = frame
+        return copy
+    }
 
     func withTypography(_ frame: TypographyFrame?) -> ResolvedCompositionFrame {
         ResolvedCompositionFrame(
             compositionID: compositionID, timestamp: timestamp,
             deterministicSeed: deterministicSeed,
             programParameters: programParameters, layers: layers,
-            typographyFrame: frame)
+            typographyFrame: frame, materialFrame: materialFrame)
     }
 }
 
