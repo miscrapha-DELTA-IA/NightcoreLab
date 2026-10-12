@@ -10,22 +10,23 @@ final class KaraokeTypographyTests: XCTestCase {
     }
 
     func testSelectionIsCodableAndPersistsAcrossDefaultsReopen() throws {
-        XCTAssertEqual(KaraokeTypographyStyle.allCases, [.neon, .magazineCutout])
+        XCTAssertEqual(TypographyStyle.allCases,
+                       [.neon, .magazineCutout, .glitch, .kinetic, .minimal])
         let suite = "nightcore.typography.\(UUID().uuidString)"
         guard let first = UserDefaults(suiteName: suite) else {
             return XCTFail("Missing isolated defaults")
         }
         defer { first.removePersistentDomain(forName: suite) }
-        XCTAssertEqual(KaraokeTypographyStyle(
-            rawValue: first.string(forKey: KaraokeTypographyStyle.storageKey) ?? "neon"), .neon)
-        first.set(KaraokeTypographyStyle.magazineCutout.rawValue,
-                  forKey: KaraokeTypographyStyle.storageKey)
+        XCTAssertEqual(TypographyStyle(
+            rawValue: first.string(forKey: TypographyStyle.storageKey) ?? "neon"), .neon)
+        first.set(TypographyStyle.magazineCutout.rawValue,
+                  forKey: TypographyStyle.storageKey)
 
         let reopened = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let persisted = try XCTUnwrap(reopened.string(forKey: KaraokeTypographyStyle.storageKey))
-        XCTAssertEqual(KaraokeTypographyStyle(rawValue: persisted), .magazineCutout)
-        let data = try JSONEncoder().encode(KaraokeTypographyStyle.magazineCutout)
-        XCTAssertEqual(try JSONDecoder().decode(KaraokeTypographyStyle.self, from: data),
+        let persisted = try XCTUnwrap(reopened.string(forKey: TypographyStyle.storageKey))
+        XCTAssertEqual(TypographyStyle(rawValue: persisted), .magazineCutout)
+        let data = try JSONEncoder().encode(TypographyStyle.magazineCutout)
+        XCTAssertEqual(try JSONDecoder().decode(TypographyStyle.self, from: data),
                        .magazineCutout)
     }
 

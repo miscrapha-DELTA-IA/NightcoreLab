@@ -79,7 +79,7 @@ final class CreativePresetPackageTests: XCTestCase {
             let wrapped = try XCTUnwrap(CreativePresetCatalog.builtInPackage(for: name))
             XCTAssertEqual(wrapped.id, name)
             XCTAssertEqual(wrapped.composition.program, existing)
-            XCTAssertEqual(wrapped.typographyPreset.legacyStyle,
+            XCTAssertEqual(wrapped.typographyPreset.style,
                            existing.preset.typographyStyle)
             XCTAssertEqual(try JSONDecoder().decode(
                 CreativePresetPackage.self,
