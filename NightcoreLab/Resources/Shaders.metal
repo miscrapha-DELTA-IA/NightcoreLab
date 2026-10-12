@@ -127,12 +127,12 @@ half4 proceduralMaterial(float2 position, half4 currentColor,
     float3 col = B;
     float alpha = 1.0f;
     if (kind < 1.5f) {
-        float ripple = sin((uv.x + 0.27f * swirl) * 18.0f
+        float ripple = sin((uv.x + 0.27f * swirl + 0.020f * beat) * 18.0f
                            + (uv.y + 0.18f * n) * 13.0f + t * 5.0f);
         float lens = smoothstep(0.48f, 0.9f, swirl * p1 + n * (0.6f + p2));
         col = mix(A, B, saturate(n * 0.7f + 0.28f + ripple * 0.06f * p1));
         col = mix(col, C, lens * (0.2f + 0.45f * p2 + 0.05f * beat));
-        col += C * smoothstep(0.8f, 0.99f, n) * p3 * 0.18f;
+        col += C * (smoothstep(0.8f, 0.99f, n) * p3 * 0.18f + energy * 0.06f);
         alpha = 0.50f + 0.45f * p0;
     } else if (kind < 2.5f) {
         float wave = sin(uv.y * 19.0f + 8.0f * n + t * 4.0f);
