@@ -25,7 +25,7 @@ material = (root/'Creative/VisualMaterial/VisualMaterial.swift').read_text()
 program = (root/'Creative/CreativeVisualProgram.swift').read_text()
 frame = program[program.index('struct CreativeParameterFrame:'):program.index('enum CreativeParameterResolver')]
 (out/'CreativeParameterFrame.swift').write_text('import Foundation\n' + remove_block(frame, '    func value(for target:'))
-for name in ['MaterialResolver', 'MaterialFrame', 'VisualParameterSet', 'MaterialAudioMapping', 'VisualMaterialCatalog']:
+for name in ['MaterialResolver', 'MaterialFrame', 'VisualParameterSet', 'MaterialAudioMapping', 'VisualMaterialCatalog', 'MaterialControls']:
     (out/f'{name}.swift').write_bytes((root/f'Creative/VisualMaterial/{name}.swift').read_bytes())
 for path in ['Creative/AudioFeatures.swift','MusicIntelligence/RhythmFrame.swift','MusicIntelligence/RhythmAnalysisResult.swift']:
     (out/Path(path).name).write_bytes((root/path).read_bytes())
