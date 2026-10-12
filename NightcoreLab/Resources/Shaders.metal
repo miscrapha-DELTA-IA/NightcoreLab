@@ -106,3 +106,62 @@ half4 liquidMarble(float2 position, half4 currentColor,
 
     return half4(half3(saturate(col)), 1.0h);
 }
+// Stage 13B: single procedural shader, using existing noise helpers and
+// existing SwiftUI colorEffect; no feedback buffers or independent renderer.
+// Glass creates a translucent caustic illusion (not framebuffer refraction).
+[[ stitchable ]]
+half4 proceduralMaterial(float2 position, half4 currentColor,
+                         float2 size, float time,
+                         half4 color1, half4 color2, half4 color3,
+                         float kind, float p0, float p1, float p2, float p3,
+                         float beat, float energy, float bass, float movement,
+                         float brightness, float seed)
+{
+    float3 A = float3(color1.rgb), B = float3(color2.rgb), C = float3(color3.rgb);
+    float2 uv = (position - 0.5f * size) / max(min(size.x, size.y), 1.0f);
+    float t = time * (0.08f + 0.32f * p2);
+    float2 shift = float2(fract(seed * 0.000137f), fract(seed * 0.000271f)) * 9.0f;
+    float2 coord = uv * (2.0f + 4.0f * p0) + shift;
+    float n = fbm<4>(coord + float2(t, -t * 0.7f));
+    float swirl = fbm<3>(coord * 1.4f + float2(-t, t) + n * (1.0f + p1 * 2.0f));
+    float3 col = B;
+    float alpha = 1.0f;
+    if (kind < 1.5f) {
+        float ripple = sin((uv.x + 0.27f * swirl) * 18.0f
+                           + (uv.y + 0.18f * n) * 13.0f + t * 5.0f);
+        float lens = smoothstep(0.48f, 0.9f, swirl * p1 + n * (0.6f + p2));
+        col = mix(A, B, saturate(n * 0.7f + 0.28f + ripple * 0.06f * p1));
+        col = mix(col, C, lens * (0.2f + 0.45f * p2 + 0.05f * beat));
+        col += C * smoothstep(0.8f, 0.99f, n) * p3 * 0.18f;
+        alpha = 0.50f + 0.45f * p0;
+    } else if (kind < 2.5f) {
+        float wave = sin(uv.y * 19.0f + 8.0f * n + t * 4.0f);
+        float reflected = smoothstep(-0.6f, 0.85f, wave);
+        float spec = pow(saturate(0.5f + 0.5f * wave), 12.0f + 34.0f * p3);
+        col = mix(A, B, reflected * (0.35f + 0.55f * p1));
+        col = mix(col, C, spec * (0.45f + 0.45f * p0));
+        col = saturate((col - 0.5f) * (1.0f + 1.2f * p3) + 0.5f
+                       + (p2 - 0.5f) * 0.25f + 0.15f * energy + 0.12f * brightness);
+    } else if (kind < 3.5f) {
+        float detail = fbm<4>(coord + (swirl - 0.5f) * (1.0f + 3.0f * p1)
+                                   + float2(t, -t) * (0.5f + movement));
+        col = ramp(saturate(detail * (1.1f + p3) + bass * 0.16f), A, B, C);
+    } else if (kind < 4.5f) {
+        float fog = smoothstep(0.24f, 0.8f,
+            fbm<4>(coord * 0.68f + float2(t * (1.0f + movement), -t * 0.5f)
+                   + swirl * p1));
+        col = mix(A, B, fog);
+        col = mix(col, C, pow(fog, 3.0f) * 0.42f);
+        col += C * energy * 0.07f;
+        alpha = saturate((0.20f + 0.65f * fog) * p3);
+    } else {
+        float veins = n * (1.0f + p1) + swirl * (0.4f + p0) + 0.1f * bass;
+        float bands = fract(veins * (5.0f + 10.0f * p0));
+        float vein = 1.0f - smoothstep(0.0f, 0.02f + 0.07f * (1.0f - p3),
+                                         min(bands, 1.0f - bands));
+        col = ramp(saturate((veins - 0.6f) * (1.0f + 2.0f * p2) + 0.5f), A, B, C);
+        col = mix(col, A, vein * 0.85f);
+        col += C * (0.08f * beat) * (1.0f - vein);
+    }
+    return half4(half3(saturate(col)), half(saturate(alpha)));
+}

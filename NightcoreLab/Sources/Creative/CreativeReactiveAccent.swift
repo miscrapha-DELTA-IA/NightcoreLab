@@ -104,7 +104,9 @@ struct CreativeReactiveAccent: View {
         guard !Task.isCancelled, activeRunID == runID else { return }
         onPulseDriver(MarblePulseDriver(
             material: material, rhythm: rhythm, clock: clock, timeline: timeline,
-            reactionGain: authored != nil && reaction == .subtle ? 0.35 : 1))
+            reactionGain: authored != nil && reaction == .subtle ? 0.35 : 1,
+            seed: CreativePresetCatalog.selectedExperience(id: selectedProgramID)?
+                .composition.deterministicSeed ?? 0))
         while !Task.isCancelled && activeRunID == runID {
             let playing = clock.isPlaying
             let sourceTime = clock.lyricTime

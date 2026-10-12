@@ -190,7 +190,8 @@ final class CreativeExperienceEngineTests: XCTestCase {
 
     func testAllThreeCuratedPresetsUseExistingProgramsAndTypedStyles() throws {
         let ids = ["cyber-night", "liquid-dream", "neon-pulse"]
-        XCTAssertEqual(CreativePresetCatalog.experiencePresets.map(\.id), ids)
+        XCTAssertEqual(Array(CreativePresetCatalog.experiencePresets.prefix(3).map(\.id)), ids)
+        XCTAssertEqual(CreativePresetCatalog.experiencePresets.count, 7)
         for id in ids {
             let experience = try selected(id)
             XCTAssertTrue(experience.isValid)

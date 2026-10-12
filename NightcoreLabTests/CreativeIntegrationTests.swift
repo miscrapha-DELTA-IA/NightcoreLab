@@ -198,7 +198,7 @@ final class CreativeIntegrationTests: XCTestCase {
                 CreativeExperiencePreset.self, from: JSONEncoder().encode(experience)),
                 experience)
         }
-        XCTAssertEqual(CreativePresetCatalog.experiencePresets.count, 3)
+        XCTAssertEqual(CreativePresetCatalog.experiencePresets.count, 7)
     }
 
     // MARK: Helpers

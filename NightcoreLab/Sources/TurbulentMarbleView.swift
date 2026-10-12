@@ -127,7 +127,8 @@ struct TurbulentMarbleView: View {
         Group {
             if let frozenTime {
                 // Export: a single GPU frame, with no TimelineView or animation clock.
-                marbleFrame(time: frozenTime, uniforms: resolvedUniforms(live: false))
+                marbleFrame(time: frozenTime, uniforms: resolvedUniforms(live: false),
+                            resolved: resolvedMaterial(live: false))
             } else {
                 TimelineView(.animation(
                     minimumInterval: 1.0 / max(maxFPS, 1.0),
@@ -135,7 +136,8 @@ struct TurbulentMarbleView: View {
                 )) { context in
                     let elapsed = isPaused || reduceMotion ? 0 :
                         context.date.timeIntervalSince(startedAt ?? start)
-                    marbleFrame(time: Float(elapsed * speed), uniforms: resolvedUniforms(live: true))
+                    marbleFrame(time: Float(elapsed * speed), uniforms: resolvedUniforms(live: true),
+                                resolved: resolvedMaterial(live: true))
                 }
             }
         }
@@ -145,6 +147,15 @@ struct TurbulentMarbleView: View {
         .ignoresSafeArea(edges: extendIntoSafeArea ? .all : [])
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private func resolvedMaterial(live: Bool) -> MaterialFrame {
+        if let materialFrame { return materialFrame }
+        let parameters = CreativeParameterFrame(
+            playerGlow: 0, marbleDistortion: reactiveDistortion,
+            lyricKinetics: 0, particleEmission: 0)
+        if live, let pulseDriver { return pulseDriver.frame(parameters: parameters) }
+        return MaterialResolver.resolve(material, timestamp: 0, parameters: parameters)
     }
 
     private func resolvedUniforms(live: Bool) -> MarbleUniforms {
@@ -161,24 +172,38 @@ struct TurbulentMarbleView: View {
                               brightnessBoost: material.brightnessBoost)
     }
 
-    private func marbleFrame(time: Float, uniforms: MarbleUniforms) -> some View {
+    private func marbleFrame(time: Float, uniforms: MarbleUniforms,
+                             resolved: MaterialFrame) -> some View {
         let palette = theme.palette
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
-                content.colorEffect(
-                    ShaderLibrary.liquidMarble(
-                        .float2(proxy.size),
-                        .float(time),
-                        .color(palette.deep),
-                        .color(palette.body),
-                        .color(palette.glow),
+                let shader: Shader
+                if resolved.type == .marble {
+                    shader = ShaderLibrary.liquidMarble(
+                        .float2(proxy.size), .float(time),
+                        .color(palette.deep), .color(palette.body), .color(palette.glow),
                         .float(Float(uniforms.distortion)),
                         .float(Float(uniforms.beatPulse)),
                         .float(Float(uniforms.warpAmount)),
-                        .float(Float(uniforms.brightnessBoost))
-                    )
-                )
+                        .float(Float(uniforms.brightnessBoost)))
+                } else {
+                    shader = ShaderLibrary.proceduralMaterial(
+                        .float2(proxy.size), .float(time),
+                        .color(palette.deep), .color(palette.body), .color(palette.glow),
+                        .float(resolved.type.shaderID),
+                        .float(Float(resolved.controls.primary)),
+                        .float(Float(resolved.controls.secondary)),
+                        .float(Float(resolved.controls.tertiary)),
+                        .float(Float(resolved.controls.quaternary)),
+                        .float(Float(resolved.parameters.beatPulse)),
+                        .float(Float(resolved.signals.energy)),
+                        .float(Float(resolved.signals.bass)),
+                        .float(Float(resolved.signals.movement)),
+                        .float(Float(resolved.signals.brightness)),
+                        .float(Float(resolved.seed % 65536)))
+                }
+                content.colorEffect(shader)
             }
     }
 }

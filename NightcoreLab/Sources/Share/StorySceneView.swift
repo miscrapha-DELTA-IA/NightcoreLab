@@ -57,7 +57,8 @@ struct StorySceneView: View {
             timestamp: frame.sourceTime,
             parameters: CreativeMarbleFrameResolver.resolve(
                 program: request.reactiveProgram, timeline: visualTimeline,
-                sourceTime: frame.sourceTime))
+                sourceTime: frame.sourceTime),
+            seed: request.visualComposition?.deterministicSeed ?? 0)
         if request.compositionRuntime != nil,
            let typography = composed?.typographyFrame {
             self.typographyFrame = typography

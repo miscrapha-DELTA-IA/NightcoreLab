@@ -179,14 +179,17 @@ final class VisualMaterialEngineTests: XCTestCase {
         XCTAssertEqual(decoded.warpAmount, 0.5)
     }
 
-    func testOnlyMarbleIsSupportedAndCatalogContainsExactlyFourRecipes() {
-        XCTAssertEqual(VisualMaterialCatalog.all.map(\.name),
+    func testLegacyMaterialCatalogPrefixAndExpandedTypes() {
+        XCTAssertEqual(Array(VisualMaterialCatalog.all.prefix(4)).map(\.name),
                        ["Original Marble", "Cyber Chrome", "Liquid Dream", "Neon Pulse"])
-        XCTAssertTrue(VisualMaterialCatalog.all.allSatisfy { $0.type == .marble })
+        XCTAssertTrue(VisualMaterialCatalog.all.prefix(4).allSatisfy { $0.type == .marble })
+        XCTAssertEqual(Set(VisualMaterialCatalog.all.suffix(from: 4).map(\.type)),
+                       Set([.liquidGlass, .chrome, .organicNoise,
+                            .atmosphericSmoke, .advancedMarble]))
         for type in VisualMaterialType.allCases where !type.isSupported {
             let reserved = VisualMaterial(id: "future", name: "Future", type: type)
-            let frame = MaterialResolver.resolve(reserved, timestamp: 1)
-            XCTAssertEqual(frame, MaterialResolver.resolve(.legacyMarble, timestamp: 1))
+            XCTAssertEqual(MaterialResolver.resolve(reserved, timestamp: 1),
+                           MaterialResolver.resolve(.legacyMarble, timestamp: 1))
         }
     }
 

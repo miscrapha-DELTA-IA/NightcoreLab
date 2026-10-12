@@ -8,7 +8,8 @@ enum MaterialResolver {
                         rhythm: RhythmFrame? = nil,
                         timestamp: TimeInterval,
                         parameters: CreativeParameterFrame = .neutral,
-                        reactionGain: Double = 1) -> MaterialFrame {
+                        reactionGain: Double = 1,
+                        seed: UInt64 = 0) -> MaterialFrame {
         let material = material.type.isSupported ? material : .legacyMarble
         let validTime = timestamp.isFinite && timestamp >= 0
         let gain = validTime ? materialBound(reactionGain, 0...1) : 0
@@ -31,12 +32,21 @@ enum MaterialResolver {
             beatPulse: pulse, pulseDecay: material.pulseDecay,
             offbeatScale: material.offbeatScale, warpAmount: material.warpAmount,
             brightnessBoost: material.brightnessBoost + energy + accent)
+        let activeFeatures = gain > 0 ? features : nil
+        let allowed = material.type.acceptedSignals
+        func accepts(_ input: MaterialAudioSignal) -> Bool { allowed.contains(input) }
+        let signals = MaterialReactiveSignals(
+            energy: accepts(.energy) ? materialBound(activeFeatures?.energy ?? 0, 0...1) : 0,
+            bass: accepts(.bass) ? materialBound(activeFeatures?.bass ?? 0, 0...1) : 0,
+            movement: accepts(.movement) ? materialBound(parameters.lyricKinetics * gain, 0...1) : 0,
+            brightness: accepts(.brightness) ? materialBound(activeFeatures?.treble ?? 0, 0...1) : 0)
         return MaterialFrame(
-            materialID: material.id, type: .marble, parameters: resolved,
+            materialID: material.id, type: material.type, parameters: resolved,
             intensity: material.intensity,
             audioResponse: MaterialAudioResponse(distortion: bass, brightness: energy,
                                                   pulse: pulse, accent: accent),
-            timestamp: validTime ? timestamp : 0)
+            timestamp: validTime ? timestamp : 0,
+            seed: seed, controls: material.controls, signals: signals)
     }
 
     /// Compatibility projection for Stage 12 callers; one mapping implementation.

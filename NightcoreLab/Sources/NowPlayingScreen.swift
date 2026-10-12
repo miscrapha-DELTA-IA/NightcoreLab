@@ -116,6 +116,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var storyTask: Task<Void, Never>?
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
+    /// Stage 13B selection already stored by the existing experience picker.
+    private var selectedMaterial: VisualMaterial {
+        CreativePresetCatalog.selectedExperience(id: creativePresetID)?.visualMaterial ??
+            .marble(for: CreativePresetCatalog.effectiveProgram(
+                id: creativePresetID, theme: appTheme,
+                typography: karaokeTypography, background: playerBackgroundStyle,
+                reaction: reactionMode))
+    }
+
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
     private var motion: Animation {
         reduceMotion ? .easeInOut(duration: 0.25) : .spring(duration: 0.65, bounce: 0.15)
@@ -133,7 +142,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         marbleStartedAt: marbleStartedAt,
                         frozenTime: frozenShareMarblePhase,
                         reactiveDistortion: distortion,
-                        pulseDriver: pulse
+                        pulseDriver: pulse,
+                        material: selectedMaterial
                     )
                 }
                 .transition(.opacity)
@@ -149,7 +159,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
-                        pulseDriver: pulse
+                        pulseDriver: pulse,
+                        material: selectedMaterial
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -338,7 +349,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                                          theme: appTheme,
                                          frozenTime: frozenShareMarblePhase,
                                          reactiveDistortion: distortion,
-                                         pulseDriver: pulse)
+                                         pulseDriver: pulse, material: selectedMaterial)
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -632,6 +643,7 @@ private struct BackgroundLayer: View {
     var frozenTime: Float? = nil
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
+    var material: VisualMaterial = .legacyMarble
 
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
@@ -644,7 +656,8 @@ private struct BackgroundLayer: View {
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
                                     reactiveDistortion: reactiveDistortion,
-                                    pulseDriver: pulseDriver)
+                                    pulseDriver: pulseDriver,
+                                     material: material)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)
