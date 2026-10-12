@@ -5,10 +5,26 @@ import UIKit
 struct StorySceneView: View {
     let request: StoryVideoRequest
     let artwork: UIImage?
-    let elapsed: TimeInterval
+    let frame: StoryRenderFrame
 
-    private var phase: Float { request.marbleTime(at: elapsed) }
-    private var sourceTime: TimeInterval { request.sourceTime(at: elapsed) }
+    /// Backwards-compatible initializer for existing StorySceneView users.
+    /// Encoders and previews use the shared frame-grid initializer instead.
+    init(request: StoryVideoRequest, artwork: UIImage?, elapsed: TimeInterval) {
+        self.init(request: request, artwork: artwork,
+                  frame: StoryRenderTimeline(
+                    request: request, profile: .balanced
+                  ).frame(at: elapsed))
+    }
+
+    init(request: StoryVideoRequest, artwork: UIImage?, frame: StoryRenderFrame) {
+        self.request = request
+        self.artwork = artwork
+        self.frame = frame
+    }
+
+    private var elapsed: TimeInterval { frame.elapsed }
+    private var phase: Float { frame.marblePhase }
+    private var sourceTime: TimeInterval { frame.sourceTime }
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
     }
@@ -140,14 +156,16 @@ struct StorySceneView: View {
 
     private var lyricsCard: some View {
         VStack(spacing: 28) {
-            if let line = request.activeLine(at: elapsed) {
+            if let line = request.lines.last(where: {
+                $0.start <= frame.lyricTime && frame.lyricTime < $0.end
+            }) {
                 if let previous = request.lines.last(where: { $0.end <= line.start && !$0.words.isEmpty }) {
                     Text(previous.text)
                         .font(.system(size: 23, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.43))
                         .multilineTextAlignment(.center)
                 }
-                StoryLyricLine(line: line, time: request.lyricTime(at: elapsed),
+                StoryLyricLine(line: line, time: frame.lyricTime,
                                theme: request.theme, typography: request.typography)
                 if let next = request.lines.first(where: { $0.start >= line.end && !$0.words.isEmpty }) {
                     Text(next.text)

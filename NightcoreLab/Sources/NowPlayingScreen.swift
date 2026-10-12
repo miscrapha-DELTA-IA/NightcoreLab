@@ -101,6 +101,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var shareErrorDetails: String?
     @State private var storyProgress = 0.0
     @State private var storyPreview: StoryVideoPayload?
+    @State private var storyDraft: StoryVideoDraft?
     @State private var storyTask: Task<Void, Never>?
     @AppStorage("story.lyricTypography") private var storyTypography: StoryLyricTypography = .classic
 
@@ -240,6 +241,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .sheet(item: $shareResult) { payload in
             ShareExportService(image: payload.image)
         }
+        .sheet(item: $storyDraft) { draft in
+            StoryDraftPreview(
+                draft: draft,
+                onExport: { artwork in
+                    storyDraft = nil
+                    exportApprovedDraft(draft, artwork: artwork)
+                },
+                onCancel: { storyDraft = nil }
+            )
+        }
         .sheet(item: $storyPreview) { payload in
             StoryVideoPreview(url: payload.url)
         }
@@ -376,29 +387,43 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 includeAudio: includeAudio
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
-            storyProgress = 0
-            beginShare(at: capturedAt)
-            storyTask = Task { @MainActor in
-                defer {
-                    finishShare()
-                    storyTask = nil
-                }
-                do {
-                    let url = try await StoryVideoExporter.export(
-                        frame, audioSource: frozenAudio,
-                        progress: { storyProgress = $0 })
-                    try Task.checkCancellation()
-                    storyPreview = StoryVideoPayload(url: url)
-                } catch is CancellationError {
-                    // Cancellation is user-initiated; no interruption to playback.
-                } catch {
-                    shareErrorDetails = error.localizedDescription
-                    showShareError = true
-                }
-            }
+            // Preview and export share the exact same immutable snapshot,
+            // artwork and frame-rate profile. No video work starts until
+            // the user approves the visual preview.
+            storyDraft = StoryVideoDraft(
+                request: frame,
+                audioSource: frozenAudio,
+                profile: StoryEncodingProfile.recommended()
+            )
         } catch {
             shareErrorDetails = error.localizedDescription
             showShareError = true
+        }
+    }
+
+    private func exportApprovedDraft(_ draft: StoryVideoDraft, artwork: UIImage?) {
+        guard !isBuildingShare else { return }
+        storyProgress = 0
+        beginShare(at: Date())
+        storyTask = Task { @MainActor in
+            defer {
+                finishShare()
+                storyTask = nil
+            }
+            do {
+                let url = try await StoryVideoExporter.export(
+                    draft.request, audioSource: draft.audioSource,
+                    artwork: artwork, profile: draft.profile,
+                    progress: { storyProgress = $0 }
+                )
+                try Task.checkCancellation()
+                storyPreview = StoryVideoPayload(url: url)
+            } catch is CancellationError {
+                // User cancellation does not interrupt normal playback.
+            } catch {
+                shareErrorDetails = error.localizedDescription
+                showShareError = true
+            }
         }
     }
 
