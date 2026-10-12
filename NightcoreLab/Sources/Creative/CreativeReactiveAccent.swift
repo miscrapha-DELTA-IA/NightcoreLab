@@ -16,16 +16,18 @@ struct CreativeReactiveAccent: View {
     private var reaction: CreativePreset.AudioReaction = .off
     @AppStorage("karaokeTypography")
     private var typography: KaraokeTypographyStyle = .neon
+    @AppStorage(CreativePresetCatalog.storageKey)
+    private var selectedProgramID = CreativePresetCatalog.defaultID
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
     @State private var featureEngine = AudioFeatureEngine()
-    @State private var visual = VisualResponse.neutral
+    @State private var parameters = CreativeParameterFrame.neutral
     @State private var activeRunID = UUID()
 
     private var taskIdentity: String {
-        "\(sourceURL?.path ?? "none")|\(reaction.rawValue)|\(scenePhase == .active)|\(lowPower)|\(reduceMotion)"
+        "\(sourceURL?.path ?? "none")|\(reaction.rawValue)|\(selectedProgramID)|\(theme.rawValue)|\(backgroundStyle.rawValue)|\(typography.rawValue)|\(scenePhase == .active)|\(lowPower)|\(reduceMotion)"
     }
 
     private var canReact: Bool {
@@ -36,8 +38,7 @@ struct CreativeReactiveAccent: View {
     var body: some View {
         RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .strokeBorder(theme.accent.opacity(
-                canReact ? min(0.27, CreativeVisualBindings().value(
-                    for: .playerGlow, response: visual) * 0.27) : 0),
+                canReact ? min(0.27, parameters.playerGlow * 0.27) : 0),
                 lineWidth: 2)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
@@ -54,9 +55,9 @@ struct CreativeReactiveAccent: View {
     private func renderVisibleReactions() async {
         let runID = UUID()
         activeRunID = runID
-        visual = .neutral
+        parameters = .neutral
         defer {
-            if activeRunID == runID { visual = .neutral }
+            if activeRunID == runID { parameters = .neutral }
         }
         guard canReact, let sourceURL else { return }
 
@@ -69,24 +70,30 @@ struct CreativeReactiveAccent: View {
         }
         guard !Task.isCancelled, activeRunID == runID else { return }
 
-        let preset = CreativePreset(
-            id: "live-reaction", name: "Ritmo visual",
-            theme: theme, typographyStyle: typography,
-            visualStyle: VisualPreset(
-                background: .init(existing: backgroundStyle),
-                intensity: 0.8, motion: 0.4),
-            audioReaction: reaction
+        // projectM-inspired separation: declarative rules are evaluated
+        // outside the SwiftUI rendering code. No shader/runtime creation.
+        let program = CreativePresetCatalog.effectiveProgram(
+            id: selectedProgramID, theme: theme, typography: typography,
+            background: backgroundStyle, reaction: reaction
         )
         while !Task.isCancelled && activeRunID == runID {
             let playing = clock.isPlaying
+            let sourceTime = clock.lyricTime
             let sample = await featureEngine.visualResponse(
-                at: clock.lyricTime,
-                preset: preset,
+                at: sourceTime,
+                preset: program.preset,
                 isPlaying: playing,
                 lowPower: lowPower
             )
             guard !Task.isCancelled, activeRunID == runID else { break }
-            if let sample, sample != visual { visual = sample }
+            if let sample {
+                let features = await featureEngine.features(at: sourceTime)
+                guard !Task.isCancelled, activeRunID == runID else { break }
+                let next = CreativeParameterResolver.resolve(
+                    program: program, response: sample,
+                    features: features, sourceTime: sourceTime)
+                if next != parameters { parameters = next }
+            }
             do {
                 try await Task.sleep(for: playing ? .milliseconds(83) : .milliseconds(450))
             } catch { break }

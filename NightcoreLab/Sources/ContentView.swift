@@ -112,6 +112,8 @@ struct ContentView: View {
     @AppStorage("playerBackgroundStyle") private var bgStyleRaw = PlayerBackgroundStyle.turbulent.rawValue
     @AppStorage("creativeReactionMode")
     private var creativeReactionMode: CreativePreset.AudioReaction = .off
+    @AppStorage(CreativePresetCatalog.storageKey)
+    private var selectedCreativePresetID = CreativePresetCatalog.defaultID
 
     private var bgStyle: PlayerBackgroundStyle {
         PlayerBackgroundStyle(rawValue: bgStyleRaw) ?? .turbulent
@@ -848,7 +850,20 @@ struct ContentView: View {
                 Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
             }
             .pickerStyle(.segmented)
-            Text("Brilho nas bordas do player, sincronizado ao áudio. Desativado em Pouca Energia e com Reduzir Movimento.")
+            HStack {
+                Text("PRESET")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.8)
+                Spacer()
+                Picker("Preset visual", selection: $selectedCreativePresetID) {
+                    ForEach(CreativePresetCatalog.all) { program in
+                        Text(program.preset.name).tag(program.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(creativeReactionMode == .off)
+            }
+            Text("Presets modulam o brilho atual; parâmetros Marble, letras e partículas ficam preparados para futuras versões. Pouca Energia e Reduzir Movimento desativam a reação.")
                 .font(.caption2)
                 .foregroundStyle(DS.Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
