@@ -35,7 +35,20 @@ struct StorySceneView: View {
     private var typographyLayer: TypographyLayer? {
         TypographyLayer.forStory(
             lines: request.lines, lyricTime: frame.lyricTime,
-            lyricOffset: request.lyricOffset)
+            lyricOffset: request.lyricOffset,
+            preset: request.typographyPreset)
+    }
+
+    /// The active line's typography, with or without a reactive composition.
+    /// Both branches run TypographyLayer.resolve with the request's frozen
+    /// preset and audio reaction off, so they yield the same frame; the
+    /// composition result is preferred so layer wiring has one source.
+    var typographyFrame: TypographyFrame? {
+        if request.visualComposition != nil,
+           let composed = resolvedCompositionFrame?.typographyFrame {
+            return composed
+        }
+        return typographyLayer?.resolve(at: frame.lyricTime, features: nil)
     }
 
     var resolvedCompositionFrame: ResolvedCompositionFrame? {
@@ -208,9 +221,9 @@ struct StorySceneView: View {
                         .foregroundStyle(.white.opacity(0.43))
                         .multilineTextAlignment(.center)
                 }
-                StoryLyricLine(line: line, time: frame.lyricTime,
-                               theme: request.theme, typography: request.typography,
-                               resolved: resolvedCompositionFrame?.typographyFrame)
+                if let typographyFrame, typographyFrame.lineID == line.id {
+                    StoryLyricLine(frame: typographyFrame, theme: request.theme)
+                }
                 if let next = request.lines.first(where: { $0.start >= line.end && !$0.words.isEmpty }) {
                     Text(next.text)
                         .font(.system(size: 23, weight: .semibold, design: .rounded))
@@ -248,37 +261,49 @@ struct StorySceneView: View {
     }
 }
 
-/// Uses the same parsed word timing and flow layout as the live karaoke.
+/// Draws an already resolved TypographyFrame with the live karaoke's word
+/// renderer (KaraokeWordView). It decides nothing: fill, effect, Magazine
+/// tiles and per-word animation all come from the frame; only Story canvas
+/// metrics and colors are supplied here.
 private struct StoryLyricLine: View {
-    let line: TimedLyricLine
-    let time: TimeInterval
+    let frame: TypographyFrame
     let theme: AppTheme
-    let typography: StoryLyricTypography
-    let resolved: TypographyFrame?
+
+    /// Story canvas: 540 pt minus the scene (2 × 35) and card (2 × 15) insets.
+    static let maxWordWidth: CGFloat = 440
+    static let fontSize: CGFloat = 35
+
+    /// Story colors expressed in the karaoke palette shape (unchanged values).
+    private var palette: KaraokeTheme {
+        KaraokeTheme(inactive: .white.opacity(0.46),
+                     fill: theme.accent,
+                     glow: theme.accent.opacity(0.7),
+                     pastOpacity: 0.55,
+                     font: frame.preset.font.font(size: Self.fontSize))
+    }
 
     var body: some View {
+        let colors = palette
         FlowLayout(lineSpacing: 8) {
-            ForEach(line.words) { word in
-                let fraction = resolved?.word(id: word.id)?.progress ??
-                    (line.precision == .word ? word.progress(at: time) : 1.0)
-                Text(word.text)
-                    .font(typography.font)
-                    .tracking(typography.tracking)
-                    .foregroundStyle(.white.opacity(0.46))
-                    .overlay(alignment: .leading) {
-                        Text(word.text)
-                            .font(typography.font)
-                            .tracking(typography.tracking)
-                            .foregroundStyle(theme.accent)
-                            .mask(alignment: .leading) {
-                                Rectangle()
-                                    .scaleEffect(x: fraction, y: 1, anchor: .leading)
-                            }
-                            .shadow(color: theme.accent.opacity(0.7), radius: 7)
-                    }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-                    .gapAfter(word.spaceAfter ? 10 : 0)
+            ForEach(frame.words) { resolved in
+                let animation = frame.animation(for: resolved.id)
+                KaraokeWordView(
+                    word: resolved.word,
+                    fill: resolved.progress,
+                    fillColor: theme.accent,
+                    glow: (animation?.glow ?? 1) > 0,
+                    theme: colors,
+                    maxWordWidth: Self.maxWordWidth,
+                    fontSize: Self.fontSize,
+                    typographyStyle: frame.preset.style,
+                    magazineAppearance: resolved.magazine?.legacy,
+                    isCurrentLine: frame.status == .active,
+                    isPastLine: frame.status == .past,
+                    animation: animation,
+                    tracking: frame.preset.font.tracking,
+                    glowRadius: 7,
+                    minimumScaleFactor: 0.55)
+                .gapAfter(resolved.word.spaceAfter ? 10 : 0)
             }
         }
         .frame(maxWidth: .infinity)

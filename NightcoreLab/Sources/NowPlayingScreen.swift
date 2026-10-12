@@ -102,7 +102,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @AppStorage(CreativePresetCatalog.storageKey)
     private var creativePresetID = CreativePresetCatalog.defaultID
     @AppStorage("karaokeTypography")
-    private var karaokeTypography: KaraokeTypographyStyle = .neon
+    private var karaokeTypography: TypographyStyle = .neon
 
     private var marbleDistortion: Double {
         frozenCreativeDistortion ?? liveCreativeFrame.marbleDistortion
@@ -116,7 +116,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var storyPreview: StoryVideoPayload?
     @State private var storyDraft: StoryVideoDraft?
     @State private var storyTask: Task<Void, Never>?
-    @AppStorage("story.lyricTypography") private var storyTypography: StoryLyricTypography = .classic
+    @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
     private var motion: Animation {
@@ -407,6 +407,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 playbackTime: audio.playbackTime, sourceDuration: audio.duration,
                 speed: audio.speed, lines: matchedLyrics,
                 lyricOffset: lyricsStore.userOffset, typography: storyTypography,
+                typographyStyle: karaokeTypography,
                 includeAudio: includeAudio,
                 reactiveProgram: (reactionMode == .off ||
                                   reduceMotion ||
@@ -688,7 +689,7 @@ private struct BlurredCover: View {
 private struct KaraokeBottomBar: View {
     @Binding var theme: AppTheme
     @Binding var background: BackgroundStyle
-    @AppStorage("karaokeTypography") private var typography: KaraokeTypographyStyle = .neon
+    @AppStorage("karaokeTypography") private var typography: TypographyStyle = .neon
     @Namespace private var ns
 
     var body: some View {
@@ -723,7 +724,7 @@ private struct KaraokeBottomBar: View {
 
             Menu {
                 Picker("Tipografia", selection: $typography) {
-                    ForEach(KaraokeTypographyStyle.allCases) { template in
+                    ForEach(TypographyStyle.allCases) { template in
                         Text(template.title).tag(template)
                     }
                 }

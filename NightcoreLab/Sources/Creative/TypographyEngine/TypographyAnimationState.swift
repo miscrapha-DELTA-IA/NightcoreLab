@@ -44,11 +44,3 @@ struct TypographyAnimationState: Equatable, Sendable {
         (magazineToneIndex.map { (0...2).contains($0) } ?? true)
     }
 }
-
-enum TypographyEffectStyle: String, Codable, CaseIterable, Sendable {
-    case neon, magazineCutout, glitch, kinetic, minimal
-
-    init(_ style: TypographyStyle) {
-        self = TypographyEffectStyle(rawValue: style.rawValue) ?? .neon
-    }
-}

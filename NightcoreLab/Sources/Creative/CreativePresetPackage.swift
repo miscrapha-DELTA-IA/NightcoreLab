@@ -81,7 +81,7 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
         self.composition = composition
         self.visualPreset = composition.program.preset.visualStyle
         self.typographyPreset = typographyPreset ??
-            TypographyPreset(legacy: composition.program.preset.typographyStyle)
+            TypographyPreset(style: composition.program.preset.typographyStyle)
         self.audioMapping = .referencing(composition)
         self.previewMetadata = previewMetadata
         guard isValid else { throw PackageError.invalidPackage }
@@ -96,9 +96,19 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
         id == composition.id &&
         name == composition.name &&
         visualPreset == composition.program.preset.visualStyle &&
-        typographyPreset.legacyStyle == composition.program.preset.typographyStyle &&
+        Self.typographyMatches(typographyPreset.style,
+                               composition.program.preset.typographyStyle) &&
         audioMapping == .referencing(composition) &&
         previewMetadata.isValid(for: composition)
+    }
+
+    /// The package's typography style must be the one its preset records.
+    /// Packages authored before Stage 10B projected glitch/kinetic/minimal to
+    /// `.neon` in the CreativePreset; that single legacy pairing still loads.
+    private static func typographyMatches(_ typography: TypographyStyle,
+                                          _ recorded: TypographyStyle) -> Bool {
+        typography == recorded ||
+            (recorded == .neon && !typography.predatesExtendedStyles)
     }
 
     /// Portable import of existing CreativeVisualProgram recipes, including all
@@ -138,7 +148,7 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
             composition.program.preset.visualStyle
         let typography = try c.decodeIfPresent(
             TypographyPreset.self, forKey: .typographyPreset) ??
-            TypographyPreset(legacy: composition.program.preset.typographyStyle)
+            TypographyPreset(style: composition.program.preset.typographyStyle)
         let mapping = try c.decodeIfPresent(
             CreativePresetAudioMapping.self, forKey: .audioMapping) ??
             .referencing(composition)

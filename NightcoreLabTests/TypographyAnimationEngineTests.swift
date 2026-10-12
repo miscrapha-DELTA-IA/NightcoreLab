@@ -205,7 +205,8 @@ final class TypographyAnimationEngineTests: XCTestCase {
             let renderFrame = grid.frame(index: index)
             let layer = TypographyLayer.forStory(
                 lines: request.lines, lyricTime: renderFrame.lyricTime,
-                lyricOffset: request.lyricOffset)
+                lyricOffset: request.lyricOffset,
+                preset: request.typographyPreset)
             let preview = StorySceneView(
                 request: request, artwork: nil,
                 frame: grid.frame(at: renderFrame.elapsed),

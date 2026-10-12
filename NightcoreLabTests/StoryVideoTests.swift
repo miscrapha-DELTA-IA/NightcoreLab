@@ -62,8 +62,8 @@ final class StoryVideoTests: XCTestCase {
     }
 
     func testEveryTypographyHasStableIdentifier() {
-        XCTAssertEqual(Set(StoryLyricTypography.allCases.map(\.id)).count,
-                       StoryLyricTypography.allCases.count)
+        XCTAssertEqual(Set(TypographyFont.allCases.map(\.id)).count,
+                       TypographyFont.allCases.count)
     }
 
     func testEncodingProfilesReduceExpensiveMetalWork() {

@@ -56,8 +56,8 @@ final class TypographyEngineTests: XCTestCase {
         XCTAssertEqual(neon.words.map(\.progress), magazine.words.map(\.progress))
         XCTAssertNil(neon.word(id: 0)?.magazine)
         XCTAssertNotNil(magazine.word(id: 0)?.magazine)
-        XCTAssertEqual(neon.preset.legacyStyle, .neon)
-        XCTAssertEqual(magazine.preset.legacyStyle, .magazineCutout)
+        XCTAssertEqual(neon.preset.style, .neon)
+        XCTAssertEqual(magazine.preset.style, .magazineCutout)
         XCTAssertEqual(try JSONDecoder().decode(
             TypographyPreset.self, from: JSONEncoder().encode(magazine.preset)),
             magazine.preset)
@@ -185,7 +185,8 @@ final class TypographyEngineTests: XCTestCase {
         let frame = grid.frame(index: 18)
         let layer = TypographyLayer.forStory(
             lines: request.lines, lyricTime: frame.lyricTime,
-            lyricOffset: request.lyricOffset)
+            lyricOffset: request.lyricOffset,
+            preset: request.typographyPreset)
         let previewFrame = CompositionRuntime(composition: composition)
             .frame(at: frame.elapsed, audioTimeline: nil, typography: layer)
         let preview = StorySceneView(
