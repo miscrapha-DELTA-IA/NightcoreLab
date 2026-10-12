@@ -408,14 +408,21 @@ enum RhythmAnalyzer {
             return normalized[lower] * (1 - fraction) + normalized[lower + 1] * fraction
         }
         let reference = max(acf(at: period), 1e-9)
-        var list = [RhythmAnalysisResult.BPMCandidate(bpm: bpm, confidence: Float(confidence))]
+        // The TRACKED tempo is always first: on a strictly periodic signal the
+        // autocorrelation at 2× the period is as high as at the period, and a
+        // confidence tie must not promote the half tempo (CI: 124 → 62 BPM).
+        var alternatives: [RhythmAnalysisResult.BPMCandidate] = []
         for factor in [2.0, 0.5] {
             let alternative = bpm * factor
             guard (55...210).contains(alternative) else { continue }
             let support = clamp(acf(at: period / factor) / reference)
-            list.append(.init(bpm: alternative, confidence: Float(confidence * support)))
+            alternatives.append(.init(bpm: alternative, confidence: Float(confidence * support)))
         }
-        return list.sorted { $0.confidence == $1.confidence ? $0.bpm < $1.bpm : $0.confidence > $1.confidence }
+        alternatives.sort {
+            $0.confidence == $1.confidence ? $0.bpm > $1.bpm : $0.confidence > $1.confidence
+        }
+        return [RhythmAnalysisResult.BPMCandidate(bpm: bpm, confidence: Float(confidence))]
+            + alternatives
     }
 
     private static func average(_ values: [Double]) -> Double {
