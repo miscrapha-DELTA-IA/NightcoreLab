@@ -6,8 +6,10 @@ import Foundation
 actor AudioFeatureEngine {
     private var current: AudioFeatures = .silent
     private var timeline: AudioFeatureTimeline?
+    private var preparedURL: URL?
     private var throttle = VisualResponseThrottle()
     private var generation = 0
+    private var lastVisualSampleTime: TimeInterval?
     private var analysisTask: Task<AudioFeatureTimeline, Error>?
 
     /// Existing frame-input contract from Creative Engine Block 1.
@@ -20,7 +22,9 @@ actor AudioFeatureEngine {
         analysisTask = nil
         generation &+= 1
         timeline = nil
+        preparedURL = nil
         throttle.reset()
+        lastVisualSampleTime = nil
         let features = AudioFeatures(
             bass: frame.bassLevel,
             mid: frame.midLevel,
@@ -37,12 +41,20 @@ actor AudioFeatureEngine {
     /// Expensive file decoding and envelope processing run at utility QoS.
     /// Caller cancellation and track replacement cancel stale computations.
     func prepareAudio(at url: URL) async throws {
+        // Return to a previously analyzed file without redecoding.
+        if preparedURL == url && timeline != nil {
+            throttle.reset()
+            lastVisualSampleTime = nil
+            return
+        }
         analysisTask?.cancel()
         generation &+= 1
         let request = generation
         timeline = nil
+        preparedURL = nil
         current = .silent
         throttle.reset()
+        lastVisualSampleTime = nil
 
         // No automatic analysis during system Low Power Mode.
         guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
@@ -61,6 +73,7 @@ actor AudioFeatureEngine {
         try Task.checkCancellation()
         guard request == generation else { return }
         timeline = result
+        preparedURL = url
         analysisTask = nil
     }
 
@@ -77,11 +90,31 @@ actor AudioFeatureEngine {
                         preset: CreativePreset,
                         isPlaying: Bool,
                         lowPower: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled) -> VisualResponse? {
+        // Pause must clear the visual immediately, even when the media clock
+        // stops advancing. Gating first would leave a stale glowing outline.
+        guard isPlaying else {
+            throttle.reset()
+            lastVisualSampleTime = nil
+            return .neutral
+        }
         guard throttle.shouldEmit(at: sourceTime, lowPower: lowPower) else {
             return nil
         }
-        guard isPlaying else { return .neutral }
-        return AudioVisualMapper.map(features(at: sourceTime), preset: preset)
+
+        var sampled = features(at: sourceTime)
+        if let timeline {
+            // Preserve beat onsets across downsampled visual frames. Don't
+            // replay distant historical events after a forward seek.
+            let prior = lastVisualSampleTime ?? max(0, sourceTime - 0.15)
+            let start = sourceTime - prior <= 0.75 ? prior : sourceTime
+            let beat = timeline.beatCount(after: start, through: sourceTime) > 0
+            sampled = AudioFeatures(
+                bass: sampled.bass, mid: sampled.mid, treble: sampled.treble,
+                energy: sampled.energy, beatDetected: beat
+            )
+        }
+        lastVisualSampleTime = sourceTime
+        return AudioVisualMapper.map(sampled, preset: preset)
     }
 
     func reset() {
@@ -89,7 +122,9 @@ actor AudioFeatureEngine {
         analysisTask = nil
         generation &+= 1
         timeline = nil
+        preparedURL = nil
         current = .silent
         throttle.reset()
+        lastVisualSampleTime = nil
     }
 }

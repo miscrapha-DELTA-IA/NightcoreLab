@@ -308,6 +308,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
         .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous),
                       theme: appTheme, isActive: isPlaying, pulses: false, depth: 0.7)
+        .overlay {
+            CreativeReactiveAccent(
+                sourceURL: audio.visualAnalysisURL,
+                clock: clock,
+                theme: appTheme,
+                backgroundStyle: playerBackgroundStyle
+            )
+        }
     }
 
     /// Freeze only the live visuals while exporting. The audio keeps playing.

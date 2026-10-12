@@ -102,6 +102,9 @@ final class AudioEngineManager {
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
+    /// Read-only source for opt-in utility-priority visual analysis.
+    /// No audio node or tap is installed.
+    var visualAnalysisURL: URL? { sourceURL }
     @ObservationIgnored private var needsScheduling = true
     @ObservationIgnored private var scheduleGeneration = 0
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
