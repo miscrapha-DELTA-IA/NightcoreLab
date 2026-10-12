@@ -84,6 +84,29 @@ final class FosforaAudioVisualBridgeTests: XCTestCase {
         XCTAssertEqual(bindings.value(for: .playerGlow, response: .neutral), 0)
     }
 
+    func testPauseImmediatelyClearsGlowAtFrozenMediaTime() async {
+        let engine = AudioFeatureEngine()
+        await engine.accept(AudioFeatureFrame(
+            bassLevel: 1, midLevel: 0.8, trebleLevel: 0.5,
+            rmsLevel: 1, beatDetected: true))
+        let preset = CreativePreset(
+            id: "playback-pause", name: "Test", theme: .acid,
+            typographyStyle: .neon, visualStyle: VisualPreset(),
+            audioReaction: .responsive)
+        let playing = await engine.visualResponse(
+            at: 5, preset: preset, isPlaying: true, lowPower: false)
+        XCTAssertGreaterThan(playing?.glow ?? 0, 0)
+
+        let paused = await engine.visualResponse(
+            at: 5, preset: preset, isPlaying: false, lowPower: false)
+        XCTAssertEqual(paused, .neutral)
+
+        let resumed = await engine.visualResponse(
+            at: 5, preset: preset, isPlaying: true, lowPower: false)
+        XCTAssertNotNil(resumed, "Resume at the same timestamp must emit immediately")
+        await engine.reset()
+    }
+
     func testReactionOffReturnsNeutralAndRespectsNoOpPreset() {
         let preset = CreativePreset.current(
             theme: .noir, typographyStyle: .magazineCutout,

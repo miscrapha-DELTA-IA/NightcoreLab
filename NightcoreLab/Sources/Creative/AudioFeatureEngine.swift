@@ -90,12 +90,15 @@ actor AudioFeatureEngine {
                         preset: CreativePreset,
                         isPlaying: Bool,
                         lowPower: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled) -> VisualResponse? {
-        guard throttle.shouldEmit(at: sourceTime, lowPower: lowPower) else {
-            return nil
-        }
+        // Pause must clear the visual immediately, even when the media clock
+        // stops advancing. Gating first would leave a stale glowing outline.
         guard isPlaying else {
+            throttle.reset()
             lastVisualSampleTime = nil
             return .neutral
+        }
+        guard throttle.shouldEmit(at: sourceTime, lowPower: lowPower) else {
+            return nil
         }
 
         var sampled = features(at: sourceTime)
