@@ -1,7 +1,7 @@
 import Foundation
 
-/// Source-time feature sampler shared by preview and export. This preserves
-/// the Marble's existing fixed 150 ms onset look-back without adding an FFT.
+/// Source-time feature sampler shared by preview and export. Preserves the
+/// Marble's fixed 150 ms onset look-back without adding another FFT.
 enum CompositionAudioSampler {
     static func sample(_ timeline: AudioFeatureTimeline?,
                        at sourceTime: TimeInterval) -> AudioFeatures? {
@@ -16,32 +16,101 @@ enum CompositionAudioSampler {
     }
 }
 
-/// Immutable runtime coordinator; no rendering, UI, audio engine, clock or
-/// frame history. Repeated/out-of-order requests always return the same data.
+/// Immutable compiled form of the *existing* composition. No new preset,
+/// renderer, animation engine, clock or global mutable frame cache.
 struct CompositionRuntime: Sendable {
     let composition: VisualComposition
 
-    init(composition: VisualComposition) {
-        self.composition = composition
+    private struct CompiledLayer: Sendable {
+        let layer: PresetLayer
+        let tracks: [LayerProperty: [CompositionKeyframe]]
+        let bindings: [LayerProperty: LayerAudioBinding]
+
+        init(_ layer: PresetLayer) {
+            self.layer = layer
+            self.tracks = Dictionary(
+                grouping: layer.keyframes, by: \.property
+            ).mapValues { $0.sorted { $0.timestamp < $1.timestamp } }
+            self.bindings = Dictionary(
+                uniqueKeysWithValues: layer.bindings.map { ($0.property, $0) })
+        }
+
+        /// Incoming key's easing drives the segment, exactly as Stage 5A.
+        func keyframed(_ property: LayerProperty, elapsed: TimeInterval) -> Double? {
+            guard let points = tracks[property], let first = points.first else { return nil }
+            guard elapsed > first.timestamp else { return first.value }
+            guard let last = points.last, elapsed < last.timestamp else {
+                return points.last?.value
+            }
+            for index in 1..<points.count {
+                let upper = points[index]
+                guard elapsed <= upper.timestamp else { continue }
+                if elapsed == upper.timestamp { return upper.value }
+                let lower = points[index - 1]
+                let duration = upper.timestamp - lower.timestamp
+                guard duration > 0 else { return upper.value }
+                let ratio = upper.easing.progress((elapsed - lower.timestamp) / duration)
+                return lower.value + (upper.value - lower.value) * ratio
+            }
+            return last.value
+        }
     }
 
-    /// An already frozen feature sample. The caller must supply one measured
-    /// at the composition's sourceTime, not the video's elapsed time.
+    private let compiledLayers: [CompiledLayer]
+    private let preparedLines: [Int: TypographyPreparedLine]
+
+    init(composition: VisualComposition, lyrics: [TimedLyricLine] = []) {
+        self.composition = composition
+        // VisualComposition's validating init/decoder guarantees correct layer
+        // uniqueness and valid keyframes. This cost is paid ONCE per request.
+        self.compiledLayers = composition.orderedLayers.map(CompiledLayer.init)
+        self.preparedLines = Dictionary(
+            lyrics.map { ($0.id, TypographyPreparedLine($0)) },
+            uniquingKeysWith: { _, newest in newest })
+    }
+
+    /// Pure evaluation of the compiled plan. No validation/sorting/filtering
+    /// on every exported frame. Output matches the legacy resolver bit-for-bit.
     func frame(at elapsed: TimeInterval,
                features: AudioFeatures?) -> ResolvedCompositionFrame? {
-        CompositionFrameResolver.resolve(composition, elapsed: elapsed,
-                                         features: features)
+        guard let timestamp = composition.timeline.timestamp(at: elapsed) else { return nil }
+        let source = features ?? .silent
+        let response = AudioVisualMapper.map(source, preset: composition.program.preset)
+        let programFrame = CreativeParameterResolver.resolve(
+            program: composition.program, response: response,
+            features: source, sourceTime: timestamp.sourceTime)
+        let resolvedLayers: [ResolvedLayerFrame] = compiledLayers
+            .filter { $0.layer.isActive(at: timestamp.elapsed) }
+            .map { compiled in
+                let layer = compiled.layer
+                var values: [LayerProperty: Double] = [:]
+                for property in LayerProperty.allCases {
+                    let authored = layer.properties[property] ?? property.defaultValue
+                    let animated = compiled.keyframed(property, elapsed: timestamp.elapsed)
+                        ?? authored
+                    if let binding = compiled.bindings[property], features != nil {
+                        values[property] = binding.apply(
+                            to: animated, features: source,
+                            sourceTime: timestamp.sourceTime,
+                            reaction: composition.program.preset.audioReaction)
+                    } else {
+                        values[property] = property.clamped(animated)
+                    }
+                }
+                return ResolvedLayerFrame(id: layer.id, kind: layer.kind,
+                                          zIndex: layer.zIndex, values: values)
+            }
+        return ResolvedCompositionFrame(
+            compositionID: composition.id, timestamp: timestamp,
+            deterministicSeed: composition.deterministicSeed,
+            programParameters: programFrame, layers: resolvedLayers,
+            typographyFrame: nil)
     }
 
-    /// Frozen AudioFeatures path used by CreativeExperienceResolver and
-    /// the existing offline-timeline path. The only new API is this overload.
-    /// The original frame(at:features:) remains backward-compatible.
     func frame(at elapsed: TimeInterval,
                features: AudioFeatures?,
                typography: TypographyLayer?) -> ResolvedCompositionFrame? {
-        guard let base = frame(at: elapsed, features: features) else {
-            return nil
-        }
+        guard let base = frame(at: elapsed, features: features) else { return nil }
         guard let typography,
               base.layers.contains(where: {
                   $0.id == typography.layerID && $0.kind == .typography
@@ -50,11 +119,10 @@ struct CompositionRuntime: Sendable {
         guard lyricTime.isFinite else { return base }
         return base.withTypography(TypographyResolver.resolve(
             typography.state, at: lyricTime, features: features,
-            preset: typography.preset))
+            preset: typography.preset,
+            prepared: preparedLines[typography.state.line.id]))
     }
 
-    /// Existing preview/export consumers use the SAME overload after
-    /// sampling the already-cached audio timeline at sourceTime.
     func frame(at elapsed: TimeInterval,
                audioTimeline: AudioFeatureTimeline?,
                typography: TypographyLayer? = nil) -> ResolvedCompositionFrame? {
@@ -66,20 +134,15 @@ struct CompositionRuntime: Sendable {
         return frame(at: elapsed, features: features, typography: typography)
     }
 
-    /// Opt-in experience entry point; no effect on the Story renderer or
-    /// legacy call sites. Reject mismatched frozen compositions.
     func experienceFrame(at elapsed: TimeInterval,
                          preset: CreativeExperiencePreset,
                          features: AudioFeatures? = nil,
                          typography: TypographyLayer? = nil) -> CreativeExperienceFrame? {
         guard preset.composition == composition else { return nil }
         return CreativeExperienceResolver.resolve(
-            preset, elapsed: elapsed, features: features,
-            typography: typography)
+            preset, elapsed: elapsed, features: features, typography: typography)
     }
 
-    /// Freeze a program once at StoryRequestBuilder time so preview and export
-    /// receive exactly the same composition, clock and existing visual rules.
     static func freeze(program: CreativeVisualProgram?,
                        sourceStart: TimeInterval, speed: Double,
                        duration: TimeInterval) -> VisualComposition? {
