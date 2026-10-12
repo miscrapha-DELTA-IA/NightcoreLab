@@ -1,7 +1,7 @@
 import Foundation
 
 /// Normalized, immutable visual descriptors (0...1), not live AVAudioEngine state.
-/// Silence is the only value until a future audio analysis source is connected.
+/// Silent by default; Block 2 can optionally populate it from a local file.
 struct AudioFeatures: Codable, Equatable, Sendable {
     let bass: Double
     let mid: Double
@@ -10,6 +10,11 @@ struct AudioFeatures: Codable, Equatable, Sendable {
     let beatDetected: Bool
 
     static let silent = AudioFeatures()
+
+    /// Compatibility aliases for future audio-reactive integrations.
+    /// They derive from existing stored values, avoiding duplicate state.
+    var amplitude: Double { energy }
+    var mids: Double { mid }
 
     init(bass: Double = 0, mid: Double = 0, treble: Double = 0,
          energy: Double = 0, beatDetected: Bool = false) {
@@ -43,7 +48,7 @@ struct AudioFeatures: Codable, Equatable, Sendable {
 }
 
 /// Optional future input supplied by an audio analyzer, in normalized units.
-/// Merely declaring this contract does not attach a tap or start audio analysis.
+/// A frame is supplied explicitly; no tap or audio analysis starts automatically.
 struct AudioFeatureFrame: Sendable {
     let bassLevel: Double
     let midLevel: Double
