@@ -178,32 +178,38 @@ struct TurbulentMarbleView: View {
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
-                let shader: Shader
                 if resolved.type == .marble {
-                    shader = ShaderLibrary.liquidMarble(
-                        .float2(proxy.size), .float(time),
-                        .color(palette.deep), .color(palette.body), .color(palette.glow),
-                        .float(Float(uniforms.distortion)),
-                        .float(Float(uniforms.beatPulse)),
-                        .float(Float(uniforms.warpAmount)),
-                        .float(Float(uniforms.brightnessBoost)))
+                    // Identity path: retain the complete Stage 13 shader call.
+                    content.colorEffect(
+                        ShaderLibrary.liquidMarble(
+                            .float2(proxy.size), .float(time),
+                            .color(palette.deep), .color(palette.body),
+                            .color(palette.glow),
+                            .float(Float(uniforms.distortion)),
+                            .float(Float(uniforms.beatPulse)),
+                            .float(Float(uniforms.warpAmount)),
+                            .float(Float(uniforms.brightnessBoost))
+                        )
+                    )
                 } else {
-                    shader = ShaderLibrary.proceduralMaterial(
-                        .float2(proxy.size), .float(time),
-                        .color(palette.deep), .color(palette.body), .color(palette.glow),
-                        .float(resolved.type.shaderID),
-                        .float(Float(resolved.controls.primary)),
-                        .float(Float(resolved.controls.secondary)),
-                        .float(Float(resolved.controls.tertiary)),
-                        .float(Float(resolved.controls.quaternary)),
-                        .float(Float(resolved.parameters.beatPulse)),
-                        .float(Float(resolved.signals.energy)),
-                        .float(Float(resolved.signals.bass)),
-                        .float(Float(resolved.signals.movement)),
-                        .float(Float(resolved.signals.brightness)),
-                        .float(Float(resolved.seed % 65536)))
+                    content.colorEffect(
+                        ShaderLibrary.proceduralMaterial(
+                            .float2(proxy.size), .float(time),
+                            .color(palette.deep), .color(palette.body),
+                            .color(palette.glow), .float(resolved.type.shaderID),
+                            .float(Float(resolved.controls.primary)),
+                            .float(Float(resolved.controls.secondary)),
+                            .float(Float(resolved.controls.tertiary)),
+                            .float(Float(resolved.controls.quaternary)),
+                            .float(Float(resolved.parameters.beatPulse)),
+                            .float(Float(resolved.signals.energy)),
+                            .float(Float(resolved.signals.bass)),
+                            .float(Float(resolved.signals.movement)),
+                            .float(Float(resolved.signals.brightness)),
+                            .float(Float(resolved.seed % 65536))
+                        )
+                    )
                 }
-                content.colorEffect(shader)
             }
     }
 }
