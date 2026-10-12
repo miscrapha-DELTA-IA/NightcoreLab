@@ -30,7 +30,10 @@ actor MusicAnalysisCache {
             }
             try? FileManager.default.setAttributes([.modificationDate: Date()],
                                                    ofItemAtPath: url.path)
-            return result
+            // Rhythm has its OWN version: keep energy/onsets and discard only
+            // stale rhythm derivatives. Legacy v1 cache entries decode too.
+            return result.rhythmAnalyzerVersion == RhythmAnalysisResult.algorithmVersion
+                ? result : result.droppingRhythm()
         } catch {
             // Interrupted writes, corruption, eviction and unknown schemas are misses.
             try? FileManager.default.removeItem(at: url)
