@@ -33,32 +33,49 @@ struct CompositionRuntime: Sendable {
                                          features: features)
     }
 
-    /// The offline timeline is already cached by AudioFeatureEngine. Sampling
-    /// is bounded and uses the SAME timestamp/beat window as the legacy Marble.
+    /// Frozen AudioFeatures path used by CreativeExperienceResolver and
+    /// the existing offline-timeline path. The only new API is this overload.
+    /// The original frame(at:features:) remains backward-compatible.
+    func frame(at elapsed: TimeInterval,
+               features: AudioFeatures?,
+               typography: TypographyLayer?) -> ResolvedCompositionFrame? {
+        guard let base = frame(at: elapsed, features: features) else {
+            return nil
+        }
+        guard let typography,
+              base.layers.contains(where: {
+                  $0.id == typography.layerID && $0.kind == .typography
+              }) else { return base }
+        let lyricTime = base.timestamp.sourceTime + typography.lyricOffset
+        guard lyricTime.isFinite else { return base }
+        return base.withTypography(TypographyResolver.resolve(
+            typography.state, at: lyricTime, features: features,
+            preset: typography.preset))
+    }
+
+    /// Existing preview/export consumers use the SAME overload after
+    /// sampling the already-cached audio timeline at sourceTime.
     func frame(at elapsed: TimeInterval,
                audioTimeline: AudioFeatureTimeline?,
                typography: TypographyLayer? = nil) -> ResolvedCompositionFrame? {
         guard let timestamp = composition.timeline.timestamp(at: elapsed) else {
             return nil
         }
-        let features = CompositionAudioSampler.sample(audioTimeline,
-                                                      at: timestamp.sourceTime)
-        guard let base = frame(at: elapsed, features: features),
-              let typography,
-              composition.layers.contains(where: {
-                  $0.id == typography.layerID && $0.kind == .typography
-              }),
-              base.layers.contains(where: {
-                  $0.id == typography.layerID && $0.kind == .typography
-              }) else {
-            return frame(at: elapsed, features: features)
-        }
-        let lyricTime = timestamp.sourceTime + typography.lyricOffset
-        guard lyricTime.isFinite else { return base }
-        let resolved = TypographyResolver.resolve(
-            typography.state, at: lyricTime, features: features,
-            preset: typography.preset)
-        return base.withTypography(resolved)
+        let features = CompositionAudioSampler.sample(
+            audioTimeline, at: timestamp.sourceTime)
+        return frame(at: elapsed, features: features, typography: typography)
+    }
+
+    /// Opt-in experience entry point; no effect on the Story renderer or
+    /// legacy call sites. Reject mismatched frozen compositions.
+    func experienceFrame(at elapsed: TimeInterval,
+                         preset: CreativeExperiencePreset,
+                         features: AudioFeatures? = nil,
+                         typography: TypographyLayer? = nil) -> CreativeExperienceFrame? {
+        guard preset.composition == composition else { return nil }
+        return CreativeExperienceResolver.resolve(
+            preset, elapsed: elapsed, features: features,
+            typography: typography)
     }
 
     /// Freeze a program once at StoryRequestBuilder time so preview and export
