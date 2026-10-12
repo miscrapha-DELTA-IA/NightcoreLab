@@ -46,7 +46,8 @@ enum CompositionFrameResolver {
             timestamp: timestamp,
             deterministicSeed: composition.deterministicSeed,
             programParameters: programFrame,
-            layers: resolvedLayers)
+            layers: resolvedLayers,
+            typographyFrame: nil)
     }
 
     /// Keyframes are authored in VIDEO elapsed seconds, not audio seconds.

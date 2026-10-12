@@ -36,13 +36,29 @@ struct CompositionRuntime: Sendable {
     /// The offline timeline is already cached by AudioFeatureEngine. Sampling
     /// is bounded and uses the SAME timestamp/beat window as the legacy Marble.
     func frame(at elapsed: TimeInterval,
-               audioTimeline: AudioFeatureTimeline?) -> ResolvedCompositionFrame? {
+               audioTimeline: AudioFeatureTimeline?,
+               typography: TypographyLayer? = nil) -> ResolvedCompositionFrame? {
         guard let timestamp = composition.timeline.timestamp(at: elapsed) else {
             return nil
         }
         let features = CompositionAudioSampler.sample(audioTimeline,
                                                       at: timestamp.sourceTime)
-        return frame(at: elapsed, features: features)
+        guard let base = frame(at: elapsed, features: features),
+              let typography,
+              composition.layers.contains(where: {
+                  $0.id == typography.layerID && $0.kind == .typography
+              }),
+              base.layers.contains(where: {
+                  $0.id == typography.layerID && $0.kind == .typography
+              }) else {
+            return frame(at: elapsed, features: features)
+        }
+        let lyricTime = timestamp.sourceTime + typography.lyricOffset
+        guard lyricTime.isFinite else { return base }
+        let resolved = TypographyResolver.resolve(
+            typography.state, at: lyricTime, features: features,
+            preset: typography.preset)
+        return base.withTypography(resolved)
     }
 
     /// Freeze a program once at StoryRequestBuilder time so preview and export

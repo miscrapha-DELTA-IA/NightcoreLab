@@ -32,6 +32,12 @@ struct StorySceneView: View {
 
     /// One deterministic query for both the scrub preview and the MP4 encoder.
     /// Null/offline feature sources produce exactly the original shader.
+    private var typographyLayer: TypographyLayer? {
+        TypographyLayer.forStory(
+            lines: request.lines, lyricTime: frame.lyricTime,
+            lyricOffset: request.lyricOffset)
+    }
+
     var resolvedCompositionFrame: ResolvedCompositionFrame? {
         guard let composition = request.visualComposition else { return nil }
         if let suppliedCompositionFrame,
@@ -41,7 +47,8 @@ struct StorySceneView: View {
             return suppliedCompositionFrame
         }
         return CompositionRuntime(composition: composition).frame(
-            at: frame.elapsed, audioTimeline: visualTimeline)
+            at: frame.elapsed, audioTimeline: visualTimeline,
+            typography: typographyLayer)
     }
 
     var reactiveDistortion: Double {
@@ -202,7 +209,8 @@ struct StorySceneView: View {
                         .multilineTextAlignment(.center)
                 }
                 StoryLyricLine(line: line, time: frame.lyricTime,
-                               theme: request.theme, typography: request.typography)
+                               theme: request.theme, typography: request.typography,
+                               resolved: resolvedCompositionFrame?.typographyFrame)
                 if let next = request.lines.first(where: { $0.start >= line.end && !$0.words.isEmpty }) {
                     Text(next.text)
                         .font(.system(size: 23, weight: .semibold, design: .rounded))
@@ -246,11 +254,13 @@ private struct StoryLyricLine: View {
     let time: TimeInterval
     let theme: AppTheme
     let typography: StoryLyricTypography
+    let resolved: TypographyFrame?
 
     var body: some View {
         FlowLayout(lineSpacing: 8) {
             ForEach(line.words) { word in
-                let fraction = line.precision == .word ? word.progress(at: time) : 1.0
+                let fraction = resolved?.word(id: word.id)?.progress ??
+                    (line.precision == .word ? word.progress(at: time) : 1.0)
                 Text(word.text)
                     .font(typography.font)
                     .tracking(typography.tracking)

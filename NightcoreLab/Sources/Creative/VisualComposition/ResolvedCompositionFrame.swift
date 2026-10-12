@@ -20,4 +20,14 @@ struct ResolvedCompositionFrame: Equatable, Sendable {
     let programParameters: CreativeParameterFrame
     /// Sorted back-to-front: lowest zIndex first, stable id tie-break.
     let layers: [ResolvedLayerFrame]
+    /// Optional, independent lyric result for the active typography layer.
+    let typographyFrame: TypographyFrame?
+
+    func withTypography(_ frame: TypographyFrame?) -> ResolvedCompositionFrame {
+        ResolvedCompositionFrame(
+            compositionID: compositionID, timestamp: timestamp,
+            deterministicSeed: deterministicSeed,
+            programParameters: programParameters, layers: layers,
+            typographyFrame: frame)
+    }
 }

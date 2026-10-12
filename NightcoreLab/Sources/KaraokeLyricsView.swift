@@ -323,8 +323,20 @@ private struct KaraokeLineView: View {
     let maxWordWidth: CGFloat
     let fontSize: CGFloat
     let typographyStyle: KaraokeTypographyStyle
-    /// Cached for the lifetime of this line view: no hashing on word-fill frames.
-    private let magazineAppearances: [Int: MagazineWordAppearance]
+    private let preparedTypography: TypographyPreparedLine
+    private var typographyPreset: TypographyPreset {
+        TypographyPreset(legacy: typographyStyle)
+    }
+
+    private var lyricState: LyricsState {
+        let phase: TypographyLineStatus
+        switch status {
+        case .past: phase = .past
+        case .active: phase = .active
+        case .upcoming: phase = .upcoming
+        }
+        return LyricsState(line: line, status: phase)
+    }
 
     init(line: TimedLyricLine, status: Status, isPlaying: Bool,
          offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
@@ -340,10 +352,7 @@ private struct KaraokeLineView: View {
         self.maxWordWidth = maxWordWidth
         self.fontSize = fontSize
         self.typographyStyle = typographyStyle
-        self.magazineAppearances = typographyStyle == .magazineCutout
-            ? Dictionary(uniqueKeysWithValues: line.words.map {
-                ($0.id, KaraokeWordStyleResolver.resolve(lineID: line.id, word: $0))
-            }) : [:]
+        preparedTypography = TypographyPreparedLine(line)
     }
 
     var body: some View {
@@ -352,38 +361,36 @@ private struct KaraokeLineView: View {
         } else if status == .active && line.precision == .word {
             TimelineView(.animation(paused: !isPlaying)) { _ in
                 let t = clock.lyricTime + offset            // lido direto do engine, a cada frame
-                layout { $0.progress(at: t) }
+                layout(frame: TypographyResolver.resolve(
+                    lyricState, at: t, features: nil, preset: typographyPreset,
+                    prepared: preparedTypography))
             }
         } else {
-            layout { _ in
-                switch status {
-                case .past: return 1
-                case .active: return 1        // .line precision: acende a linha inteira, sem fingir
-                case .upcoming: return 0
-                }
-            }
+            layout(frame: TypographyResolver.resolve(
+                lyricState, at: 0, features: nil, preset: typographyPreset,
+                prepared: preparedTypography))
             .scaleEffect(status == .upcoming ? 0.96 : 1.0)
             .animation(.smooth(duration: 0.3), value: status)
         }
     }
 
-    private func layout(fill: @escaping (WordSync) -> Double) -> some View {
+    private func layout(frame: TypographyFrame) -> some View {
         FlowLayout(lineSpacing: 6) {
-            ForEach(line.words) { w in
+            ForEach(frame.words) { resolved in
                 KaraokeWordView(
-                    word: w,
-                    fill: fill(w),
+                    word: resolved.word,
+                    fill: resolved.progress,
                     fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
                     glow: status == .active,
                     theme: theme,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
                     typographyStyle: typographyStyle,
-                    magazineAppearance: magazineAppearances[w.id],
+                    magazineAppearance: resolved.magazine?.legacy,
                     isCurrentLine: status == .active,
                     isPastLine: status == .past
                 )
-                .gapAfter(w.spaceAfter ? 9 : 0)
+                .gapAfter(resolved.word.spaceAfter ? 9 : 0)
             }
         }
     }

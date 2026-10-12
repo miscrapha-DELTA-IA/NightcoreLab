@@ -36,8 +36,12 @@ struct StoryDraftPreview: View {
     /// StorySceneView via the same frozen request and frame grid.
     private var compositionFrame: ResolvedCompositionFrame? {
         guard let composition = draft.request.visualComposition else { return nil }
+        let typography = TypographyLayer.forStory(
+            lines: draft.request.lines, lyricTime: currentFrame.lyricTime,
+            lyricOffset: draft.request.lyricOffset)
         return CompositionRuntime(composition: composition).frame(
-            at: currentFrame.elapsed, audioTimeline: visualTimeline)
+            at: currentFrame.elapsed, audioTimeline: visualTimeline,
+            typography: typography)
     }
 
     var body: some View {
