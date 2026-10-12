@@ -15,6 +15,8 @@ struct LyricsControlCenter: View {
     let onDismiss: () -> Void
 
     @Environment(LyricsStore.self) private var lyricsStore
+    @AppStorage("karaokeTypography") private var typographyStyle: KaraokeTypographyStyle = .neon
+    @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
 
     var body: some View {
         NavigationStack {
@@ -30,6 +32,24 @@ struct LyricsControlCenter: View {
                 }
 
                 Section {
+                    Picker("Template das letras", selection: $typographyStyle) {
+                        ForEach(KaraokeTypographyStyle.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Picker("Leitura", selection: $focusMode) {
+                        ForEach(KaraokeFocusMode.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text("Foco destaca o verso cantado e suaviza os demais. Role para explorar e use 'Voltar à letra ao vivo' para acompanhar novamente.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     Picker("Tema", selection: $theme) {
                         ForEach(AppTheme.allCases) { option in
                             Text(option.displayName).tag(option)
