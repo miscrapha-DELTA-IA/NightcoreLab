@@ -9,6 +9,7 @@ actor AudioFeatureEngine {
     private var preparedURL: URL?
     private var throttle = VisualResponseThrottle()
     private var generation = 0
+    private var lastVisualSampleTime: TimeInterval?
     private var analysisTask: Task<AudioFeatureTimeline, Error>?
 
     /// Existing frame-input contract from Creative Engine Block 1.
@@ -23,6 +24,7 @@ actor AudioFeatureEngine {
         timeline = nil
         preparedURL = nil
         throttle.reset()
+        lastVisualSampleTime = nil
         let features = AudioFeatures(
             bass: frame.bassLevel,
             mid: frame.midLevel,
@@ -52,6 +54,7 @@ actor AudioFeatureEngine {
         preparedURL = nil
         current = .silent
         throttle.reset()
+        lastVisualSampleTime = nil
 
         // No automatic analysis during system Low Power Mode.
         guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
@@ -90,8 +93,25 @@ actor AudioFeatureEngine {
         guard throttle.shouldEmit(at: sourceTime, lowPower: lowPower) else {
             return nil
         }
-        guard isPlaying else { return .neutral }
-        return AudioVisualMapper.map(features(at: sourceTime), preset: preset)
+        guard isPlaying else {
+            lastVisualSampleTime = nil
+            return .neutral
+        }
+
+        var sampled = features(at: sourceTime)
+        if let timeline {
+            // Preserve beat onsets across downsampled visual frames. Don't
+            // replay distant historical events after a forward seek.
+            let prior = lastVisualSampleTime ?? max(0, sourceTime - 0.15)
+            let start = sourceTime - prior <= 0.75 ? prior : sourceTime
+            let beat = timeline.beatCount(after: start, through: sourceTime) > 0
+            sampled = AudioFeatures(
+                bass: sampled.bass, mid: sampled.mid, treble: sampled.treble,
+                energy: sampled.energy, beatDetected: beat
+            )
+        }
+        lastVisualSampleTime = sourceTime
+        return AudioVisualMapper.map(sampled, preset: preset)
     }
 
     func reset() {
@@ -102,5 +122,6 @@ actor AudioFeatureEngine {
         preparedURL = nil
         current = .silent
         throttle.reset()
+        lastVisualSampleTime = nil
     }
 }
