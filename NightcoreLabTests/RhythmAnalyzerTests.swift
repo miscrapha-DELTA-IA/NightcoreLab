@@ -34,9 +34,11 @@ final class RhythmAnalyzerTests: XCTestCase {
             let body = Int(0.12 * sampleRate)
             let accent = index % 4 == downbeat
             for k in 0..<body where start + k < count {
-                let t = Double(k) / sampleRate
-                let envelope = exp(-35 * t)
-                let tone = accent ? 0.8 * sin(2 * .pi * 55 * t) : 0.35 * sin(2 * .pi * 90 * t)
+                let t: Double = Double(k) / sampleRate
+                let envelope: Double = exp(-35 * t)
+                let frequency: Double = accent ? 55 : 90
+                let amplitude: Double = accent ? 0.8 : 0.35
+                let tone: Double = amplitude * sin(2 * Double.pi * frequency * t)
                 samples[start + k] += Float(envelope * tone)
             }
             for k in 0..<Int(0.006 * sampleRate) where start + k < count {
@@ -188,12 +190,15 @@ final class RhythmAnalyzerTests: XCTestCase {
 
     private func syntheticRhythm() -> RhythmAnalysisResult {
         // 120 BPM from 1.0 s; downbeat on the second beat (index 1).
-        let grid = (0..<8).map { index in
-            RhythmAnalysisResult.BeatEvent(time: 1 + 0.5 * Double(index), index: index,
-                                           strength: index % 4 == 1 ? 1 : 0.5,
-                                           isDownbeat: index % 4 == 1)
+        // Explicit types: the Xcode 16 type checker times out on the literal form.
+        let grid: [RhythmAnalysisResult.BeatEvent] = (0..<8).map { (index: Int) in
+            let time: Double = 1 + 0.5 * Double(index)
+            let strength: Float = index % 4 == 1 ? 1 : 0.5
+            return RhythmAnalysisResult.BeatEvent(time: time, index: index,
+                                                  strength: strength,
+                                                  isDownbeat: index % 4 == 1)
         }
-        return RhythmAnalysisResult(onsetEvents: grid.map(\.time),
+        return RhythmAnalysisResult(onsetEvents: grid.map { $0.time },
                                     bpmCandidates: [.init(bpm: 120, confidence: 0.9)],
                                     beatGrid: grid, confidence: 0.9,
                                     downbeatConfidence: 0.7)
