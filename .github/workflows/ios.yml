@@ -38,6 +38,20 @@ jobs:
       - name: Resolver dependências SPM
         run: xcodebuild -resolvePackageDependencies -project NightcoreLab.xcodeproj -scheme NightcoreLab
 
+      - name: Measure MaterialResolver time and allocation calls
+        run: |
+          set -o pipefail
+          bash scripts/material-benchmark/run.sh | tee material-benchmark.json
+
+      - name: Save material benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaterialResolver-Benchmark
+          path: material-benchmark.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Validar busca, cache e qualidade de áudio no simulador
         run: |
           set -o pipefail
