@@ -9,8 +9,10 @@ import UIKit
 enum StoryFrameRenderer {
     static func render(request: StoryVideoRequest, artwork: UIImage?,
                        frame: StoryRenderFrame,
-                       profile: StoryEncodingProfile) throws -> CGImage {
-        let scene = StorySceneView(request: request, artwork: artwork, frame: frame)
+                       profile: StoryEncodingProfile,
+                       visualTimeline: AudioFeatureTimeline? = nil) throws -> CGImage {
+        let scene = StorySceneView(request: request, artwork: artwork,
+                                   frame: frame, visualTimeline: visualTimeline)
         let renderer = ImageRenderer(content: scene)
         renderer.proposedSize = ProposedViewSize(StoryVideoRequest.size)
         renderer.scale = profile.scale

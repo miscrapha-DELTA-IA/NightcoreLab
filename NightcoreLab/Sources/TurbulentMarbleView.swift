@@ -104,6 +104,9 @@ struct TurbulentMarbleView: View {
     var frozenTime: Float? = nil
     /// Stable clock origin shared by the visible player and the share snapshot.
     var startedAt: Date? = nil
+    /// 0 retains the original Metal effect; evaluated by CreativeParameterResolver
+    /// outside the shader and clamped again before binding.
+    var reactiveDistortion: Double = 0
 
     @State private var start = Date()
     @Environment(\.scenePhase) private var scenePhase
@@ -144,7 +147,9 @@ struct TurbulentMarbleView: View {
                         .float(time),
                         .color(palette.deep),
                         .color(palette.body),
-                        .color(palette.glow)
+                        .color(palette.glow),
+                        .float(Float(reactiveDistortion.isFinite
+                                     ? min(1, max(0, reactiveDistortion)) : 0))
                     )
                 )
             }

@@ -7,6 +7,7 @@ struct StoryVideoDraft: Identifiable {
     let request: StoryVideoRequest
     let audioSource: StoryAudioSource?
     let profile: StoryEncodingProfile
+    let featureEngine: AudioFeatureEngine
 }
 
 /// Visual proofing before the expensive MP4 export. This displays the same
@@ -15,12 +16,14 @@ struct StoryVideoDraft: Identifiable {
 /// audio or install any TimelineView.
 struct StoryDraftPreview: View {
     let draft: StoryVideoDraft
-    let onExport: (UIImage?) -> Void
+    let onExport: (UIImage?, AudioFeatureTimeline?) -> Void
     let onCancel: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var artwork: UIImage?
     @State private var artworkIsLoaded = false
+    @State private var visualTimeline: AudioFeatureTimeline?
+    @State private var visualIsReady = false
     @State private var elapsed: TimeInterval = 0
 
     private var timeline: StoryRenderTimeline {
@@ -37,7 +40,8 @@ struct StoryDraftPreview: View {
                     let scale = min(proxy.size.width / original.width,
                                     proxy.size.height / original.height)
                     StorySceneView(request: draft.request, artwork: artwork,
-                                   frame: currentFrame)
+                                   frame: currentFrame,
+                                   visualTimeline: visualTimeline)
                         .scaleEffect(scale, anchor: .topLeading)
                         .frame(width: original.width * scale,
                                height: original.height * scale,
@@ -71,16 +75,21 @@ struct StoryDraftPreview: View {
                 }
 
                 Button {
-                    onExport(artwork)
+                    onExport(artwork, visualTimeline)
                 } label: {
                     Label("Gerar vídeo MP4", systemImage: "film")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(!artworkIsLoaded)
+                .disabled(!artworkIsLoaded || !visualIsReady)
 
-                Text("Prévia visual sem áudio. O arquivo final usará exatamente esta cena, estes timestamps e a capa carregada.")
+                if !visualIsReady {
+                    ProgressView("Analisando áudio para o Marble")
+                        .font(.caption)
+                }
+
+                Text("Prévia visual sem áudio. O MP4 usará o mesmo Marble reativo, capa, preset e timestamps.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -99,6 +108,37 @@ struct StoryDraftPreview: View {
                 guard !Task.isCancelled else { return }
                 artwork = loaded
                 artworkIsLoaded = true
+            }
+            .task(id: draft.id) {
+                guard draft.request.reactiveProgram != nil,
+                      let url = draft.request.reactiveSourceURL else {
+                    visualIsReady = true
+                    return
+                }
+                // Reuse the live cached envelope if available; otherwise
+                // decode on utility QoS. Failure produces the same neutral
+                // appearance in the preview and MP4.
+                if let cached = await draft.featureEngine.cachedTimeline(for: url) {
+                    visualTimeline = cached
+                    visualIsReady = true
+                    return
+                }
+                let worker = Task.detached(priority: .utility) {
+                    try AudioFeatureAnalyzer.analyzeFile(at: url)
+                }
+                let result: AudioFeatureTimeline?
+                do {
+                    result = try await withTaskCancellationHandler {
+                        try await worker.value
+                    } onCancel: {
+                        worker.cancel()
+                    }
+                } catch {
+                    result = nil
+                }
+                guard !Task.isCancelled else { return }
+                visualTimeline = result
+                visualIsReady = true
             }
         }
         .transaction { if reduceMotion { $0.disablesAnimations = true } }

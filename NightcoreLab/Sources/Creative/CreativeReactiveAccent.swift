@@ -11,6 +11,8 @@ struct CreativeReactiveAccent: View {
     let clock: PlaybackClock
     let theme: AppTheme
     let backgroundStyle: PlayerBackgroundStyle
+    let featureEngine: AudioFeatureEngine
+    let onParameters: (CreativeParameterFrame) -> Void
 
     @AppStorage("creativeReactionMode")
     private var reaction: CreativePreset.AudioReaction = .off
@@ -22,7 +24,6 @@ struct CreativeReactiveAccent: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-    @State private var featureEngine = AudioFeatureEngine()
     @State private var parameters = CreativeParameterFrame.neutral
     @State private var activeRunID = UUID()
 
@@ -56,8 +57,12 @@ struct CreativeReactiveAccent: View {
         let runID = UUID()
         activeRunID = runID
         parameters = .neutral
+        onParameters(.neutral)
         defer {
-            if activeRunID == runID { parameters = .neutral }
+            if activeRunID == runID {
+                parameters = .neutral
+                onParameters(.neutral)
+            }
         }
         guard canReact, let sourceURL else { return }
 
@@ -92,7 +97,10 @@ struct CreativeReactiveAccent: View {
                 let next = CreativeParameterResolver.resolve(
                     program: program, response: sample,
                     features: features, sourceTime: sourceTime)
-                if next != parameters { parameters = next }
+                if next != parameters {
+                    parameters = next
+                    onParameters(next)
+                }
             }
             do {
                 try await Task.sleep(for: playing ? .milliseconds(83) : .milliseconds(450))
