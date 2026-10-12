@@ -7,7 +7,9 @@ final class MusicIntelligenceEngine: Sendable {
 
     typealias Analyzer = @Sendable (URL) throws -> AudioFeatureTimeline
     typealias OnsetExtractor = @Sendable (AudioFeatureTimeline) throws -> [TimeInterval]
-    typealias RhythmExtractor = @Sendable (AudioFeatureTimeline) throws -> RhythmAnalysisResult
+    /// Rhythm v2 decodes the source itself at ~11.6 ms resolution; the energy
+    /// timeline bounds it to the same analyzed coverage.
+    typealias RhythmExtractor = @Sendable (URL, AudioFeatureTimeline) throws -> RhythmAnalysisResult
 
     private let cache: MusicAnalysisCache
     private let scheduler: AnalysisScheduler
@@ -23,7 +25,9 @@ final class MusicIntelligenceEngine: Sendable {
          extractOnsets: @escaping OnsetExtractor = { timeline in
              timeline.points.filter { $0.features.beatDetected }.map(\.time)
          },
-         extractRhythm: @escaping RhythmExtractor = { try RhythmAnalyzer.analyze(timeline: $0) }) {
+         extractRhythm: @escaping RhythmExtractor = { url, timeline in
+             try RhythmAnalyzer.analyzeFile(at: url, through: timeline.duration)
+         }) {
         self.cache = cache
         self.scheduler = scheduler
         self.identities = identities
@@ -104,15 +108,17 @@ final class MusicIntelligenceEngine: Sendable {
                 rhythmAnalysis: existingRhythm)
             await emit(rhythmPending)
 
-            // Stage 2: separate recoverable capability. Uses spectral bands
-            // already computed in the energy timeline, never a second FFT.
+            // Stage 2: separate recoverable capability. Rhythm v2 needs a finer
+            // onset envelope than the 83 ms visual timeline, so it decodes the
+            // same source once more; energy is never recomputed and the result
+            // is cached with its own algorithm version.
             let rhythmStatus: MusicAnalysisResult.CapabilityStatus
             var rhythm = existingRhythm
             if rhythm != nil {
                 rhythmStatus = .available
             } else {
                 do {
-                    let candidate = try extractRhythm(timeline)
+                    let candidate = try extractRhythm(source, timeline)
                     guard candidate.algorithmVersion == RhythmAnalysisResult.algorithmVersion,
                           candidate.isValid(through: timeline.duration) else {
                         throw AnalysisError.invalidRhythm
