@@ -20,6 +20,7 @@ processing graph, schedule render-loop timers, or change the current UI.
 local audio URL (same file loaded by AudioEngineManager)
     -> AudioFeatureEngine.prepareAudio(at:)
       -> detached .utility AudioFeatureAnalyzer (AVAudioFile read only)
+        -> AudioFFTSpectrum (reusable Accelerate/vDSP real FFT + Hann window)
         -> source-time AudioFeatureTimeline (12 Hz)
           -> AudioFeatureEngine.features(at: playbackClock.lyricTime)
             -> AudioVisualMapper.map(features:preset:)
@@ -47,8 +48,14 @@ The mapper is pure and can also map explicit `AudioFeatureFrame` input.
 
 ## Audio characteristics / limitations
 
-- Band levels are approximate RMS envelopes from inexpensive lowpass/split
-  filters (180 Hz and 2.2 kHz), not an FFT frequency spectrogram.
+- Band levels now use a Hann-windowed, single-precision real FFT via Apple's
+  Accelerate/vDSP, with bands separated at 180 Hz and 2.2 kHz.
+  Windows are reusable 2048–8192 samples, chosen by sample rate.
+  Band intensity is approximate, not professionally calibrated loudness.
+- Independent stereo-channel transforms are combined in power: anti-phase
+  channels no longer cancel before spectral analysis.
+- AVAudioFile is read in bounded chunks; no second AVAudioEngine, playback tap,
+  FFT on MainActor, or new third-party package is installed.
 - `beatDetected` is an energy-onset heuristic with a 230 ms refractory window,
   **not** a BPM measurement. Silent audio yields a neutral response.
 - File decoding is separate from playback, and is limited to the first

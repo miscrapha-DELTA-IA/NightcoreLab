@@ -53,9 +53,9 @@ enum AudioFeatureAnalysisError: LocalizedError {
     }
 }
 
-/// Coarse 12 Hz three-band envelope. First-order filters are a lightweight
-/// *approximation*, not an FFT or validated BPM estimator. Beat flags indicate
-/// energy onsets, not a tempo transcription.
+/// A ~12 Hz visual envelope: Accelerate/vDSP real FFT supplies three frequency
+/// bands and the original RMS/onset detector supplies energy and beat flags.
+/// Spectral bins are approximate bands, not BPM or a calibrated spectrum.
 ///
 /// Reading is opt-in and independent of the live audio graph; work should be
 /// launched from Task.detached(priority: .utility).
@@ -78,7 +78,11 @@ enum AudioFeatureAnalyzer {
         else { throw AudioFeatureAnalysisError.unsupportedAudio }
 
         let allowed = min(file.length, AVAudioFramePosition(maxAnalysisSeconds * sampleRate))
-        var accumulator = EnvelopeAccumulator(sampleRate: sampleRate, windowSize: windowSize)
+        // Analyze each stereo channel independently and combine power
+        // afterwards. Downmixing anti-phase channels into mono loses bass.
+        var accumulators = (0..<Int(file.processingFormat.channelCount)).map {
+            _ in EnvelopeAccumulator(sampleRate: sampleRate, windowSize: windowSize)
+        }
         var processed: AVAudioFramePosition = 0
 
         while processed < allowed {
@@ -87,17 +91,33 @@ enum AudioFeatureAnalyzer {
             try file.read(into: buffer, frameCount: count)
             let frames = Int(buffer.frameLength)
             guard frames > 0, let channels = buffer.floatChannelData else { break }
-            let stereo = file.processingFormat.channelCount == 2
             for frame in 0..<frames {
-                let sample = stereo
-                    ? 0.5 * (Double(channels[0][frame]) + Double(channels[1][frame]))
-                    : Double(channels[0][frame])
-                accumulator.consume(sample)
+                for channel in accumulators.indices {
+                    accumulators[channel].consume(Double(channels[channel][frame]))
+                }
             }
             processed += AVAudioFramePosition(frames)
         }
-        accumulator.finish()
-        return AudioFeatureTimeline(points: accumulator.points,
+        for channel in accumulators.indices { accumulators[channel].finish() }
+        let reference = accumulators[0].points
+        if accumulators.count == 1 {
+            return AudioFeatureTimeline(points: reference,
+                                        duration: Double(processed) / sampleRate)
+        }
+        let combined: [AudioFeaturePoint] = reference.indices.map { index in
+            let bands = accumulators.map { $0.points[index].features }
+            func rms(_ level: (AudioFeatures) -> Double) -> Double {
+                sqrt(bands.reduce(0.0) { $0 + pow(level($1), 2) } / Double(bands.count))
+            }
+            return AudioFeaturePoint(
+                time: reference[index].time,
+                features: AudioFeatures(bass: rms { $0.bass }, mid: rms { $0.mid },
+                                        treble: rms { $0.treble },
+                                        energy: rms { $0.energy },
+                                        beatDetected: bands.contains { $0.beatDetected })
+            )
+        }
+        return AudioFeatureTimeline(points: combined,
                                     duration: Double(processed) / sampleRate)
     }
 
@@ -122,16 +142,10 @@ enum AudioFeatureAnalyzer {
     private struct EnvelopeAccumulator {
         let sampleRate: Double
         let windowSize: Int
-        private let bassCoefficient: Double
-        private let midCoefficient: Double
+        private let spectrum: AudioFFTSpectrum?
 
-        private var bassFilter = 0.0
-        private var midFilter = 0.0
         private var totalFrames = 0
         private var windowCount = 0
-        private var bassPower = 0.0
-        private var midPower = 0.0
-        private var treblePower = 0.0
         private var fullPower = 0.0
         private var rollingEnergy = 0.0
         private var lastOnset = -1.0
@@ -140,20 +154,12 @@ enum AudioFeatureAnalyzer {
         init(sampleRate: Double, windowSize: Int) {
             self.sampleRate = sampleRate
             self.windowSize = windowSize
-            bassCoefficient = 1 - exp(-2 * .pi * 180 / sampleRate)
-            midCoefficient = 1 - exp(-2 * .pi * 2200 / sampleRate)
+            spectrum = AudioFFTSpectrum(sampleRate: sampleRate)
         }
 
         mutating func consume(_ sample: Double) {
             let x = sample.isFinite ? min(max(sample, -1), 1) : 0
-            bassFilter += bassCoefficient * (x - bassFilter)
-            midFilter += midCoefficient * (x - midFilter)
-            let bass = bassFilter
-            let mid = midFilter - bassFilter
-            let treble = x - midFilter
-            bassPower += bass * bass
-            midPower += mid * mid
-            treblePower += treble * treble
+            spectrum?.consume(Float(x))
             fullPower += x * x
             totalFrames += 1
             windowCount += 1
@@ -177,16 +183,14 @@ enum AudioFeatureAnalyzer {
                 time - lastOnset >= 0.23
             if onset { lastOnset = time }
             rollingEnergy = rollingEnergy * 0.82 + energy * 0.18
+            let bands = spectrum?.bands() ?? (bass: 0, mid: 0, treble: 0)
             points.append(AudioFeaturePoint(
                 time: time,
-                features: AudioFeatures(bass: level(bassPower), mid: level(midPower),
-                                        treble: level(treblePower), energy: energy,
+                features: AudioFeatures(bass: bands.bass, mid: bands.mid,
+                                        treble: bands.treble, energy: energy,
                                         beatDetected: onset)
             ))
             windowCount = 0
-            bassPower = 0
-            midPower = 0
-            treblePower = 0
             fullPower = 0
         }
     }
