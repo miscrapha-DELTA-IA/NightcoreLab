@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 import UIKit
 import XCTest
 @testable import NightcoreLab
@@ -25,7 +24,7 @@ final class TypographyExportParityTests: XCTestCase {
 
     private func request(style: TypographyStyle, font: TypographyFont,
                          reactive: Bool = false,
-                         background: BackgroundStyle = .marble) throws -> StoryVideoRequest {
+                         background: NightcoreLab.BackgroundStyle = .marble) throws -> StoryVideoRequest {
         let program = reactive ? CreativePresetCatalog.effectiveProgram(
             id: "bass-pulse", theme: .acid, typography: style,
             background: .turbulent, reaction: .responsive) : nil

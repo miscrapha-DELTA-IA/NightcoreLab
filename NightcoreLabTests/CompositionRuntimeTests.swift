@@ -200,14 +200,26 @@ final class CompositionRuntimeTests: XCTestCase {
             marblePhase: 3, playbackTime: 1, sourceDuration: 10,
             speed: 1, lines: [], lyricOffset: 0,
             typography: .neon, includeAudio: false)
-        XCTAssertNil(request.visualComposition)
+        // Since the 10A/10C integration a neutral composition is always frozen
+        // (reaction .off): same neutral Marble, single runtime path.
+        XCTAssertNotNil(request.visualComposition)
+        XCTAssertEqual(request.visualComposition?.program.preset.audioReaction, .off)
+        let frame = StoryRenderTimeline(
+            request: request, profile: .balanced).frame(at: 1)
         let scene = StorySceneView(
-            request: request, artwork: nil,
-            frame: StoryRenderTimeline(
-                request: request, profile: .balanced).frame(at: 1),
+            request: request, artwork: nil, frame: frame,
             visualTimeline: timeline())
-        XCTAssertNil(scene.resolvedCompositionFrame)
+        XCTAssertNotNil(scene.resolvedCompositionFrame)
         XCTAssertEqual(scene.reactiveDistortion, 0)
+        XCTAssertEqual(scene.beatPulse, 0)
+        // Direct requests without a runtime keep the legacy route.
+        var legacy = request
+        legacy.compositionRuntime = nil
+        let directScene = StorySceneView(
+            request: legacy, artwork: nil, frame: frame,
+            visualTimeline: timeline())
+        XCTAssertNil(directScene.resolvedCompositionFrame)
+        XCTAssertEqual(directScene.reactiveDistortion, 0)
     }
 
     @MainActor

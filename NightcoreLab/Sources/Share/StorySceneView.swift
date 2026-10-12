@@ -100,7 +100,9 @@ struct StorySceneView: View {
     var body: some View {
         ZStack {
             background
+                .storyLayer(.background, frame: resolvedCompositionFrame)
             Color.black.opacity(0.40)
+                .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             VStack(spacing: 0) {
                 HStack {
@@ -122,6 +124,7 @@ struct StorySceneView: View {
                 } else {
                     Spacer(minLength: 70)
                     lyricsCard
+                        .storyLayer(.typography, frame: resolvedCompositionFrame)
                     Spacer(minLength: 70)
                 }
 
@@ -167,6 +170,7 @@ struct StorySceneView: View {
         VStack(spacing: 13) {
             artworkTile
                 .frame(width: 230, height: 230)
+                .storyLayer(.artwork, frame: resolvedCompositionFrame)
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
             VStack(spacing: 3) {
@@ -322,5 +326,24 @@ private struct StoryLyricLine: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
+    }
+}
+
+// The view only APPLIES resolved layer values. Identity is a true bypass, so
+// the default composition keeps the exact legacy SwiftUI hierarchy (pixels).
+private extension View {
+    @ViewBuilder
+    func storyLayer(_ kind: PresetLayerKind,
+                    frame: ResolvedCompositionFrame?) -> some View {
+        let values = ResolvedLayerFrame.storyModifiers(kind: kind, frame: frame)
+        if values.isIdentity {
+            self
+        } else {
+            self
+                .opacity(values.opacity)
+                .scaleEffect(values.scale, anchor: .center)
+                .offset(x: values.offsetX, y: values.offsetY)
+                .rotationEffect(.radians(values.rotation))
+        }
     }
 }

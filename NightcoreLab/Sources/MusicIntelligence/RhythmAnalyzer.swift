@@ -54,7 +54,7 @@ enum RhythmAnalyzer {
             let frames = Int(buffer.frameLength)
             guard frames > 0, let data = buffer.floatChannelData else { break }
             builder.consume((0..<channels).map {
-                UnsafeBufferPointer(start: data[$0], count: frames)
+                UnsafeBufferPointer<Float>(start: data[$0], count: frames)
             })
             processed += AVAudioFramePosition(frames)
         }

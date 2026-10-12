@@ -79,7 +79,9 @@ struct RhythmFrame: Equatable, Sendable {
         let phase = min(max(0, elapsed / interval), 1.0.nextDown)
         var barBeat: Int?
         var barPhase: Double?
-        if let first = beats.firstIndex(where: \.isDownbeat) {
+        // Downbeats are periodic (every 4th beat), so the first one is within
+        // the first bar: O(1) per render frame instead of scanning all beats.
+        if let first = beats.prefix(4).firstIndex(where: \.isDownbeat) {
             let position = ((index - first) % 4 + 4) % 4
             barBeat = position
             barPhase = (Double(position) + phase) / 4

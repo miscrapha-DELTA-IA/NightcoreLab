@@ -88,7 +88,8 @@ enum StoryRequestBuilder {
                      typographyStyle: TypographyStyle = .neon,
                      includeAudio: Bool,
                      reactiveProgram: CreativeVisualProgram? = nil,
-                     reactiveSourceURL: URL? = nil) throws -> StoryVideoRequest {
+                     reactiveSourceURL: URL? = nil,
+                     creativePresetID: String = CreativePresetCatalog.defaultID) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
         let safeSpeed = max(Double(speed), 0.1)
         let start = min(max(playbackTime, 0), sourceDuration)
@@ -108,8 +109,15 @@ enum StoryRequestBuilder {
         )
         // One immutable source of truth for preview and the StoryFrameRenderer
         // scene. Do not rebuild from a potentially changed preset during export.
+        // Always freeze a composition (ported from Stage 10A): with audio
+        // reaction off, the selected recipe with reaction .off resolves to the
+        // neutral Marble, so pixels match the legacy path while layers and
+        // typography still flow through the single runtime.
+        let effective = reactiveProgram ?? CreativePresetCatalog.effectiveProgram(
+            id: creativePresetID, theme: theme, typography: typographyStyle,
+            background: playerStyle, reaction: .off)
         request.visualComposition = CompositionRuntime.freeze(
-            program: reactiveProgram, sourceStart: start,
+            program: effective, sourceStart: start,
             speed: Double(speed), duration: seconds)
         request.preparedLyrics = Dictionary(
             lines.map { ($0.id, TypographyPreparedLine($0)) },
