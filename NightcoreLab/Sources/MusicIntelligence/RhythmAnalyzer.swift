@@ -155,7 +155,7 @@ private extension Array where Element == AudioFeaturePoint {
             let mid = (low + high) / 2
             if self[mid].time < time { low = mid + 1 } else { high = mid }
         }
-        return min(max(0, low), count - 1)
+        return Swift.min(Swift.max(0, low), count - 1)
     }
 }
 
