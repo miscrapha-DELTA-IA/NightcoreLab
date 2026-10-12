@@ -110,6 +110,8 @@ struct ContentView: View {
 
     /// Estilo persistente: Turbulent é o padrão, mas o utilizador pode escolher outro.
     @AppStorage("playerBackgroundStyle") private var bgStyleRaw = PlayerBackgroundStyle.turbulent.rawValue
+    @AppStorage("creativeReactionMode")
+    private var creativeReactionMode: CreativePreset.AudioReaction = .off
 
     private var bgStyle: PlayerBackgroundStyle {
         PlayerBackgroundStyle(rawValue: bgStyleRaw) ?? .turbulent
@@ -823,9 +825,37 @@ struct ContentView: View {
         VStack(spacing: DS.Spacing.l) {
             pitchToggle
             sliders
+            creativeReactionControl
         }
         .disabled(!hasTrack)
         .opacity(hasTrack ? 1 : 0.4)
+    }
+
+    /// Optional, local-source music reactive glow. Off by default.
+    private var creativeReactionControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.path")
+                    .foregroundStyle(currentTheme.accent)
+                Text("RITMO VISUAL")
+                    .font(.caption.weight(.semibold))
+                    .tracking(1)
+                Spacer()
+            }
+            Picker("Ritmo visual", selection: $creativeReactionMode) {
+                Text("Desligado").tag(CreativePreset.AudioReaction.off)
+                Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
+            }
+            .pickerStyle(.segmented)
+            Text("Brilho nas bordas do player, sincronizado ao áudio. Desativado em Pouca Energia e com Reduzir Movimento.")
+                .font(.caption2)
+                .foregroundStyle(DS.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .glassSurface(RoundedRectangle(cornerRadius: DS.Radius.medium),
+                      theme: currentTheme, depth: 0.5)
     }
 
     private var pitchToggle: some View {

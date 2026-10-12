@@ -12,19 +12,37 @@ struct AudioFeatureTimeline: Sendable {
     let points: [AudioFeaturePoint]
     let duration: TimeInterval
 
+    /// Index of the first point strictly later than the supplied media time.
+    /// Used for both the envelope and pulse queries.
+    private func upperBound(_ time: TimeInterval) -> Int {
+        var low = 0
+        var high = points.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if points[middle].time <= time { low = middle + 1 }
+            else { high = middle }
+        }
+        return low
+    }
+
     /// Binary search: O(log n) even on multi-minute songs.
     func features(at time: TimeInterval) -> AudioFeatures {
         guard time.isFinite, time >= 0, time <= duration, !points.isEmpty
         else { return .silent }
-        var low = 0
-        var high = points.count
-        while low < high {
-            let mid = low + (high - low) / 2
-            if points[mid].time <= time { low = mid + 1 }
-            else { high = mid }
+        return points[max(0, upperBound(time) - 1)].features
+    }
+
+    /// Event pulses between two *source-time* snapshots. A visual reader may
+    /// drop intermediate envelope frames without losing beat onsets.
+    func beatCount(after start: TimeInterval, through end: TimeInterval) -> Int {
+        guard start.isFinite, end.isFinite,
+              start >= 0, end <= duration, end > start else { return 0 }
+        let begin = upperBound(start)
+        let finish = upperBound(end)
+        guard begin < finish else { return 0 }
+        return points[begin..<finish].reduce(0) {
+            $0 + ($1.features.beatDetected ? 1 : 0)
         }
-        let index = max(0, low - 1)
-        return points[index].features
     }
 }
 

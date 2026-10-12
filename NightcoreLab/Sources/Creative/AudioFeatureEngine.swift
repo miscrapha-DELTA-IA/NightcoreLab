@@ -6,6 +6,7 @@ import Foundation
 actor AudioFeatureEngine {
     private var current: AudioFeatures = .silent
     private var timeline: AudioFeatureTimeline?
+    private var preparedURL: URL?
     private var throttle = VisualResponseThrottle()
     private var generation = 0
     private var analysisTask: Task<AudioFeatureTimeline, Error>?
@@ -20,6 +21,7 @@ actor AudioFeatureEngine {
         analysisTask = nil
         generation &+= 1
         timeline = nil
+        preparedURL = nil
         throttle.reset()
         let features = AudioFeatures(
             bass: frame.bassLevel,
@@ -37,10 +39,17 @@ actor AudioFeatureEngine {
     /// Expensive file decoding and envelope processing run at utility QoS.
     /// Caller cancellation and track replacement cancel stale computations.
     func prepareAudio(at url: URL) async throws {
+        // Return to a previously analyzed file without redecoding.
+        if preparedURL == url && timeline != nil {
+            throttle.reset()
+            lastVisualSampleTime = nil
+            return
+        }
         analysisTask?.cancel()
         generation &+= 1
         let request = generation
         timeline = nil
+        preparedURL = nil
         current = .silent
         throttle.reset()
 
@@ -61,6 +70,7 @@ actor AudioFeatureEngine {
         try Task.checkCancellation()
         guard request == generation else { return }
         timeline = result
+        preparedURL = url
         analysisTask = nil
     }
 
@@ -89,6 +99,7 @@ actor AudioFeatureEngine {
         analysisTask = nil
         generation &+= 1
         timeline = nil
+        preparedURL = nil
         current = .silent
         throttle.reset()
     }
