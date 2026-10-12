@@ -23,6 +23,8 @@ struct CreativeExperiencePreset: Codable, Equatable, Sendable, Identifiable {
     var typographyPreset: TypographyPreset { package.typographyPreset }
     var composition: VisualComposition { package.composition }
     var author: String { package.author }
+    /// Stage 12 chain: experience → program → material → MarbleUniforms.
+    var visualMaterial: VisualMaterial { .marble(for: composition.program) }
 
     init(package: CreativePresetPackage,
          description: String = "",

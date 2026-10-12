@@ -423,7 +423,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         id: creativePresetID, theme: appTheme,
                         typography: karaokeTypography,
                         background: playerBackgroundStyle, reaction: reactionMode),
-                reactiveSourceURL: audio.visualAnalysisURL
+                reactiveSourceURL: audio.visualAnalysisURL,
+                creativePresetID: creativePresetID
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,
