@@ -172,6 +172,9 @@ struct KaraokeLyricsView: View {
     @Environment(LyricsStore.self) private var store
     @AppStorage("story.lyricTypography") private var typography: StoryLyricTypography = .classic
     @AppStorage("karaokeTypography") private var typographyStyle: KaraokeTypographyStyle = .neon
+    @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var followsPlayback = true
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
@@ -190,8 +193,11 @@ struct KaraokeLyricsView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 20) {
+                    LazyVStack(spacing: 24) {
                         ForEach(store.lines) { line in
+                            let emphasis = KaraokeFocusResolver.emphasis(
+                                lineID: line.id, activeID: store.activeLineIndex,
+                                mode: focusMode)
                             KaraokeLineView(
                                 line: line,
                                 status: status(of: line),
@@ -204,28 +210,94 @@ struct KaraokeLyricsView: View {
                                 fontSize: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
                                 typographyStyle: typographyStyle
                             )
-                            .id(line.id)
                             .frame(maxWidth: .infinity)
+                            .opacity(emphasis.opacity)
+                            .scaleEffect(emphasis.scale)
+                            .overlay(alignment: .leading) {
+                                if emphasis.showsIndicator && !line.words.isEmpty {
+                                    Capsule()
+                                        .fill(accent ?? theme.fill)
+                                        .frame(width: 3, height: 22)
+                                        .offset(x: -13)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .id(line.id)
                             .contentShape(Rectangle())
-                            .onTapGesture { store.seekHandler?(line.start) }
+                            .onTapGesture {
+                                followsPlayback = true
+                                store.seekHandler?(line.start)
+                                scrollTo(line.id, proxy: proxy, animated: true)
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(line.text)
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityHint("Toque para reproduzir a partir desta linha")
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.30),
+                                       value: store.activeLineIndex)
                         }
                     }
                     .padding(.horizontal, inset)
                 }
                 .scrollIndicators(.hidden)
-                .contentMargins(.vertical,
-                                KaraokeLayoutMetrics.verticalMargin(for: viewport.size.height),
-                                for: .scrollContent)
-                .onChange(of: store.activeLineIndex) { _, new in
-                    guard let new else { return }
-                    withAnimation(.smooth(duration: 0.45)) {
-                        proxy.scrollTo(new, anchor: .center)
+                .contentMargins(
+                    .vertical,
+                    focusMode == .spotlight
+                        ? KaraokeFocusResolver.scrollInset(for: viewport.size.height)
+                        : KaraokeLayoutMetrics.verticalMargin(for: viewport.size.height),
+                    for: .scrollContent
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 14)
+                        .onChanged { _ in followsPlayback = false }
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    if !followsPlayback, store.activeLineIndex != nil {
+                        Button {
+                            followsPlayback = true
+                            if let active = store.activeLineIndex {
+                                scrollTo(active, proxy: proxy, animated: true)
+                            }
+                        } label: {
+                            Label("Voltar à letra ao vivo", systemImage: "scope")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 11)
+                                .background(.regularMaterial, in: Capsule())
+                                .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 15)
+                        .accessibilityIdentifier("karaoke.returnToLive")
                     }
+                }
+                .onChange(of: store.activeLineIndex) { _, new in
+                    guard followsPlayback, let new else { return }
+                    scrollTo(new, proxy: proxy, animated: true)
+                }
+                .onChange(of: store.trackID) { _, _ in followsPlayback = true }
+                .task(id: store.trackID) {
+                    // Reopen at the current line, even if the active index
+                    // was already known before this view was mounted.
+                    await Task.yield()
+                    guard !Task.isCancelled, let active = store.activeLineIndex else { return }
+                    scrollTo(active, proxy: proxy, animated: false)
                 }
             }
         }
         .onAppear { store.startTracking() }
         .onDisappear { store.stopTracking() }
+    }
+
+    private func scrollTo(_ id: Int, proxy: ScrollViewProxy, animated: Bool) {
+        if animated && !reduceMotion {
+            withAnimation(.smooth(duration: 0.40)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(id, anchor: .center)
+        }
     }
 
     private func status(of line: TimedLyricLine) -> KaraokeLineView.Status {
