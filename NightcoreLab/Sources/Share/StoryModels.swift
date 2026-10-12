@@ -54,6 +54,10 @@ struct StoryVideoRequest: Sendable {
     let lyricOffset: TimeInterval
     let typography: StoryLyricTypography
     let includeAudio: Bool
+    /// Frozen declarative recipe; nil means the pre-existing Marble appearance.
+    let reactiveProgram: CreativeVisualProgram?
+    /// The same local source file already loaded by the player.
+    let reactiveSourceURL: URL?
 
     /// Source audio and word timings refer to the original unaccelerated timeline.
     var frameCount: Int { max(1, Int(ceil(duration * Double(Self.fps)))) }
@@ -88,7 +92,9 @@ enum StoryRequestBuilder {
                      playerStyle: PlayerBackgroundStyle, karaokeBackground: BackgroundStyle,
                      marblePhase: Float, playbackTime: TimeInterval, sourceDuration: TimeInterval,
                      speed: Float, lines: [TimedLyricLine], lyricOffset: TimeInterval,
-                     typography: StoryLyricTypography, includeAudio: Bool) throws -> StoryVideoRequest {
+                     typography: StoryLyricTypography, includeAudio: Bool,
+                     reactiveProgram: CreativeVisualProgram? = nil,
+                     reactiveSourceURL: URL? = nil) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
         let safeSpeed = max(Double(speed), 0.1)
         let start = min(max(playbackTime, 0), sourceDuration)
@@ -101,7 +107,9 @@ enum StoryRequestBuilder {
             marbleSpeed: mode == .lyrics ? 0.8 : 0.6,
             playbackTime: start, speed: speed, duration: seconds,
             totalSourceDuration: sourceDuration, lines: lines, lyricOffset: lyricOffset,
-            typography: typography, includeAudio: includeAudio
+            typography: typography, includeAudio: includeAudio,
+            reactiveProgram: reactiveProgram,
+            reactiveSourceURL: reactiveSourceURL
         )
     }
 }

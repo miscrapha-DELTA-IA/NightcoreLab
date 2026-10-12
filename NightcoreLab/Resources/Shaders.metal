@@ -47,17 +47,24 @@ static inline float3 ramp(float t, float3 c1, float3 c2, float3 c3) {
 [[ stitchable ]]
 half4 liquidMarble(float2 position, half4 currentColor,
                    float2 size, float time,
-                   half4 color1, half4 color2, half4 color3)
+                   half4 color1, half4 color2, half4 color3,
+                   float reactiveDistortion)
 {
     const float3 A = float3(color1.rgb);
     const float3 B = float3(color2.rgb);
     const float3 C = float3(color3.rgb);
 
+    // 0 preserves the original marble exactly. A bounded uniform increases
+    // the EXISTING domain warp; no extra noise octaves or shader passes.
+    const float strength = clamp(reactiveDistortion, 0.0f, 1.0f);
+    const float warp = 3.2f * (1.0f + 0.28f * strength);
+
     // Coordenadas normalizadas pela menor dimensão (sem esticar em telas altas).
     float2 uv = (position - 0.5 * size) / min(size.x, size.y) * 1.9;
 
     // Redemoinho global: gira o domínio mais perto do centro -> espirais.
-    float ang = exp(-0.5 * dot(uv, uv)) * (1.1 * sin(time * 0.2) + 0.9);
+    float ang = exp(-0.5 * dot(uv, uv)) * (1.1 * sin(time * 0.2) + 0.9)
+                * (1.0 + 0.16 * strength);
     float ca = cos(ang), sa = sin(ang);
     uv = float2(uv.x * ca - uv.y * sa, uv.x * sa + uv.y * ca);
 
@@ -65,9 +72,9 @@ half4 liquidMarble(float2 position, half4 currentColor,
     float t = time * 0.15;
     float2 q = float2(fbm<3>(uv + float2(0.0, t)),
                       fbm<3>(uv + float2(5.2 - t, 1.3)));
-    float2 r = float2(fbm<3>(uv + 3.2 * q + float2(1.7 + 0.6 * t, 9.2)),
-                      fbm<3>(uv + 3.2 * q + float2(8.3, 2.8 - 0.5 * t)));
-    float f = fbm<4>(uv + 3.2 * r);
+    float2 r = float2(fbm<3>(uv + warp * q + float2(1.7 + 0.6 * t, 9.2)),
+                      fbm<3>(uv + warp * q + float2(8.3, 2.8 - 0.5 * t)));
+    float f = fbm<4>(uv + warp * r);
 
     // Campo escalar final (contraste alto) e quantização em níveis.
     float v = saturate((f * 1.5 + r.x * 0.6 + q.y * 0.25 - 0.35));

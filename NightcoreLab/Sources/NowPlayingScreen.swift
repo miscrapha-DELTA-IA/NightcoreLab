@@ -94,6 +94,19 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var marbleStartedAt = Date()
+    @State private var visualEngine = AudioFeatureEngine()
+    @State private var liveCreativeFrame = CreativeParameterFrame.neutral
+    @State private var frozenCreativeDistortion: Double?
+    @AppStorage("creativeReactionMode")
+    private var reactionMode: CreativePreset.AudioReaction = .off
+    @AppStorage(CreativePresetCatalog.storageKey)
+    private var creativePresetID = CreativePresetCatalog.defaultID
+    @AppStorage("karaokeTypography")
+    private var karaokeTypography: KaraokeTypographyStyle = .neon
+
+    private var marbleDistortion: Double {
+        frozenCreativeDistortion ?? liveCreativeFrame.marbleDistortion
+    }
     @State private var isBuildingShare = false
     @State private var frozenShareMarblePhase: Float?
     @State private var shareResult: ShareExportPayload?
@@ -119,7 +132,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                     theme: MarbleTheme(appTheme: appTheme),
                     coverURL: track.coverURL,
                     marbleStartedAt: marbleStartedAt,
-                    frozenTime: frozenShareMarblePhase
+                    frozenTime: frozenShareMarblePhase,
+                    reactiveDistortion: marbleDistortion
                 )
                 .transition(.opacity)
             } else {
@@ -131,7 +145,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                     speed: 0.6,
                     maxFPS: 30,
                     frozenTime: frozenShareMarblePhase,
-                    startedAt: marbleStartedAt
+                    startedAt: marbleStartedAt,
+                    reactiveDistortion: marbleDistortion
                 )
                 .overlay(Color.black.opacity(0.4))
                 .allowsHitTesting(false)
@@ -244,9 +259,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .sheet(item: $storyDraft) { draft in
             StoryDraftPreview(
                 draft: draft,
-                onExport: { artwork in
+                onExport: { artwork, visualTimeline in
                     storyDraft = nil
-                    exportApprovedDraft(draft, artwork: artwork)
+                    exportApprovedDraft(draft, artwork: artwork,
+                                        visualTimeline: visualTimeline)
                 },
                 onCancel: { storyDraft = nil }
             )
@@ -311,7 +327,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 PlayerBackgroundView(style: playerBackgroundStyle,
                                      imageURL: track.coverURL,
                                      theme: appTheme,
-                                     frozenTime: frozenShareMarblePhase)
+                                     frozenTime: frozenShareMarblePhase,
+                                     reactiveDistortion: marbleDistortion)
                     .id(track.coverURL)
                     .allowsHitTesting(false)
             }
@@ -324,13 +341,18 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 sourceURL: audio.visualAnalysisURL,
                 clock: clock,
                 theme: appTheme,
-                backgroundStyle: playerBackgroundStyle
+                backgroundStyle: playerBackgroundStyle,
+                featureEngine: visualEngine,
+                onParameters: { next in
+                    if liveCreativeFrame != next { liveCreativeFrame = next }
+                }
             )
         }
     }
 
     /// Freeze only the live visuals while exporting. The audio keeps playing.
     private func beginShare(at instant: Date) {
+        frozenCreativeDistortion = liveCreativeFrame.marbleDistortion
         frozenShareMarblePhase = Float(max(0, instant.timeIntervalSince(marbleStartedAt)) *
                                        (showsKaraoke ? 0.8 : 0.6))
         isBuildingShare = true
@@ -339,6 +361,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     private func finishShare() {
         isBuildingShare = false
         frozenShareMarblePhase = nil
+        frozenCreativeDistortion = nil
     }
 
     /// Congela a fase exibida agora; nunca reinicia o áudio nem cria outro shader animado.
@@ -384,7 +407,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 playbackTime: audio.playbackTime, sourceDuration: audio.duration,
                 speed: audio.speed, lines: matchedLyrics,
                 lyricOffset: lyricsStore.userOffset, typography: storyTypography,
-                includeAudio: includeAudio
+                includeAudio: includeAudio,
+                reactiveProgram: (reactionMode == .off ||
+                                  reduceMotion ||
+                                  ProcessInfo.processInfo.isLowPowerModeEnabled)
+                    ? nil : CreativePresetCatalog.effectiveProgram(
+                        id: creativePresetID, theme: appTheme,
+                        typography: karaokeTypography,
+                        background: playerBackgroundStyle, reaction: reactionMode),
+                reactiveSourceURL: audio.visualAnalysisURL
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,
@@ -393,7 +424,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             storyDraft = StoryVideoDraft(
                 request: frame,
                 audioSource: frozenAudio,
-                profile: StoryEncodingProfile.recommended()
+                profile: StoryEncodingProfile.recommended(),
+                featureEngine: visualEngine
             )
         } catch {
             shareErrorDetails = error.localizedDescription
@@ -401,7 +433,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
     }
 
-    private func exportApprovedDraft(_ draft: StoryVideoDraft, artwork: UIImage?) {
+    private func exportApprovedDraft(_ draft: StoryVideoDraft, artwork: UIImage?,
+                                     visualTimeline: AudioFeatureTimeline?) {
         guard !isBuildingShare else { return }
         storyProgress = 0
         beginShare(at: Date())
@@ -414,6 +447,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 let url = try await StoryVideoExporter.export(
                     draft.request, audioSource: draft.audioSource,
                     artwork: artwork, profile: draft.profile,
+                    visualTimeline: visualTimeline,
                     progress: { storyProgress = $0 }
                 )
                 try Task.checkCancellation()
@@ -581,6 +615,7 @@ private struct BackgroundLayer: View {
     let coverURL: URL?
     let marbleStartedAt: Date
     var frozenTime: Float? = nil
+    var reactiveDistortion: Double = 0
 
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
@@ -591,7 +626,8 @@ private struct BackgroundLayer: View {
                 TurbulentMarbleView(theme: theme, speed: 0.8,
                                     maxFPS: lowPower ? 30 : 60,
                                     frozenTime: frozenTime,
-                                    startedAt: marbleStartedAt)
+                                    startedAt: marbleStartedAt,
+                                    reactiveDistortion: reactiveDistortion)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)

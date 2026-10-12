@@ -153,6 +153,7 @@ enum StoryVideoExporter {
     /// profile. Do not fetch artwork again or change FPS after preview approval.
     static func export(_ request: StoryVideoRequest, audioSource: StoryAudioSource?,
                        artwork: UIImage?, profile: StoryEncodingProfile,
+                       visualTimeline: AudioFeatureTimeline? = nil,
                        progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         try Task.checkCancellation()
         var audioURL: URL?
@@ -165,7 +166,10 @@ enum StoryVideoExporter {
         }
         defer { if let audioURL { try? FileManager.default.removeItem(at: audioURL) } }
         progress(0.12)
-        let videoURL = try await renderVideo(request, artwork: artwork, profile: profile) {
+        let videoURL = try await renderVideo(
+            request, artwork: artwork, profile: profile,
+            visualTimeline: visualTimeline
+        ) {
             progress(0.12 + 0.78 * $0)
         }
         guard let audioURL else {
@@ -187,6 +191,7 @@ enum StoryVideoExporter {
     private static func renderVideo(
         _ request: StoryVideoRequest, artwork: UIImage?,
         profile: StoryEncodingProfile,
+        visualTimeline: AudioFeatureTimeline?,
         onProgress: @escaping @MainActor (Double) -> Void
     ) async throws -> URL {
         let timeline = StoryRenderTimeline(request: request, profile: profile)
@@ -204,7 +209,8 @@ enum StoryVideoExporter {
                 let cgImage: CGImage = try autoreleasepool {
                     try StoryFrameRenderer.render(
                         request: request, artwork: artwork,
-                        frame: frame, profile: profile
+                        frame: frame, profile: profile,
+                        visualTimeline: visualTimeline
                     )
                 }
                 try await encoder.append(cgImage, at: index)

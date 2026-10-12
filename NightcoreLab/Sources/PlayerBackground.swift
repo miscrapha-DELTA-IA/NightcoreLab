@@ -50,6 +50,7 @@ struct PlayerBackgroundView: View {
     let imageURL: URL?
     let theme: AppTheme
     var frozenTime: Float? = nil
+    var reactiveDistortion: Double = 0
 
     var body: some View {
         ZStack {
@@ -61,7 +62,8 @@ struct PlayerBackgroundView: View {
                     speed: 0.6,
                     maxFPS: 30,
                     extendIntoSafeArea: false,
-                    frozenTime: frozenTime
+                    frozenTime: frozenTime,
+                    reactiveDistortion: reactiveDistortion
                 )
                 .overlay(Color.black.opacity(0.4))
             } else if let imageURL {

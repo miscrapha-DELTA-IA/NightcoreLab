@@ -6,6 +6,7 @@ struct StorySceneView: View {
     let request: StoryVideoRequest
     let artwork: UIImage?
     let frame: StoryRenderFrame
+    let visualTimeline: AudioFeatureTimeline?
 
     /// Backwards-compatible initializer for existing StorySceneView users.
     /// Encoders and previews use the shared frame-grid initializer instead.
@@ -13,13 +14,24 @@ struct StorySceneView: View {
         self.init(request: request, artwork: artwork,
                   frame: StoryRenderTimeline(
                     request: request, profile: .balanced
-                  ).frame(at: elapsed))
+                  ).frame(at: elapsed), visualTimeline: nil)
     }
 
-    init(request: StoryVideoRequest, artwork: UIImage?, frame: StoryRenderFrame) {
+    init(request: StoryVideoRequest, artwork: UIImage?, frame: StoryRenderFrame,
+         visualTimeline: AudioFeatureTimeline? = nil) {
         self.request = request
         self.artwork = artwork
         self.frame = frame
+        self.visualTimeline = visualTimeline
+    }
+
+    /// One deterministic query for both the scrub preview and the MP4 encoder.
+    /// Null/offline feature sources produce exactly the original shader.
+    var reactiveDistortion: Double {
+        CreativeMarbleFrameResolver.resolve(
+            program: request.reactiveProgram,
+            timeline: visualTimeline,
+            sourceTime: frame.sourceTime).marbleDistortion
     }
 
     private var elapsed: TimeInterval { frame.elapsed }
@@ -88,7 +100,8 @@ struct StorySceneView: View {
         } else {
             TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
                                 speed: 0, maxFPS: 1, isPaused: true,
-                                extendIntoSafeArea: false, frozenTime: phase)
+                                extendIntoSafeArea: false, frozenTime: phase,
+                                reactiveDistortion: reactiveDistortion)
                 .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
         }
     }

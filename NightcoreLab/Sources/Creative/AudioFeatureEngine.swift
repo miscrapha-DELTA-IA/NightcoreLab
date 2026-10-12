@@ -77,6 +77,11 @@ actor AudioFeatureEngine {
         analysisTask = nil
     }
 
+    /// Export can reuse cached, immutable feature samples for this exact URL.
+    func cachedTimeline(for url: URL) -> AudioFeatureTimeline? {
+        preparedURL == url ? timeline : nil
+    }
+
     /// Seekable feature envelope, aligned to EnginePlaybackClock.lyricTime,
     /// which already uses original file time regardless of playback speed.
     func features(at sourceTime: TimeInterval) -> AudioFeatures {
