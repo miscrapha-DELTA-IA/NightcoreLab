@@ -619,6 +619,7 @@ private struct BlurredCover: View {
 private struct KaraokeBottomBar: View {
     @Binding var theme: AppTheme
     @Binding var background: BackgroundStyle
+    @AppStorage("karaokeTypography") private var typography: KaraokeTypographyStyle = .neon
     @Namespace private var ns
 
     var body: some View {
@@ -650,6 +651,21 @@ private struct KaraokeBottomBar: View {
             }
 
             Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 26)
+
+            Menu {
+                Picker("Tipografia", selection: $typography) {
+                    ForEach(KaraokeTypographyStyle.allCases) { template in
+                        Text(template.title).tag(template)
+                    }
+                }
+            } label: {
+                Image(systemName: "textformat.alt")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .foregroundStyle(.white)
+            }
+            .accessibilityLabel("Template das letras")
+            .accessibilityValue(typography.title)
 
             Button {
                 withAnimation(.smooth(duration: 0.6)) { background = background.toggled }

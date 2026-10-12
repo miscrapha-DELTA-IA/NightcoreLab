@@ -171,6 +171,7 @@ enum KaraokeLayoutMetrics {
 struct KaraokeLyricsView: View {
     @Environment(LyricsStore.self) private var store
     @AppStorage("story.lyricTypography") private var typography: StoryLyricTypography = .classic
+    @AppStorage("karaokeTypography") private var typographyStyle: KaraokeTypographyStyle = .neon
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
@@ -199,7 +200,9 @@ struct KaraokeLyricsView: View {
                                 clock: clock,
                                 theme: fittedTheme,
                                 accent: accent,
-                                maxWordWidth: wordLimit
+                                maxWordWidth: wordLimit,
+                                fontSize: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
+                                typographyStyle: typographyStyle
                             )
                             .id(line.id)
                             .frame(maxWidth: .infinity)
@@ -246,6 +249,30 @@ private struct KaraokeLineView: View {
     let theme: KaraokeTheme
     let accent: Color?
     let maxWordWidth: CGFloat
+    let fontSize: CGFloat
+    let typographyStyle: KaraokeTypographyStyle
+    /// Cached for the lifetime of this line view: no hashing on word-fill frames.
+    private let magazineAppearances: [Int: MagazineWordAppearance]
+
+    init(line: TimedLyricLine, status: Status, isPlaying: Bool,
+         offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
+         accent: Color?, maxWordWidth: CGFloat, fontSize: CGFloat,
+         typographyStyle: KaraokeTypographyStyle) {
+        self.line = line
+        self.status = status
+        self.isPlaying = isPlaying
+        self.offset = offset
+        self.clock = clock
+        self.theme = theme
+        self.accent = accent
+        self.maxWordWidth = maxWordWidth
+        self.fontSize = fontSize
+        self.typographyStyle = typographyStyle
+        self.magazineAppearances = typographyStyle == .magazineCutout
+            ? Dictionary(uniqueKeysWithValues: line.words.map {
+                ($0.id, KaraokeWordStyleResolver.resolve(lineID: line.id, word: $0))
+            }) : [:]
+    }
 
     var body: some View {
         if line.words.isEmpty {
@@ -277,7 +304,12 @@ private struct KaraokeLineView: View {
                     fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
                     glow: status == .active,
                     theme: theme,
-                    maxWordWidth: maxWordWidth
+                    maxWordWidth: maxWordWidth,
+                    fontSize: fontSize,
+                    typographyStyle: typographyStyle,
+                    magazineAppearance: magazineAppearances[w.id],
+                    isCurrentLine: status == .active,
+                    isPastLine: status == .past
                 )
                 .gapAfter(w.spaceAfter ? 9 : 0)
             }
@@ -287,13 +319,18 @@ private struct KaraokeLineView: View {
 
 // MARK: - Palavra: máscara exata da esquerda p/ direita
 
-private struct KaraokeWordView: View {
+struct KaraokeWordView: View {
     let word: WordSync
     let fill: Double          // 0...1, calculado de start/end reais
     let fillColor: Color
     let glow: Bool
     let theme: KaraokeTheme
     let maxWordWidth: CGFloat
+    let fontSize: CGFloat
+    let typographyStyle: KaraokeTypographyStyle
+    let magazineAppearance: MagazineWordAppearance?
+    let isCurrentLine: Bool
+    let isPastLine: Bool
 
     /// One line per word. Long words shrink instead of spilling outside the viewport.
     /// Both copies share the exact same metrics, preserving left-to-right sync.
@@ -306,17 +343,62 @@ private struct KaraokeWordView: View {
     }
 
     var body: some View {
-        glyph
-            .foregroundStyle(theme.inactive)
-            .overlay(alignment: .leading) {
-                if fill > 0 {
-                    glyph
-                        .foregroundStyle(fillColor)
-                        .mask(alignment: .leading) {
-                            Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
-                        }
-                        .shadow(color: glow ? theme.glow : .clear, radius: glow ? 10 : 0)
+        if typographyStyle == .magazineCutout, let magazineAppearance {
+            cutout(appearance: magazineAppearance)
+        } else {
+            // NEON: deliberately identical to the previous rendering path.
+            glyph
+                .foregroundStyle(theme.inactive)
+                .overlay(alignment: .leading) {
+                    if fill > 0 {
+                        glyph
+                            .foregroundStyle(fillColor)
+                            .mask(alignment: .leading) {
+                                Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                            }
+                            .shadow(color: glow ? theme.glow : .clear, radius: glow ? 10 : 0)
+                    }
                 }
+        }
+    }
+
+    /// Lightweight paper tiles; progress is still the original 0...1 sync
+    /// from WordSync. No per-word animation, timers or runtime randomness.
+    private func cutout(appearance: MagazineWordAppearance) -> some View {
+        let active = isCurrentLine || (!isPastLine && fill > 0.1)
+        let progress = max(0, min(1, fill))
+        let tone: MagazineCutoutTone = active ? .black : appearance.tone
+        return tile(appearance: appearance, tone: tone)
+            .overlay(alignment: .leading) {
+                if active && progress > 0 {
+                    tile(appearance: appearance, tone: .accent)
+                        .mask(alignment: .leading) {
+                            GeometryReader { geometry in
+                                Rectangle()
+                                    .frame(width: geometry.size.width * progress)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                }
+            }
+            .rotationEffect(.degrees(appearance.rotation))
+            .scaleEffect(active ? 1.035 : 1)
+            .opacity(isPastLine ? 0.50 : (active ? 1 : 0.68))
+    }
+
+    private func tile(appearance: MagazineWordAppearance,
+                      tone: MagazineCutoutTone) -> some View {
+        Text(word.text)
+            .font(appearance.font.font(size: fontSize))
+            .lineLimit(1)
+            .minimumScaleFactor(0.52)
+            .foregroundStyle(tone.text)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .frame(maxWidth: maxWordWidth)
+            .background {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(tone.background(theme: theme))
             }
     }
 }
