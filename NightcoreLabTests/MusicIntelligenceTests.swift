@@ -94,11 +94,16 @@ final class MusicIntelligenceTests: XCTestCase {
 
     func testWarmDescriptorDetectsSameStampContentReplacement() async throws {
         let url = try audio(amplitude: 0.2)
+        // Pin whole-second mtime BEFORE snapshotting so restoring it is exact
+        // even on filesystems that round nanosecond timestamps.
+        let fixedModified = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: fixedModified],
+                                              ofItemAtPath: url.path)
         let identities = AssetIdentityCache()
         let original = try await identities.descriptor(for: url)
         let before = try AudioAssetDescriptor.FileStamp(url)
         _ = try audio(amplitude: 0.7)
-        try FileManager.default.setAttributes([.modificationDate: try XCTUnwrap(before.modified)],
+        try FileManager.default.setAttributes([.modificationDate: fixedModified],
                                               ofItemAtPath: url.path)
         XCTAssertEqual(try AudioAssetDescriptor.FileStamp(url), before,
                        "Mutation fixture must preserve size, mtime and inode")
@@ -113,6 +118,9 @@ final class MusicIntelligenceTests: XCTestCase {
 
     func testCorruptedSourceWithUnchangedStampCannotReuseAnalysis() async throws {
         let url = try audio()
+        let fixedModified = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: fixedModified],
+                                              ofItemAtPath: url.path)
         let counter = LockedCounter()
         let engine = service(counter: counter)
         _ = try await engine.analysis(for: url)
@@ -123,7 +131,7 @@ final class MusicIntelligenceTests: XCTestCase {
         try handle.seek(toOffset: 0)
         try handle.write(contentsOf: Data(repeating: 0, count: 32))
         try handle.close()
-        try FileManager.default.setAttributes([.modificationDate: try XCTUnwrap(stamp.modified)],
+        try FileManager.default.setAttributes([.modificationDate: fixedModified],
                                               ofItemAtPath: url.path)
         XCTAssertEqual(try AudioAssetDescriptor.FileStamp(url), stamp)
         do {
