@@ -93,6 +93,7 @@ struct ContentView: View {
     }
 
     @State private var showImporter = false
+    @State private var showPerformanceMode = false
     @State private var exportFormat: ExportFormat = .m4a
     @State private var shareItem: ShareItem?
     @State private var errorMessage: String?
@@ -325,6 +326,9 @@ struct ContentView: View {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showPerformanceMode) {
+            PerformanceModeView(audio: audio, accent: currentTheme.accent)
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff]) { result in
             switch result {
             case .success(let url): importFile(url)
@@ -366,6 +370,9 @@ struct ContentView: View {
 
             GlassGroup(spacing: 8) {
                 HStack(spacing: 8) {
+                    headerButton("square.grid.3x3.fill", label: "Abrir Performance Mode") {
+                        showPerformanceMode = true
+                    }
                     headerButton("heart.fill", label: "Apoiar o projeto") {
                         openURL(donationURL)
                     }

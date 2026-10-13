@@ -1,0 +1,245 @@
+import XCTest
+import AVFoundation
+@testable import NightcoreLab
+
+final class PadEngineTests: XCTestCase {
+    func testOriginalKitIsStableValidatedAndRightsClear() throws {
+        let kit = PadKit.starter
+        XCTAssertTrue(kit.isValid)
+        XCTAssertEqual(kit.samples.count, 7)
+        XCTAssertEqual(Set(kit.samples.map(\.id)),
+                       Set(["kick", "snare", "closed-hat", "open-hat",
+                            "clap", "crash", "808"]))
+        XCTAssertTrue(kit.samples.allSatisfy {
+            $0.license.contains("Original synthesized") && !$0.loop
+        })
+        XCTAssertEqual(kit.samples.first(where: { $0.id == "closed-hat" })?.chokeGroup, "hat")
+        XCTAssertEqual(kit.samples.first(where: { $0.id == "open-hat" })?.chokeGroup, "hat")
+        XCTAssertEqual(try JSONDecoder().decode(PadKit.self, from: JSONEncoder().encode(kit)), kit)
+    }
+
+    func testOriginalSamplesArePreloadableStereoFiniteAndNonSilent() throws {
+        for descriptor in PadKit.starter.samples {
+            let a = try XCTUnwrap(PadSampleSynthesizer.make(descriptor))
+            XCTAssertEqual(a.format.sampleRate, 48_000)
+            XCTAssertEqual(a.format.channelCount, 2)
+            XCTAssertGreaterThan(a.frameLength, 0)
+            let values = try XCTUnwrap(a.floatChannelData?[0])
+            let count = Int(a.frameLength)
+            var peak: Float = 0
+            for i in 0..<count {
+                XCTAssertTrue(values[i].isFinite)
+                peak = max(peak, abs(values[i]))
+            }
+            XCTAssertGreaterThan(peak, 0.005, descriptor.id)
+            XCTAssertLessThan(peak, 1.0, descriptor.id)
+        }
+    }
+
+    func testVoiceAllocationHandlesPolyphonyAndStealing() {
+        var allocator = PadVoiceAllocator(capacity: 2)
+        let a = allocator.allocate(id: "kick", chokeGroup: nil,
+                                   duration: 1, at: 0)!
+        let b = allocator.allocate(id: "snare", chokeGroup: nil,
+                                   duration: 1, at: 0.1)!
+        XCTAssertNotEqual(a.voiceIndex, b.voiceIndex)
+        let c = allocator.allocate(id: "clap", chokeGroup: nil,
+                                   duration: 1, at: 0.2)!
+        XCTAssertTrue(c.stoleVoice)
+        XCTAssertEqual(c.voiceIndex, a.voiceIndex)
+        let d = allocator.allocate(id: "808", chokeGroup: nil,
+                                   duration: 0.5, at: 2)!
+        XCTAssertFalse(d.stoleVoice)
+    }
+
+    func testOpenHatChokesClosedHatWithoutCuttingKick() {
+        var allocator = PadVoiceAllocator(capacity: 3)
+        let kick = allocator.allocate(id: "kick", chokeGroup: nil,
+                                      duration: 1, at: 0)!
+        let closed = allocator.allocate(id: "closed-hat", chokeGroup: "hat",
+                                        duration: 1, at: 0.1)!
+        let open = allocator.allocate(id: "open-hat", chokeGroup: "hat",
+                                      duration: 1, at: 0.2)!
+        XCTAssertEqual(open.chokeIndices, [closed.voiceIndex])
+        XCTAssertNotEqual(open.voiceIndex, kick.voiceIndex)
+        XCTAssertEqual(allocator.leases[kick.voiceIndex].id, "kick")
+        allocator.reset()
+        XCTAssertTrue(allocator.leases.allSatisfy { $0.id == nil })
+    }
+
+    @MainActor
+    func testRecordedEventsAreVersionedOrderedAndBounded() throws {
+        let recorder = PerformanceRecorder()
+        let kick = try XCTUnwrap(PadKit.starter.samples.first)
+        recorder.start(at: 10)
+        recorder.append(kick, velocity: 0.9, sourceTime: 42, at: 10.2)
+        recorder.append(kick, velocity: 0.6, sourceTime: 42.1, at: 10.3)
+        recorder.stop()
+        recorder.append(kick, velocity: 1, sourceTime: 45, at: 10.4)
+        let timeline = recorder.timeline()
+        XCTAssertEqual(timeline.version, 1)
+        XCTAssertTrue(timeline.isValid)
+        XCTAssertEqual(timeline.events.count, 2)
+        XCTAssertEqual(timeline.events[0].timestamp, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(timeline.events[0].sourceTime, 42)
+        let text = try XCTUnwrap(recorder.shareJSON())
+        XCTAssertEqual(try JSONDecoder().decode(PerformanceTimeline.self,
+                       from: Data(text.utf8)), timeline)
+    }
+
+    @MainActor
+    func testPadRuntimeHasPreloadedSamplesBeforeTouch() {
+        let runtime = PadAudioRuntime()
+        XCTAssertTrue(runtime.isReady)
+        XCTAssertEqual(runtime.nodes.count, 12)
+        XCTAssertEqual(runtime.prepared.count, 7)
+        XCTAssertFalse(runtime.trigger(padID: "unknown", velocity: 1))
+        XCTAssertFalse(runtime.trigger(padID: "kick", velocity: .nan))
+    }
+
+    func testOfflinePadScheduleClipsHatChokeAndVoiceSteal() throws {
+        let events = [
+            PadEvent(id: UUID(), padId: "closed-hat", timestamp: 0.1,
+                     velocity: 1, duration: 0.12, sourceTime: nil),
+            PadEvent(id: UUID(), padId: "open-hat", timestamp: 0.15,
+                     velocity: 1, duration: 0.54, sourceTime: nil),
+            PadEvent(id: UUID(), padId: "kick", timestamp: 0.2,
+                     velocity: 1, duration: 0.46, sourceTime: nil)
+        ]
+        let timeline = PerformanceTimeline(kitID: PadKit.starter.id, events: events)
+        let schedule = try PerformancePadMixdown.schedule(
+            timeline, kit: .starter, startTime: 0, speed: 1,
+            sampleRate: 48_000, polyphony: 2)
+        XCTAssertEqual(schedule.count, 3)
+        XCTAssertEqual(schedule[0].startFrame, 4800)
+        XCTAssertEqual(schedule[0].endFrame, 7200)
+        XCTAssertGreaterThan(schedule[1].endFrame, Int64(0.60 * 48_000),
+                             "Kick must not choke the still-open hat")
+    }
+
+    func testOfflineStemSilenceBeforeEventAndWaveformAfter() throws {
+        let event = PadEvent(id: UUID(), padId: "kick", timestamp: 0.25,
+                             velocity: 0.9, duration: 0.46, sourceTime: 1.25)
+        let timeline = PerformanceTimeline(kitID: PadKit.starter.id, events: [event])
+        let url = try PerformancePadMixdown.write(
+            timeline, startTime: 1, speed: 1, duration: 0.8,
+            sampleRate: 44_100)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32,
+                                   interleaved: false)
+        let buf = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                 frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buf)
+        let samples = try XCTUnwrap(buf.floatChannelData?[0])
+        XCTAssertTrue((0..<10_000).allSatisfy { samples[$0] == 0 })
+        XCTAssertGreaterThan((11_500..<14_500).map { abs(samples[$0]) }.max() ?? 0, 0.03)
+    }
+
+    func testOfflineAudioExportIncludesPadsWithoutChangingDefaultOutput() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 44_100))
+        buffer.frameLength = 44_100
+        for channel in 0..<2 {
+            let samples = try XCTUnwrap(buffer.floatChannelData?[channel])
+            for i in 0..<44_100 { samples[i] = 0 }
+        }
+        var outputWriter: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
+        try outputWriter?.write(from: buffer)
+        outputWriter = nil // Close the WAV header before AVAudioFile opens the same URL.
+        let settings = RenderSettings(speed: 1, pitch: 0, reverb: 0, bass: 0,
+                                      reverbPresetRaw: AVAudioUnitReverbPreset.mediumHall.rawValue)
+        let event = PadEvent(id: UUID(), padId: "kick", timestamp: 0.25,
+                             velocity: 0.9, duration: 0.46, sourceTime: 0.25)
+        let timeline = PerformanceTimeline(kitID: PadKit.starter.id,
+                                            events: [event])
+        let plain = try AudioEngineManager.renderOffline(
+            source: url, settings: settings, format: .wav, progress: { _ in })
+        let mixed = try AudioEngineManager.renderOffline(
+            source: url, settings: settings, format: .wav, progress: { _ in },
+            performance: timeline)
+        defer {
+            try? FileManager.default.removeItem(at: plain)
+            try? FileManager.default.removeItem(at: mixed)
+        }
+        func peak(_ fileURL: URL) throws -> Float {
+            let audio = try AVAudioFile(forReading: fileURL,
+                                        commonFormat: .pcmFormatFloat32, interleaved: false)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+                pcmFormat: audio.processingFormat,
+                frameCapacity: AVAudioFrameCount(audio.length)))
+            try audio.read(into: buffer)
+            let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+            var top: Float = 0
+            for i in 0..<Int(buffer.frameLength) {
+                top = max(top, abs(samples[i]))
+            }
+            return top
+        }
+        XCTAssertLessThan(try peak(plain), 0.003)
+        XCTAssertGreaterThan(try peak(mixed), 0.005)
+    }
+
+    @MainActor
+    func testEngineStartupCleansOnlyNightcoreOwnedTempAudio() throws {
+        let temporary = FileManager.default.temporaryDirectory
+        let foreign = temporary.appendingPathComponent(
+            UUID().uuidString + ".wav")
+        let legacy = temporary.appendingPathComponent(
+            "userSong_nightcore_\(UUID().uuidString).wav")
+        let owned = temporary.appendingPathComponent(
+            "nightcore_export_fixture_\(UUID().uuidString).wav")
+        let ownedStem = temporary.appendingPathComponent(
+            "NightcorePerformance-\(UUID().uuidString).wav")
+        let files = [foreign, legacy, owned, ownedStem]
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        for file in files {
+            try Data([0x52, 0x49, 0x46, 0x46]).write(to: file)
+        }
+
+        // A new manager must never destroy unowned WAV inputs.
+        let manager = AudioEngineManager()
+        XCTAssertTrue(manager.performancePadsReady)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: foreign.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedStem.path))
+    }
+
+    @MainActor
+    func testExistingLiveEngineStillLoadsMusicAndAcceptsPads() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 88_200))
+        buffer.frameLength = 88_200
+        for c in 0..<2 {
+            let d = try XCTUnwrap(buffer.floatChannelData?[c])
+            for i in 0..<Int(buffer.frameLength) {
+                d[i] = 0.03 * sin(Float(i) * 2 * .pi * 220 / 44_100)
+            }
+        }
+        var wav: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
+        try wav?.write(from: buffer)
+        wav = nil // Finalize the WAV before AudioEngineManager reads it.
+        let audio = AudioEngineManager()
+        XCTAssertTrue(audio.performancePadsReady)
+        try audio.load(url: url)
+        let firstRevision = audio.playbackSourceRevision
+        audio.play()
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertTrue(audio.triggerPad("kick"))
+        XCTAssertTrue(audio.triggerPad("snare"))
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        audio.stopPerformancePads()
+        XCTAssertTrue(audio.isPlaying)
+        audio.pause()
+        try audio.load(url: url)
+        XCTAssertNotEqual(audio.playbackSourceRevision, firstRevision)
+    }
+}

@@ -77,6 +77,9 @@ final class AudioEngineManager {
     private(set) var isPlaying = false
     private(set) var playbackCompletionCount = 0
     private(set) var fileName: String?
+    /// Ephemeral identity: changes every time the loaded source is replaced.
+    /// Never serialized with events or exported as a private file path.
+    private(set) var playbackSourceRevision = 0
     private(set) var duration: TimeInterval = 0
     private(set) var isExporting = false
     private(set) var exportProgress: Double = 0
@@ -97,9 +100,18 @@ final class AudioEngineManager {
     private let bassEQ = AudioEngineManager.makeBassEQ()
     private let reverbNode = AudioEngineManager.makeReverb()
     private let limiter = AudioEngineManager.makeLimiter()
+    /// Additive pad bus joins the music AFTER song DSP, BEFORE the peak limiter.
+    /// Only the existing live AVAudioEngine produces sound.
+    private let performanceMixer = AVAudioMixerNode()
+    @ObservationIgnored private let padRuntime = PadAudioRuntime()
+
+    var performanceKit: PadKit { padRuntime.kit }
+    var performancePadsReady: Bool { padRuntime.isReady }
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
-    private var processingNodes: [AVAudioNode] { [player, upmix, varispeed, timePitch, bassEQ, reverbNode, limiter] }
+    private var processingNodes: [AVAudioNode] {
+        [player, upmix, varispeed, timePitch, bassEQ, reverbNode, performanceMixer, limiter]
+    }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
@@ -137,6 +149,15 @@ final class AudioEngineManager {
     /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
+        padRuntime.attach(to: engine)
+        // Pads can sound before a song has been selected.
+        let standaloneFormat = AVAudioFormat(
+            standardFormatWithSampleRate: PadSampleSynthesizer.sampleRate, channels: 2)!
+        engine.connect(performanceMixer, to: limiter, format: standaloneFormat)
+        engine.connect(limiter, to: engine.mainMixerNode, format: standaloneFormat)
+        padRuntime.connect(to: engine, mixer: performanceMixer)
+        engine.mainMixerNode.outputVolume = pow(10, Self.outputHeadroomDB / 20)
+        engine.prepare()
 
         Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
         bassEQ.bands[0].gain = bass
@@ -156,22 +177,53 @@ final class AudioEngineManager {
         stopPlayback()
         audioFile = file
         sourceURL = url
+        playbackSourceRevision &+= 1
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
         engine.stop()
+        padRuntime.stopAll()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
+        padRuntime.nodes.forEach { engine.disconnectNodeOutput($0) }
 
         let graphFormat = AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate,
                                         channels: 2)!
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
                           varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
-                          fileFormat: file.processingFormat, graphFormat: graphFormat)
+                          fileFormat: file.processingFormat, graphFormat: graphFormat,
+                          performanceMixer: performanceMixer)
+        padRuntime.connect(to: engine, mixer: performanceMixer)
         engine.prepare()
         needsScheduling = true
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+    }
+
+    // MARK: Performance pads
+
+    /// Fast path: buffers and voice nodes were already created. Does not
+    /// read files, reconfigure DSP or inspect lyrics when tapping a pad.
+    @discardableResult
+    func triggerPad(_ padID: String, velocity: Float = 0.85) -> Bool {
+        guard !isExporting, padRuntime.isReady,
+              padRuntime.kit.samples.contains(where: { $0.id == padID }),
+              velocity.isFinite && velocity > 0 else { return false }
+        cancelIdleStop()
+        do {
+            if !engine.isRunning { try engine.start() }
+            let played = padRuntime.trigger(padID: padID, velocity: velocity)
+            if !isPlaying { scheduleIdleStop() }
+            return played
+        } catch {
+            if !isPlaying { scheduleIdleStop() }
+            return false
+        }
+    }
+
+    func stopPerformancePads() {
+        padRuntime.stopAll()
+        if !isPlaying { scheduleIdleStop() }
     }
 
     // MARK: Transporte
@@ -332,6 +384,34 @@ final class AudioEngineManager {
         return url
     }
 
+    /// Frozen additive pad-event export reuses the same offline music graph.
+    /// The live engine remains untouched. No export is started by a pad tap.
+    func exportPerformanceAudio(timeline: PerformanceTimeline,
+                                format: ExportFormat = .m4a) async throws -> URL {
+        guard let sourceURL else { throw AudioEngineError.noFileLoaded }
+        guard !isExporting, timeline.isValid,
+              timeline.kitID == padRuntime.kit.id else {
+            throw AudioEngineError.exportInProgress
+        }
+        isExporting = true
+        exportProgress = 0
+        defer { isExporting = false }
+        let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb,
+                                      bass: bass, reverbPresetRaw: Self.defaultReverbPreset.rawValue)
+        let task = Task.detached(priority: .userInitiated) {
+            try Self.renderOffline(source: sourceURL, settings: settings,
+                                   format: format, progress: { _ in },
+                                   performance: timeline)
+        }
+        let url = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        exportProgress = 1
+        return url
+    }
+
     /// Capture the source and DSP values synchronously when the user taps Share.
     /// A later track change cannot alter the sound of an in-flight Story.
     func storyAudioSource() throws -> StoryAudioSource {
@@ -381,6 +461,8 @@ final class AudioEngineManager {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
         guard generation == scheduleGeneration else { return }
         player.stop()
+        // Pads are an independent performance surface: ending the song must
+        // not choke a cymbal or 808 that the user is still hearing.
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0
@@ -609,10 +691,10 @@ final class AudioEngineManager {
 
     // MARK: - Limpeza de cache
 
-    /// Apaga do diretório temporário os áudios de sessões anteriores: exports (.m4a/.wav)
-    /// e as cópias de músicas importadas (.mp3, .aac, .flac…).
-    /// Roda de forma síncrona no init: nada está carregado ainda, e assim não há risco
-    /// de apagar um arquivo que o usuário acabou de importar.
+    /// Only clean temporary files and import directories OWNED by NightcoreLab.
+    /// The shared application temp directory can contain inputs for tests,
+    /// share extensions and other features: deleting every audio file here
+    /// would destroy a source immediately before load(url:).
     private func clearTempAudioFiles() {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory
@@ -630,7 +712,13 @@ final class AudioEngineManager {
                 try? fileManager.removeItem(at: url)
                 continue
             }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+            // Old audio exports had arbitrary source-name prefixes. They cannot
+            // safely be distinguished from user files, so intentionally keep
+            // them rather than deleting someone else's temporary WAV.
+            let owned = url.lastPathComponent.hasPrefix("nightcore_export_") ||
+                        url.lastPathComponent.hasPrefix("NightcorePerformance-")
+            guard owned,
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   let type = UTType(filenameExtension: url.pathExtension),
                   type.conforms(to: .audio) else { continue }
 
@@ -658,15 +746,22 @@ final class AudioEngineManager {
                                                  reverb: AVAudioUnitReverb,
                                                  limiter: AVAudioUnitEffect,
                                                  fileFormat: AVAudioFormat,
-                                                 graphFormat: AVAudioFormat) {
+                                                 graphFormat: AVAudioFormat,
+                                                 performanceMixer: AVAudioMixerNode? = nil) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
         engine.connect(player, to: upmix, format: fileFormat)
         engine.connect(upmix, to: varispeed, format: graphFormat)
         engine.connect(varispeed, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
         engine.connect(eq, to: reverb, format: graphFormat)
-        // Limiter por último: segura os picos somados de graves + cauda do reverb.
-        engine.connect(reverb, to: limiter, format: graphFormat)
+        // Pad samples join after the song-specific DSP so a 0.5x playback
+        // speed does not slow the live drums. Both inputs share the limiter.
+        if let performanceMixer {
+            engine.connect(reverb, to: performanceMixer, format: graphFormat)
+            engine.connect(performanceMixer, to: limiter, format: graphFormat)
+        } else {
+            engine.connect(reverb, to: limiter, format: graphFormat)
+        }
         engine.connect(limiter, to: engine.mainMixerNode, format: graphFormat)
         engine.mainMixerNode.outputVolume = pow(10, outputHeadroomDB / 20)
     }
@@ -743,7 +838,8 @@ final class AudioEngineManager {
                                                   format: ExportFormat,
                                                   progress: @Sendable (Double) -> Void,
                                                   startTime: TimeInterval = 0,
-                                                  maxDuration: TimeInterval? = nil) throws -> URL {
+                                                  maxDuration: TimeInterval? = nil,
+                                                  performance: PerformanceTimeline? = nil) throws -> URL {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let sourceRate = file.processingFormat.sampleRate
         guard file.length > 0, sourceRate > 0, (1...2).contains(file.processingFormat.channelCount),
@@ -753,6 +849,23 @@ final class AudioEngineManager {
         }
         // AAC em taxas convencionais; WAV mantém a taxa original.
         let outputRate = format == .m4a ? (sourceRate == 44_100 ? 44_100.0 : 48_000.0) : sourceRate
+        let sourceSeconds = Double(file.length) / sourceRate
+        let tailSeconds = maxDuration == nil ? (settings.reverb > 0 ? 3.0 : 0.1) : 0.0
+        let available = max(0, sourceSeconds - min(max(startTime, 0), sourceSeconds))
+                        / Double(settings.speed)
+        let selectedSeconds = min(maxDuration ?? available, available)
+        guard selectedSeconds > 0 else { throw AudioEngineError.unsupportedAudio }
+        // Pad stem is generated ONLY during requested export (chunked file IO).
+        // It enters the same limiter as the song, before final PCM/AAC encoding.
+        let padStemURL = try performance.map {
+            try PerformancePadMixdown.write($0, startTime: startTime,
+                                            speed: settings.speed,
+                                            duration: selectedSeconds + tailSeconds,
+                                            sampleRate: outputRate)
+        }
+        defer {
+            if let padStemURL { try? FileManager.default.removeItem(at: padStemURL) }
+        }
 
         // Engine separada: o export não interrompe o playback.
         let engine = AVAudioEngine()
@@ -764,6 +877,16 @@ final class AudioEngineManager {
         let reverb = makeReverb()
         let limiter = makeLimiter()
         [player, upmix, varispeed, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
+        let performanceMixer = padStemURL.map { _ in AVAudioMixerNode() }
+        let padPlayer = padStemURL.map { _ in AVAudioPlayerNode() }
+        if let performanceMixer, let padPlayer {
+            engine.attach(performanceMixer)
+            engine.attach(padPlayer)
+        }
+        let padFile = try padStemURL.map {
+            try AVAudioFile(forReading: $0, commonFormat: .pcmFormatFloat32,
+                            interleaved: false)
+        }
 
         configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: settings.speed, pitch: settings.pitch)
         eq.bands[0].gain = settings.bass
@@ -775,7 +898,11 @@ final class AudioEngineManager {
         let renderFormat = AVAudioFormat(standardFormatWithSampleRate: outputRate, channels: 2)!
         connectGraph(engine: engine, player: player, upmix: upmix, varispeed: varispeed, timePitch: timePitch, eq: eq,
                      reverb: reverb, limiter: limiter,
-                     fileFormat: file.processingFormat, graphFormat: renderFormat)
+                     fileFormat: file.processingFormat, graphFormat: renderFormat,
+                     performanceMixer: performanceMixer)
+        if let padPlayer, let performanceMixer {
+            engine.connect(padPlayer, to: performanceMixer, format: renderFormat)
+        }
 
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
         try engine.start()
@@ -792,25 +919,24 @@ final class AudioEngineManager {
             player.scheduleFile(file, at: nil)
         }
         player.play()
+        if let padPlayer, let padFile {
+            padPlayer.scheduleFile(padFile, at: nil)
+            padPlayer.play()
+        }
         defer {
+            padPlayer?.stop()
             player.stop()
             engine.stop()
         }
 
         // Duração final = duração original / speed + cauda do reverb.
-        let sourceSeconds = Double(file.length) / sourceRate
-        let tailSeconds = maxDuration == nil ? (settings.reverb > 0 ? 3.0 : 0.1) : 0.0
-        let available = max(0, sourceSeconds - min(max(startTime, 0), sourceSeconds))
-                        / Double(settings.speed)
-        let selectedSeconds = min(maxDuration ?? available, available)
-        guard selectedSeconds > 0 else { throw AudioEngineError.unsupportedAudio }
         let totalFrames = AVAudioFramePosition((selectedSeconds + tailSeconds) * outputRate)
 
         // Arquivo de saída
         let baseName = source.deletingPathExtension().lastPathComponent
         let tag = settings.speed >= 1 ? "nightcore" : "slowed"
         let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(baseName)_\(tag)_\(UUID().uuidString.prefix(8)).\(format.rawValue)")
+            .appendingPathComponent("nightcore_export_\(baseName)_\(tag)_\(UUID().uuidString.prefix(8)).\(format.rawValue)")
         var completed = false
         defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
 
