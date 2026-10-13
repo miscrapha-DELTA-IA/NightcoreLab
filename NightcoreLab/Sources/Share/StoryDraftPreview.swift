@@ -104,7 +104,7 @@ struct StoryDraftPreview: View {
     private func freezeSession(_ preset: CreatorPreset) {
         // Expensive composition compilation only when experience/material
         // identity changes; slider edits update the cheap typed mapping.
-        let resolved = preset.applying(to: draft.request)
+        let resolved = preset.applying(to: frozenRequest)
         frozenRequest = resolved
         frozenTimeline = StoryRenderTimeline(
             request: resolved, profile: preset.exportProfile.encodingProfile(for: resolved.mode))
