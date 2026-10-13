@@ -1013,6 +1013,16 @@ struct ContentView: View {
             }
             .tint(.gray)
             .padding(.top, 4)
+
+            Button("Apagar eventos locais de descoberta", role: .destructive) {
+                discoveryEvents.removeAll()
+                acousticVectors.removeAll()
+                suggestionReasons.removeAll()
+                Task { await discoveryLog.clear() }
+            }
+            .font(DS.Typography.caption)
+            .foregroundStyle(DS.Ink.secondary)
+            .accessibilityHint("Apaga o log local de descoberta. Não altera o histórico de reproduções.")
         }
         .padding(.top, 8)
     }
