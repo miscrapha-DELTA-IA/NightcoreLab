@@ -27,6 +27,10 @@ frame = program[program.index('struct CreativeParameterFrame:'):program.index('e
 (out/'CreativeParameterFrame.swift').write_text('import Foundation\n' + remove_block(frame, '    func value(for target:'))
 for name in ['MaterialResolver', 'MaterialFrame', 'VisualParameterSet', 'MaterialAudioMapping', 'VisualMaterialCatalog', 'MaterialControls']:
     (out/f'{name}.swift').write_bytes((root/f'Creative/VisualMaterial/{name}.swift').read_bytes())
+# The route decision is part of the resolver; the reaction gain needs the
+# app's CreativePreset vocabulary and is passed in as a number here.
+profile = (root/'Creative/CreativeReactionProfile.swift').read_text()
+(out/'CreativeReactionProfile.swift').write_text(remove_block(profile, '    static func gain('))
 for path in ['Creative/AudioFeatures.swift','MusicIntelligence/RhythmFrame.swift','MusicIntelligence/RhythmAnalysisResult.swift']:
     (out/Path(path).name).write_bytes((root/path).read_bytes())
 PY

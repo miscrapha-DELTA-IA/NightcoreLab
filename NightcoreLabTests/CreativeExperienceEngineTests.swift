@@ -191,7 +191,7 @@ final class CreativeExperienceEngineTests: XCTestCase {
     func testAllThreeCuratedPresetsUseExistingProgramsAndTypedStyles() throws {
         let ids = ["cyber-night", "liquid-dream", "neon-pulse"]
         XCTAssertEqual(Array(CreativePresetCatalog.experiencePresets.prefix(3).map(\.id)), ids)
-        XCTAssertEqual(CreativePresetCatalog.experiencePresets.count, 7)
+        XCTAssertGreaterThanOrEqual(CreativePresetCatalog.experiencePresets.count, ids.count)
         for id in ids {
             let experience = try selected(id)
             XCTAssertTrue(experience.isValid)
@@ -281,10 +281,18 @@ final class CreativeExperienceEngineTests: XCTestCase {
             composition: composition)
         try await store.save(local)
         let all = await CreativePresetCatalog.availableExperiences(from: store)
-        XCTAssertEqual(all.map(\.id),
-                       ["original", "bass-pulse", "night-drive", "soft-flow",
-                        "cyber-night", "liquid-dream", "neon-pulse",
-                        "local-experience"])
+        let ids: [String] = all.map { $0.id }
+        // Presence, not a fixed count: recipes first, the three original
+        // experiences, any newer curated ones, then local packages last.
+        XCTAssertEqual(Array(ids.prefix(4)), ["original", "bass-pulse", "night-drive", "soft-flow"])
+        for id in ["cyber-night", "liquid-dream", "neon-pulse"] {
+            XCTAssertTrue(ids.contains(id), id)
+        }
+        for curated in CreativePresetCatalog.experiencePresets {
+            XCTAssertTrue(ids.contains(curated.id), curated.id)
+        }
+        XCTAssertEqual(Set(ids).count, ids.count, "No duplicated identities")
+        XCTAssertEqual(ids.last, "local-experience")
         XCTAssertEqual(all.last?.package, local)
         XCTAssertFalse(all.last?.audioMapping.enabled ?? true)
     }

@@ -212,14 +212,18 @@ final class CompositionRuntimeTests: XCTestCase {
         XCTAssertNotNil(scene.resolvedCompositionFrame)
         XCTAssertEqual(scene.reactiveDistortion, 0)
         XCTAssertEqual(scene.beatPulse, 0)
-        // Direct requests without a runtime keep the legacy route.
-        var legacy = request
-        legacy.compositionRuntime = nil
+        // Direct requests without a frozen runtime no longer have a separate
+        // legacy route: renderRuntime freezes one (neutral here) on demand.
+        var direct = request
+        direct.compositionRuntime = nil
+        XCTAssertNotNil(direct.renderRuntime)
         let directScene = StorySceneView(
-            request: legacy, artwork: nil, frame: frame,
+            request: direct, artwork: nil, frame: frame,
             visualTimeline: timeline())
-        XCTAssertNil(directScene.resolvedCompositionFrame)
+        XCTAssertNotNil(directScene.resolvedCompositionFrame)
         XCTAssertEqual(directScene.reactiveDistortion, 0)
+        XCTAssertEqual(directScene.beatPulse, 0)
+        XCTAssertEqual(directScene.typographyFrame, scene.typographyFrame)
     }
 
     @MainActor

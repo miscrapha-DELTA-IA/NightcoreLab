@@ -116,15 +116,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var storyTask: Task<Void, Never>?
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
-    /// Stage 13B selection already stored by the existing experience picker.
-    private var selectedMaterial: VisualMaterial {
-        CreativePresetCatalog.selectedExperience(id: creativePresetID)?.visualMaterial ??
-            .marble(for: CreativePresetCatalog.effectiveProgram(
-                id: creativePresetID, theme: appTheme,
-                typography: karaokeTypography, background: playerBackgroundStyle,
-                reaction: reactionMode))
-    }
-
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
     private var motion: Animation {
         reduceMotion ? .easeInOut(duration: 0.25) : .spring(duration: 0.65, bounce: 0.15)
@@ -143,7 +134,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         reactiveDistortion: distortion,
                         pulseDriver: pulse,
-                        material: selectedMaterial
+                        material: CreativePresetCatalog.material(selection: creativePresetID)
                     )
                 }
                 .transition(.opacity)
@@ -159,7 +150,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
-                        material: selectedMaterial,
+                        material: CreativePresetCatalog.material(selection: creativePresetID),
 
                         pulseDriver: pulse
                     )
@@ -350,7 +341,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                                          theme: appTheme,
                                          frozenTime: frozenShareMarblePhase,
                                          reactiveDistortion: distortion,
-                                         pulseDriver: pulse, material: selectedMaterial)
+                                         pulseDriver: pulse, material: CreativePresetCatalog.material(selection: creativePresetID))
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)

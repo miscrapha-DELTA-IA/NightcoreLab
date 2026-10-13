@@ -61,7 +61,7 @@ program-derived materials already include their original pulse scaling.
 
 Only `marble` is supported. Reserved type tags liquid/glass/chrome/noise/fluid are
 serializable vocabulary, explicitly falling back to Original Marble on resolution.
-Four material recipes only: Original Marble, Cyber Chrome, Liquid Dream, Neon Pulse.
+Four material recipes only in Stage 13: Original Marble, Cyber Chrome, Liquid Dream, Neon Pulse (13B replaces Liquid Dream's material with Liquid Glass and removes the unused recipe).
 Existing Cyber Night/Liquid Dream/Neon Pulse experiences reference the latter three;
 the saved experience IDs and original recipe selection remain intact. Chrome and
 Liquid are visual recipe names, not new shader implementations.
@@ -151,3 +151,45 @@ profiling remain limitations even when simulator checks pass.
 - `NightcoreLabTests/RuntimeStabilizationTests.swift`
 - `NightcoreLabTests/VisualMaterialEngineTests.swift`
 - `docs/VISUAL_MATERIAL_ENGINE_STAGE13.md`
+
+## Consolidated material pipeline (pre-merge alignment)
+
+```
+selection id (creativePresetID)
+  └─ CreativeExperienceResolver.material(experience:recipe:)   ← THE material rule
+        experience.material ?? VisualMaterial.marble(for: program)   (reaction-free)
+  └─ CompositionRuntime(composition:material:)   (frozen once per Story / per live run)
+        frame(at:features:rhythm:)
+          gain  = CreativeReactionProfile.gain(program.audioReaction)   ← THE reaction rule
+          route = CreativeReactionProfile.materialRoute(for: material)  ← ONE audio route
+          MaterialResolver.resolve(material, features, rhythm, timestamp, programParameters, gain)
+            → MaterialFrame.parameters : VisualParameterSet  (= MarbleUniforms) → shader
+```
+
+- **Material rule**: `CreativeExperienceResolver.material(experience:recipe:)`.
+  Used by `StoryRequestBuilder` (Story), `CreativeReactiveAccent` (live pulse
+  driver), `CompositionRuntime` (default), `CreativeExperiencePreset.visualMaterial`
+  and `CreativePresetCatalog.material(selection:)`. Views never choose.
+- **Reaction rule**: `CreativeReactionProfile.gain` (Off 0 / Subtle 0.35 /
+  Reactive 1). Materials no longer bake it in; it is applied once by the
+  resolver. Also consumed by `AudioVisualMapper`, `CreativeParameterResolver`
+  and `LayerAudioBinding` (same literals, now one definition).
+  `TypographyAudioReaction.gain` is a separate (typography) enum, unchanged.
+- **One audio route per frame**: recipes (legacy mapping) → program equations
+  drive the distortion; experiences with an authored `MaterialAudioMapping` →
+  the mapping drives distortion/brightness/accent and program distortion is
+  ignored. Before this, Neon Pulse added Bass Pulse's bass rule (0.7) AND the
+  material's bassToDistortion (0.20).
+- **One parameter contract**: `VisualParameterSet` (authored on the material,
+  resolved in `MaterialFrame`); `MarbleUniforms` is a typealias of it.
+- **One Story path**: `StoryVideoRequest.resolvedFrame(_:audioTimeline:rhythm:)`
+  is called by the scrub preview and by the exporter; requests without a
+  frozen runtime get one from `renderRuntime` (no legacy branch).
+- `CreativeExperienceResolver.resolve(..., runtime:)` reuses the frozen runtime
+  (`CompositionRuntime.experienceFrame` passes itself) instead of recompiling.
+
+Visible consequence: experience materials react only through their mapping
+(less distortion than before on Cyber Night / Neon Pulse, where the program's
+distortion was being added on top). Recipes are unchanged (distortion
+bit-exact; pulse equal within 1e-12 because the 0.35 gain is now applied
+after, not before, the pulse product).

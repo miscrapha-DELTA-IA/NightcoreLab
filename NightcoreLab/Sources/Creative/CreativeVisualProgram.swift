@@ -142,7 +142,7 @@ enum CreativeParameterResolver {
                 return current
             }
             let eq = rule.equation
-            let reactionGain: Double = program.preset.audioReaction == .subtle ? 0.35 : 1
+            let reactionGain = CreativeReactionProfile.gain(program.preset.audioReaction)
             let input = eq.signal.sample(features: features, sourceTime: sourceTime,
                                          frequency: eq.frequency, phase: eq.phase)
             let operand = eq.gain * input + eq.bias

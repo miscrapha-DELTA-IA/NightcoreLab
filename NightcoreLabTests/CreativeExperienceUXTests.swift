@@ -67,7 +67,8 @@ final class CreativeExperienceUXTests: XCTestCase {
         let selectable: [String] = CreativePresetCatalog.selectableExperiences.map { $0.id }
         XCTAssertEqual(Array(selectable.prefix(experienceIDs.count)), experienceIDs)
         XCTAssertEqual(Set(selectable).count, selectable.count)
-        XCTAssertEqual(selectable.count, 7)
+        XCTAssertEqual(selectable, CreativePresetCatalog.experiencePresets.map { $0.id },
+                       "Every curated experience is offered, once")
         let recipeIDs: Set<String> = Set(CreativePresetCatalog.all.map { $0.id })
         for id in experienceIDs {
             XCTAssertFalse(recipeIDs.contains(id), "\(id) must not shadow a recipe")

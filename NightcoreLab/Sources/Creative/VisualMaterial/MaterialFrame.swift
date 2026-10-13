@@ -30,10 +30,6 @@ struct MaterialFrame: Equatable, Sendable {
     let controls: MaterialControls
     let signals: MaterialReactiveSignals
 
-    var marbleUniforms: MarbleUniforms {
-        MarbleUniforms(distortion: parameters.distortion,
-                       beatPulse: parameters.beatPulse,
-                       warpAmount: parameters.warpAmount,
-                       brightnessBoost: parameters.brightnessBoost)
-    }
+    /// The shader binding is the resolved parameter set itself.
+    var marbleUniforms: MarbleUniforms { parameters }
 }

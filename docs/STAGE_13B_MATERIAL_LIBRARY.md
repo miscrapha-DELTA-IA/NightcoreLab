@@ -58,3 +58,18 @@ Live playback keeps the existing cached feature timeline and render-rate
   performance or visual parity without measurement.
 - Validation gates: `xcodegen generate`, full XCTest, Release, unsigned IPA,
   and manual visual side-by-side on an iOS device.
+
+## Pre-merge alignment (single pipeline)
+
+- Materials follow the consolidated pipeline of
+  `VISUAL_MATERIAL_ENGINE_STAGE13.md` (one material rule, one reaction
+  profile, one audio route, one parameter contract).
+- `movement` (Organic Noise, Atmospheric Smoke) now comes from the material
+  mapping (`MaterialAudioMapping.energyToMovement`: 0.6 and 0.3, the motion
+  of the Bass Pulse and Soft Flow programs), no longer from the program's
+  `lyricKinetics`, which was a second, program-side route into the material.
+- The unused Marble recipe `liquid-dream` was removed from
+  `VisualMaterialCatalog`: the Liquid Dream experience uses `liquid-glass`.
+  Saved experiences embed their material, so nothing looks it up by id.
+- The live player passes `CreativePresetCatalog.material(selection:)` (the
+  single rule); `NowPlayingScreen` no longer decides a material.

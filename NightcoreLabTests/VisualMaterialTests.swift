@@ -26,14 +26,27 @@ final class VisualMaterialTests: XCTestCase {
 
     // MARK: Material derivation
 
-    func testMaterialFollowsTheExistingReactionSwitch() {
+    /// Materials are reaction-free; "Ritmo visual" is applied once, at resolve
+    /// time, through CreativeReactionProfile.
+    func testReactionIsAppliedOnceThroughTheProfile() {
         XCTAssertEqual(VisualMaterial.marble(for: nil), .legacyMarble)
-        XCTAssertEqual(VisualMaterial.marble(for: program(.off)).beatPulse, 0)
-        let responsive = VisualMaterial.marble(for: program(.responsive))
-        let subtle = VisualMaterial.marble(for: program(.subtle))
-        XCTAssertGreaterThan(responsive.beatPulse, subtle.beatPulse)
-        XCTAssertGreaterThan(subtle.beatPulse, 0)
-        XCTAssertLessThanOrEqual(responsive.beatPulse, 1)
+        XCTAssertEqual(VisualMaterial.marble(for: program(.off)),
+                       VisualMaterial.marble(for: program(.responsive)),
+                       "The reaction setting is not baked into the material")
+        XCTAssertEqual(CreativeReactionProfile.gain(.off), 0)
+        XCTAssertEqual(CreativeReactionProfile.gain(.subtle), 0.35)
+        XCTAssertEqual(CreativeReactionProfile.gain(.responsive), 1)
+        let material = VisualMaterial.marble(for: program(.responsive))
+        let beat = RhythmFrame.at(1.0, in: rhythm())
+        func pulse(_ reaction: CreativePreset.AudioReaction) -> Double {
+            MaterialResolver.resolve(material, rhythm: beat, timestamp: 1,
+                                     reactionGain: CreativeReactionProfile.gain(reaction))
+                .parameters.beatPulse
+        }
+        XCTAssertEqual(pulse(.off), 0)
+        XCTAssertGreaterThan(pulse(.responsive), pulse(.subtle))
+        XCTAssertEqual(pulse(.subtle), pulse(.responsive) * 0.35, accuracy: 1e-12)
+        XCTAssertLessThanOrEqual(pulse(.responsive), 1)
     }
 
     func testMaterialIsBoundedAndCodable() throws {
@@ -227,7 +240,12 @@ final class VisualMaterialTests: XCTestCase {
         let scene = StorySceneView(request: request, artwork: nil, frame: frame,
                                    visualRhythm: rhythm())
         XCTAssertEqual(scene.marbleMaterial, VisualMaterial.marble(for: request.reactiveProgram))
-        let legacy = StorySceneView(request: try story(reactive: false), artwork: nil, frame: frame)
-        XCTAssertEqual(legacy.marbleMaterial, .legacyMarble)
+        // Reaction off: the same reaction-free material, silenced by the profile.
+        let quiet = try story(reactive: false)
+        let legacy = StorySceneView(request: quiet, artwork: nil, frame: frame,
+                                    visualRhythm: rhythm())
+        XCTAssertEqual(legacy.marbleMaterial, CreativePresetCatalog.material(selection: "original"))
+        XCTAssertEqual(legacy.beatPulse, 0)
+        XCTAssertEqual(legacy.reactiveDistortion, 0)
     }
 }

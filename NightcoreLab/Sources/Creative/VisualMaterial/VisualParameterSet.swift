@@ -1,7 +1,13 @@
 import Foundation
 
+/// The single Marble parameter contract (Stage 13 consolidation):
+/// - authored on `VisualMaterial.parameters` (look, reaction-free);
+/// - resolved per frame in `MaterialFrame.parameters`;
+/// - bound to the shader as `MarbleUniforms` (a typealias of this type).
 /// Existing shader vocabulary only. No textures, dynamic dictionaries or renderer state.
 struct VisualParameterSet: Codable, Equatable, Sendable {
+    static let neutral = VisualParameterSet()
+
     let distortion: Double
     let beatPulse: Double
     let pulseDecay: Double

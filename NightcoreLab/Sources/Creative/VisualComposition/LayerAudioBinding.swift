@@ -20,7 +20,7 @@ struct LayerAudioBinding: Codable, Equatable, Sendable {
             features: features, sourceTime: sourceTime,
             frequency: equation.frequency, phase: equation.phase)
         let operand = equation.gain * input + equation.bias
-        let gain = reaction == .subtle ? 0.35 : 1.0
+        let gain = CreativeReactionProfile.gain(reaction)
         let value: Double
         switch equation.operation {
         case .replace: value = operand * gain

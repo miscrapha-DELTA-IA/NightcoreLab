@@ -50,7 +50,17 @@ final class MaterialLibraryTests: XCTestCase {
         let organic = MaterialResolver.resolve(VisualMaterialCatalog.organicPulse,
             features: features, timestamp: 1, parameters: parameters)
         XCTAssertEqual(organic.signals.bass, features.bass)
-        XCTAssertEqual(organic.signals.movement, parameters.lyricKinetics)
+        // Movement comes from the material mapping only, never the program.
+        let mapping = VisualMaterialCatalog.organicPulse.audioMapping
+        XCTAssertEqual(organic.signals.movement,
+                       min(1, features.energy * mapping.energyToMovement), accuracy: 1e-12)
+        let otherKinetics = MaterialResolver.resolve(VisualMaterialCatalog.organicPulse,
+            features: features, timestamp: 1,
+            parameters: CreativeParameterFrame(playerGlow: 0.4, marbleDistortion: 0.9,
+                                               lyricKinetics: 0.05, particleEmission: 0))
+        XCTAssertEqual(otherKinetics.signals, organic.signals)
+        XCTAssertEqual(otherKinetics.parameters, organic.parameters,
+                       "Program parameters never reach an authored material")
         XCTAssertEqual(organic.signals.energy, 0)
         for kind in VisualMaterialType.allCases {
             let signals = kind.acceptedSignals
