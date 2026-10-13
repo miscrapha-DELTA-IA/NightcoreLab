@@ -58,6 +58,13 @@ struct PerformanceModeView: View {
     @State private var exportedAudio: URL?
     @State private var renderError: String?
     @State private var exportTask: Task<Void, Never>?
+    @State private var clipTask: Task<Void, Never>?
+    @State private var clipStart: Double = 0
+    @State private var clipLength: Double = 2
+    @State private var sourceClip: PerformanceSourceClip?
+    @State private var recordedClip: PerformanceSourceClip?
+    @State private var preparingClip = false
+    @State private var confirmSharingRights = false
 
     private let grid = [GridItem(.flexible(), spacing: 12),
                         GridItem(.flexible(), spacing: 12),
@@ -96,7 +103,12 @@ struct PerformanceModeView: View {
                         ForEach(audio.performanceKit.samples) { sample in
                             pad(sample)
                         }
+                        if let sourceClip {
+                            pad(sourceClip.descriptor)
+                        }
                     }
+
+                    sourceClipPicker
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -114,6 +126,7 @@ struct PerformanceModeView: View {
                                 if recorder.isRecording { recorder.stop() }
                                 else {
                                     recordedSourceRevision = audio.playbackSourceRevision
+                                    recordedClip = sourceClip
                                     recorder.start()
                                     exportedAudio = nil
                                 }
@@ -128,7 +141,7 @@ struct PerformanceModeView: View {
                             .accessibilityIdentifier("performance.record")
 
                             if !recorder.events.isEmpty && !recorder.isRecording,
-                               let payload = recorder.shareJSON() {
+                               let payload = recorder.shareJSON(sourceClip: recordedClip) {
                                 ShareLink(item: payload,
                                           subject: Text("NightcoreLab Performance Events"),
                                           message: Text("Sequência de pads NightcoreLab (JSON v1)")) {
@@ -216,14 +229,116 @@ struct PerformanceModeView: View {
             Text(renderError ?? "")
         }
         .onChange(of: audio.playbackSourceRevision) { _, _ in
+            clipTask?.cancel()
+            preparingClip = false
+            sourceClip = nil
+            recordedClip = nil
+            confirmSharingRights = false
             if recorder.isRecording { recorder.stop() }
             exportedAudio = nil
         }
         .onDisappear {
+            clipTask?.cancel()
             exportTask?.cancel()
             heldPads.removeAll()
             recorder.stop()
             audio.stopPerformancePads()
+        }
+    }
+
+    @ViewBuilder
+    private var sourceClipPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("SAMPLE PICKER", systemImage: "waveform.badge.plus")
+                    .font(.caption.weight(.bold)).tracking(1.5)
+                Spacer()
+                Text("0,25–5 s")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if audio.duration >= PerformanceSourceClip.minLength {
+                let lastStart = max(0, audio.duration - PerformanceSourceClip.minLength)
+                Text("Início: \(clipStart, specifier: "%.2f") s")
+                    .font(.caption)
+                Slider(value: $clipStart, in: 0...lastStart)
+                    .tint(accent)
+                    .accessibilityIdentifier("performance.clipStart")
+                let upperLength = max(PerformanceSourceClip.minLength,
+                                      min(PerformanceSourceClip.maxLength,
+                                          audio.duration - clipStart))
+                Text("Duração: \(min(clipLength, upperLength), specifier: "%.2f") s")
+                    .font(.caption)
+                Slider(value: $clipLength,
+                       in: PerformanceSourceClip.minLength...upperLength)
+                    .tint(accent)
+                    .accessibilityIdentifier("performance.clipLength")
+
+                Toggle("Tenho autorização para usar e compartilhar esse trecho",
+                       isOn: $confirmSharingRights)
+                    .font(.caption)
+                    .tint(accent)
+                Button {
+                    prepareSourceClip()
+                } label: {
+                    HStack {
+                        Label(sourceClip == nil ? "Atribuir ao pad CLIP" : "Atualizar pad CLIP",
+                              systemImage: "square.stack.3d.up")
+                        Spacer()
+                        if preparingClip { ProgressView() }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+                    .background(accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(preparingClip || recorder.isRecording ||
+                          isRenderingAudio || !confirmSharingRights)
+                .accessibilityIdentifier("performance.assignClip")
+
+                if sourceClip != nil {
+                    Text("Pad CLIP pronto: toque no oitavo pad. O trecho usa PCM local e não é salvo permanentemente.")
+                        .font(.caption2)
+                        .foregroundStyle(accent)
+                }
+            } else {
+                Text("Carregue uma música local para selecionar um trecho. O kit original funciona sem música.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func prepareSourceClip() {
+        guard let url = audio.visualAnalysisURL, url.isFileURL,
+              !preparingClip, !recorder.isRecording, confirmSharingRights else { return }
+        let revision = audio.playbackSourceRevision
+        let duration = min(clipLength, audio.duration - clipStart,
+                           PerformanceSourceClip.maxLength)
+        guard duration >= PerformanceSourceClip.minLength else { return }
+        preparingClip = true
+        clipTask?.cancel()
+        clipTask = Task { @MainActor in
+            defer { preparingClip = false; clipTask = nil }
+            do {
+                let clip = try await audio.assignPerformanceSourceClip(
+                    startTime: clipStart, duration: duration,
+                    expectedRevision: revision)
+                guard !Task.isCancelled,
+                      revision == audio.playbackSourceRevision else { return }
+                sourceClip = clip
+                recordedClip = nil
+                // A new assignment changes the pad material. Old events
+                // must not silently replay against a different source clip.
+                recorder.start()
+                recorder.stop()
+                exportedAudio = nil
+            } catch is CancellationError {
+                // Track replacement or dismissal invalidated preparation.
+            } catch {
+                renderError = "Não foi possível preparar o trecho: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -277,7 +392,7 @@ struct PerformanceModeView: View {
     private func renderPerformanceAudio() {
         guard !isRenderingAudio, audio.fileName != nil,
               recordedSourceRevision == audio.playbackSourceRevision else { return }
-        let frozen = recorder.timeline()
+        let frozen = recorder.timeline(sourceClip: recordedClip)
         guard frozen.isValid && !frozen.events.isEmpty else { return }
         isRenderingAudio = true
         exportedAudio = nil
@@ -307,6 +422,7 @@ struct PerformanceModeView: View {
         case "open-hat": return "circle.righthalf.filled"
         case "clap": return "hands.clap.fill"
         case "crash": return "sparkles"
+        case PerformanceSourceClip.slotID: return "waveform.path.ecg"
         default: return "waveform.path"
         }
     }

@@ -19,12 +19,16 @@ enum PerformancePadMixdown {
     static func schedule(_ timeline: PerformanceTimeline, kit: PadKit,
                          startTime: TimeInterval, speed: Float,
                          sampleRate: Double, polyphony: Int = 12) throws -> [ScheduledHit] {
-        guard timeline.isValid, timeline.kitID == kit.id, kit.isValid,
+        let effectiveKit = timeline.sourceClip.map {
+            PadKit(id: kit.id, name: kit.name,
+                   samples: kit.samples + [$0.descriptor])
+        } ?? kit
+        guard timeline.isValid, timeline.kitID == kit.id, effectiveKit.isValid,
               startTime.isFinite, startTime >= 0,
               speed.isFinite, speed > 0, sampleRate > 0 else {
             throw AudioEngineError.unsupportedAudio
         }
-        let byID = Dictionary(uniqueKeysWithValues: kit.samples.map { ($0.id, $0) })
+        let byID = Dictionary(uniqueKeysWithValues: effectiveKit.samples.map { ($0.id, $0) })
         let ordered = timeline.events.compactMap { event -> (PadEvent, SampleDescriptor, Int64)? in
             guard let sample = byID[event.padId] else { return nil }
             let elapsed = event.sourceTime.map {
@@ -65,18 +69,29 @@ enum PerformancePadMixdown {
 
     static func write(_ timeline: PerformanceTimeline, kit: PadKit = .starter,
                       startTime: TimeInterval, speed: Float,
-                      duration: TimeInterval, sampleRate: Double) throws -> URL {
+                      duration: TimeInterval, sampleRate: Double,
+                      sourceURL: URL? = nil) throws -> URL {
         guard duration.isFinite, duration > 0, duration <= 3600,
               sampleRate.isFinite, sampleRate > 0 else {
             throw AudioEngineError.unsupportedAudio
         }
         let hits = try schedule(timeline, kit: kit, startTime: startTime,
                                 speed: speed, sampleRate: sampleRate)
-        let sourceBuffers = Dictionary(uniqueKeysWithValues: kit.samples.compactMap { sample in
+        var sourceBuffers = Dictionary(uniqueKeysWithValues: kit.samples.compactMap { sample in
             PadSampleSynthesizer.make(sample).map { (sample.id, $0) }
         })
         guard sourceBuffers.count == kit.samples.count else {
             throw AudioEngineError.bufferAllocationFailed
+        }
+        if let clip = timeline.sourceClip {
+            guard let sourceURL, sourceURL.isFileURL else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            let pcm = try PerformanceClipExtractor.decode(from: sourceURL, clip: clip)
+            guard let buffer = pcm.makeBuffer() else {
+                throw AudioEngineError.bufferAllocationFailed
+            }
+            sourceBuffers[PerformanceSourceClip.slotID] = buffer
         }
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
         let totalFrames = Int64((duration * sampleRate).rounded(.up))
