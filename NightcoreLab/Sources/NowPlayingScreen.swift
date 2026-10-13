@@ -133,7 +133,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         marbleStartedAt: marbleStartedAt,
                         frozenTime: frozenShareMarblePhase,
                         reactiveDistortion: distortion,
-                        pulseDriver: pulse
+                        pulseDriver: pulse,
+                        material: CreativePresetCatalog.material(selection: creativePresetID)
                     )
                 }
                 .transition(.opacity)
@@ -149,6 +150,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
+                        material: CreativePresetCatalog.material(selection: creativePresetID),
+
                         pulseDriver: pulse
                     )
                 }
@@ -338,7 +341,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                                          theme: appTheme,
                                          frozenTime: frozenShareMarblePhase,
                                          reactiveDistortion: distortion,
-                                         pulseDriver: pulse)
+                                         pulseDriver: pulse, material: CreativePresetCatalog.material(selection: creativePresetID))
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -632,6 +635,7 @@ private struct BackgroundLayer: View {
     var frozenTime: Float? = nil
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
+    var material: VisualMaterial = .legacyMarble
 
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
@@ -644,6 +648,8 @@ private struct BackgroundLayer: View {
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
                                     reactiveDistortion: reactiveDistortion,
+                                    material: material,
+
                                     pulseDriver: pulseDriver)
                     .transition(.opacity)
             case .cover:

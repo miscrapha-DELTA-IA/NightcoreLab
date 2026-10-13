@@ -196,9 +196,13 @@ final class CreativeIntegrationTests: XCTestCase {
     /// reaction-free Marble of their program.
     func testExperiencesResolveTheirAuthoredMaterial() throws {
         let expected: [String: (id: String, type: VisualMaterialType)] = [
-            "cyber-night": ("cyber-chrome", .marble),
-            "liquid-dream": ("liquid-dream", .marble),
-            "neon-pulse": ("neon-pulse", .marble)
+            "cyber-night": ("cyber-chrome", .marble),       // chrome-tuned Marble
+            "liquid-dream": ("liquid-glass", .liquidGlass),
+            "neon-pulse": ("neon-pulse", .marble),
+            "chrome-night": ("chrome-night", .chrome),
+            "organic-pulse": ("organic-pulse", .organicNoise),
+            "cyber-marble": ("advanced-marble", .advancedMarble),
+            "atmospheric-smoke": ("atmospheric-smoke", .atmosphericSmoke)
         ]
         for (experienceID, material) in expected {
             let preset = try XCTUnwrap(CreativePresetCatalog.selectedExperience(id: experienceID))
@@ -241,7 +245,11 @@ final class CreativeIntegrationTests: XCTestCase {
                 CreativeExperiencePreset.self, from: JSONEncoder().encode(experience)),
                 experience)
         }
-        XCTAssertEqual(CreativePresetCatalog.experiencePresets.count, 3)
+        let curated = CreativePresetCatalog.experiencePresets.map { $0.id }
+        for id in ["cyber-night", "liquid-dream", "neon-pulse"] {
+            XCTAssertTrue(curated.contains(id), id)
+        }
+        XCTAssertEqual(Set(curated).count, curated.count)
     }
 
     // MARK: Helpers

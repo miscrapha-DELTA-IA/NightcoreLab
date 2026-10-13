@@ -3,7 +3,35 @@ import Foundation
 /// Reserved vocabulary; only Marble is renderable in Stage 13.
 enum VisualMaterialType: String, Codable, CaseIterable, Sendable {
     case marble, liquid, glass, chrome, noise, fluid
-    var isSupported: Bool { self == .marble }
+    case liquidGlass, organicNoise, atmosphericSmoke, advancedMarble
+    var isSupported: Bool {
+        switch self {
+        case .marble, .chrome, .liquidGlass, .organicNoise,
+             .atmosphericSmoke, .advancedMarble: return true
+        case .liquid, .glass, .noise, .fluid: return false
+        }
+    }
+    var shaderID: Float {
+        switch self {
+        case .liquidGlass: return 1
+        case .chrome: return 2
+        case .organicNoise: return 3
+        case .atmosphericSmoke: return 4
+        case .advancedMarble: return 5
+        default: return 0
+        }
+    }
+    var acceptedSignals: [MaterialAudioSignal] {
+        switch self {
+        case .marble: return [.beat]
+        case .liquidGlass: return [.beat, .energy]
+        case .chrome: return [.energy, .brightness]
+        case .organicNoise: return [.bass, .movement]
+        case .atmosphericSmoke: return [.energy, .movement]
+        case .advancedMarble: return [.beat, .bass]
+        default: return []
+        }
+    }
 }
 
 /// Immutable authored data. Existing Stage 12/12.5 initializer and JSON keys
@@ -22,6 +50,7 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
     let parameters: VisualParameterSet
     let intensity: Double
     let audioMapping: MaterialAudioMapping
+    let controls: MaterialControls
 
     var kind: Kind { type }
     var beatPulse: Double { parameters.beatPulse }
@@ -34,13 +63,15 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
 
     init(id: String, name: String, type: VisualMaterialType = .marble,
          parameters: VisualParameterSet = .init(), intensity: Double = 1,
-         audioMapping: MaterialAudioMapping = .legacy) {
+         audioMapping: MaterialAudioMapping = .legacy,
+         controls: MaterialControls? = nil) {
         self.id = id
         self.name = name
         self.type = type
         self.parameters = parameters
         self.intensity = materialBound(intensity, 0...1, fallback: 1)
         self.audioMapping = audioMapping
+        self.controls = controls ?? .defaults(for: type)
     }
 
     init(kind: Kind = .marble, beatPulse: Double = 0,
@@ -78,7 +109,7 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, type, parameters, intensity, audioMapping
+        case id, name, type, parameters, intensity, audioMapping, controls
         case kind, beatPulse, pulseDecay, offbeatScale, warpAmount, brightnessBoost
     }
 
@@ -91,7 +122,8 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
                       parameters: try c.decode(VisualParameterSet.self, forKey: .parameters),
                       intensity: try c.decodeIfPresent(Double.self, forKey: .intensity) ?? 1,
                       audioMapping: try c.decodeIfPresent(MaterialAudioMapping.self,
-                                                         forKey: .audioMapping) ?? .legacy)
+                                                         forKey: .audioMapping) ?? .legacy,
+                      controls: try c.decodeIfPresent(MaterialControls.self, forKey: .controls))
         } else {
             self.init(kind: try c.decode(Kind.self, forKey: .kind),
                       beatPulse: try c.decode(Double.self, forKey: .beatPulse),
@@ -114,6 +146,7 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
         try c.encode(parameters, forKey: .parameters)
         try c.encode(intensity, forKey: .intensity)
         try c.encode(audioMapping, forKey: .audioMapping)
+        try c.encode(controls, forKey: .controls)
     }
 }
 

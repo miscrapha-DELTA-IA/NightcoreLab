@@ -25,7 +25,7 @@ material = (root/'Creative/VisualMaterial/VisualMaterial.swift').read_text()
 program = (root/'Creative/CreativeVisualProgram.swift').read_text()
 frame = program[program.index('struct CreativeParameterFrame:'):program.index('enum CreativeParameterResolver')]
 (out/'CreativeParameterFrame.swift').write_text('import Foundation\n' + remove_block(frame, '    func value(for target:'))
-for name in ['MaterialResolver', 'MaterialFrame', 'VisualParameterSet', 'MaterialAudioMapping', 'VisualMaterialCatalog']:
+for name in ['MaterialResolver', 'MaterialFrame', 'VisualParameterSet', 'MaterialAudioMapping', 'VisualMaterialCatalog', 'MaterialControls']:
     (out/f'{name}.swift').write_bytes((root/f'Creative/VisualMaterial/{name}.swift').read_bytes())
 # The route decision is part of the resolver; the reaction gain needs the
 # app's CreativePreset vocabulary and is passed in as a number here.

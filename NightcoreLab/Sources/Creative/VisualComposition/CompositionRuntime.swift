@@ -51,7 +51,8 @@ struct CompositionRuntime: Sendable {
         return base.withMaterial(MaterialResolver.resolve(
             material, features: features, rhythm: rhythm,
             timestamp: base.timestamp.sourceTime,
-            parameters: base.programParameters, reactionGain: gain))
+            parameters: base.programParameters, reactionGain: gain,
+            seed: composition.deterministicSeed))
     }
 
     /// Frozen AudioFeatures path used by CreativeExperienceResolver and

@@ -199,12 +199,12 @@ extension CreativePresetCatalog {
             ]))
         let liquid = authoredExperience(
             id: "liquid-dream", name: "Liquid Dream",
-            description: "Soft Marble motion with restrained Magazine Cutout",
+            description: "Procedural liquid glass with restrained Magazine Cutout",
             sourceID: "soft-flow",
             typography: TypographyPreset(
                 style: .magazineCutout, effectIntensity: 0.3,
                 deterministicSeed: 0xD123),
-            seed: 0xD123, material: VisualMaterialCatalog.liquidDream,
+            seed: 0xD123, material: VisualMaterialCatalog.glassSurface,
             mapping: CreativeAudioMapping(enabled: true, bindings: [
                 CreativeExperienceAudioBinding(
                     signal: .energy, target: .movement, gain: 0.2),
@@ -227,7 +227,43 @@ extension CreativePresetCatalog {
                 CreativeExperienceAudioBinding(
                     signal: .bass, target: .movement, gain: 0.3)
             ]))
-        return [cyber, liquid, neon].compactMap { $0 }
+        let chrome = authoredExperience(
+            id: "chrome-night", name: "Chrome Night",
+            description: "Metallic reflection bands and accent highlights",
+            sourceID: "night-drive",
+            typography: TypographyPreset(style: .neon, effectIntensity: 0.5),
+            seed: 0xC400, material: VisualMaterialCatalog.chromeNight,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.2)
+            ]))
+        let organic = authoredExperience(
+            id: "organic-pulse", name: "Organic Pulse",
+            description: "Bass-reactive spatial fractal turbulence",
+            sourceID: "bass-pulse",
+            typography: TypographyPreset(style: .kinetic, effectIntensity: 0.55),
+            seed: 0x0A61, material: VisualMaterialCatalog.organicPulse,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .bass, target: .movement, gain: 0.3)
+            ]))
+        let marble = authoredExperience(
+            id: "cyber-marble", name: "Cyber Marble",
+            description: "Layered high-contrast organic marble",
+            sourceID: "original",
+            typography: TypographyPreset(style: .glitch, effectIntensity: 0.55),
+            seed: 0xC1B5, material: VisualMaterialCatalog.advancedMarble,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .beat, target: .visualIntensity, gain: 0.2)
+            ]))
+        let smoke = authoredExperience(
+            id: "atmospheric-smoke", name: "Atmospheric Smoke",
+            description: "Low-density procedural smoke drifting with the track",
+            sourceID: "soft-flow",
+            typography: TypographyPreset(style: .magazineCutout, effectIntensity: 0.3),
+            seed: 0x5A01, material: VisualMaterialCatalog.smoke,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .movement, gain: 0.2)
+            ]))
+        return [cyber, liquid, neon, chrome, organic, marble, smoke].compactMap { $0 }
     }()
 
     /// Look up demo experiences, then wrap the original four recipes losslessly.

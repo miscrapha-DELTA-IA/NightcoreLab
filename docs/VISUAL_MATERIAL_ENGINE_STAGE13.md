@@ -61,7 +61,7 @@ program-derived materials already include their original pulse scaling.
 
 Only `marble` is supported. Reserved type tags liquid/glass/chrome/noise/fluid are
 serializable vocabulary, explicitly falling back to Original Marble on resolution.
-Four material recipes only: Original Marble, Cyber Chrome, Liquid Dream, Neon Pulse.
+Four material recipes only in Stage 13: Original Marble, Cyber Chrome, Liquid Dream, Neon Pulse (13B replaces Liquid Dream's material with Liquid Glass and removes the unused recipe).
 Existing Cyber Night/Liquid Dream/Neon Pulse experiences reference the latter three;
 the saved experience IDs and original recipe selection remain intact. Chrome and
 Liquid are visual recipe names, not new shader implementations.

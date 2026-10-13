@@ -143,7 +143,8 @@ final class VisualMaterialEngineTests: XCTestCase {
         let track = TrackInfo(track: Track(id: "12345678901", title: "Live",
                                           thumbnailURL: nil, cleanArtist: "Test"),
                               fileName: nil, coverURL: nil)
-        for id in ["original", "bass-pulse", "cyber-night", "liquid-dream", "neon-pulse"] {
+        for id in ["original", "bass-pulse", "cyber-night", "liquid-dream", "neon-pulse",
+                   "chrome-night", "organic-pulse", "cyber-marble", "atmospheric-smoke"] {
             for reaction in [CreativePreset.AudioReaction.subtle, .responsive] {
                 let effective = program(id, reaction)
                 let request = try StoryRequestBuilder.make(
@@ -159,7 +160,9 @@ final class VisualMaterialEngineTests: XCTestCase {
                         experience: CreativePresetCatalog.selectedExperience(id: id),
                         recipe: effective),
                     rhythm: analysis, clock: clock, timeline: timeline(),
-                    reactionGain: CreativeReactionProfile.gain(reaction))
+                    reactionGain: CreativeReactionProfile.gain(reaction),
+                    seed: CreativePresetCatalog.selectedExperience(id: id)?
+                        .composition.deterministicSeed ?? 0)
                 XCTAssertEqual(driver.material, request.compositionRuntime?.material, id)
                 let grid = StoryRenderTimeline(request: request, profile: .balanced)
                 for index in [0, 7, 19] {
@@ -278,14 +281,21 @@ final class VisualMaterialEngineTests: XCTestCase {
         XCTAssertEqual(decoded.warpAmount, 0.5)
     }
 
-    func testOnlyMarbleIsSupportedAndCatalogContainsExactlyFourRecipes() {
-        XCTAssertEqual(VisualMaterialCatalog.all.map(\.name),
-                       ["Original Marble", "Cyber Chrome", "Liquid Dream", "Neon Pulse"])
-        XCTAssertTrue(VisualMaterialCatalog.all.allSatisfy { $0.type == .marble })
+    func testLegacyMaterialCatalogPrefixAndExpandedTypes() {
+        XCTAssertEqual(Array(VisualMaterialCatalog.all.prefix(3)).map { $0.name },
+                       ["Original Marble", "Cyber Chrome", "Neon Pulse"])
+        XCTAssertTrue(VisualMaterialCatalog.all.prefix(3).allSatisfy { $0.type == .marble })
+        // Every catalog material is used by an experience (or is the default).
+        let used = Set(CreativePresetCatalog.experiencePresets.map { $0.visualMaterial.id })
+            .union([VisualMaterialCatalog.originalMarble.id])
+        XCTAssertTrue(VisualMaterialCatalog.all.allSatisfy { used.contains($0.id) })
+        XCTAssertEqual(Set(VisualMaterialCatalog.all.suffix(from: 3).map(\.type)),
+                       Set([.liquidGlass, .chrome, .organicNoise,
+                            .atmosphericSmoke, .advancedMarble]))
         for type in VisualMaterialType.allCases where !type.isSupported {
             let reserved = VisualMaterial(id: "future", name: "Future", type: type)
-            let frame = MaterialResolver.resolve(reserved, timestamp: 1)
-            XCTAssertEqual(frame, MaterialResolver.resolve(.legacyMarble, timestamp: 1))
+            XCTAssertEqual(MaterialResolver.resolve(reserved, timestamp: 1),
+                           MaterialResolver.resolve(.legacyMarble, timestamp: 1))
         }
     }
 

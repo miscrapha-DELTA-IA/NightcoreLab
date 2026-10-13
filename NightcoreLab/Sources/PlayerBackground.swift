@@ -52,6 +52,7 @@ struct PlayerBackgroundView: View {
     var frozenTime: Float? = nil
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
+    var material: VisualMaterial = .legacyMarble
 
     var body: some View {
         ZStack {
@@ -65,6 +66,8 @@ struct PlayerBackgroundView: View {
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
                     reactiveDistortion: reactiveDistortion,
+                    material: material,
+
                     pulseDriver: frozenTime == nil ? pulseDriver : nil
                 )
                 .overlay(Color.black.opacity(0.4))

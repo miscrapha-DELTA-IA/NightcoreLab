@@ -10,16 +10,19 @@ struct MarblePulseDriver: Equatable, Sendable {
     let clock: PlaybackClock
     let timeline: AudioFeatureTimeline?
     let reactionGain: Double
+    let seed: UInt64
     /// Identity of this run, so views only update when the source changes.
     let id: UUID
 
     init(material: VisualMaterial, rhythm: RhythmAnalysisResult?, clock: PlaybackClock,
-         timeline: AudioFeatureTimeline? = nil, reactionGain: Double = 1) {
+         timeline: AudioFeatureTimeline? = nil, reactionGain: Double = 1,
+         seed: UInt64 = 0) {
         self.material = material
         self.rhythm = rhythm
         self.clock = clock
         self.timeline = timeline
         self.reactionGain = reactionGain
+        self.seed = seed
         self.id = UUID()
     }
 
@@ -38,7 +41,7 @@ struct MarblePulseDriver: Equatable, Sendable {
             features: playing ? CompositionAudioSampler.sample(timeline, at: time) : nil,
             rhythm: playing ? rhythm.flatMap { RhythmFrame.at(time, in: $0) } : nil,
             timestamp: time, parameters: parameters,
-            reactionGain: playing ? reactionGain : 0)
+            reactionGain: playing ? reactionGain : 0, seed: seed)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
