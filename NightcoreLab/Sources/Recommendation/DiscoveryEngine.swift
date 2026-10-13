@@ -78,8 +78,9 @@ actor DiscoveryEventLog {
                     try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
                                                              withIntermediateDirectories: true)
                     try data.write(to: file, options: .atomic)
-                    var dir = file.deletingLastPathComponent()
-                    try? dir.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+                    let directory = file.deletingLastPathComponent()
+                    try? (directory as NSURL).setResourceValue(true,
+                                                               forKey: .isExcludedFromBackupKey)
                 } catch {
                     // The log is best effort. Never interrupt audio or export on an I/O failure.
                 }
@@ -327,10 +328,12 @@ enum DiscoveryQueuePolicy {
                     let item = remaining[index].1
                     let vector = vectors[item.id]
                     let proximity = vector.flatMap { priorVector.similarity(to: $0) } ?? 0.5
-                    let repeatedArtist = TrackFeatures(track: prior).primaryArtist
-                        .flatMap { $0 == TrackFeatures(track: item).primaryArtist ? 0.6 : 0 } ?? 0
-                    let recent = recentlyPlayed.contains(item.id) ? 0.8 : 0
-                    return 1 - proximity + repeatedArtist + recent
+                    let priorArtist = TrackFeatures(track: prior).primaryArtist
+                    let candidateArtist = TrackFeatures(track: item).primaryArtist
+                    let repeatedArtist: Double = priorArtist != nil &&
+                        priorArtist == candidateArtist ? 0.6 : 0.0
+                    let recent: Double = recentlyPlayed.contains(item.id) ? 0.8 : 0.0
+                    return 1.0 - proximity + repeatedArtist + recent
                 }
                 let lhs = cost(a), rhs = cost(b)
                 return lhs == rhs ? remaining[a].0 < remaining[b].0 : lhs < rhs
