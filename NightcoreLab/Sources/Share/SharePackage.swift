@@ -47,6 +47,22 @@ enum SharePackageError: LocalizedError {
 /// Product orchestration ABOVE the stable StoryVideoExporter.
 @MainActor
 enum SharePackageBuilder {
+    /// No cleanup on share-sheet dismissal: the system may still be reading
+    /// URLs asynchronously. Collect abandoned packages only after 24 hours.
+    private static func pruneExpiredPackages() {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory
+        guard let contents = try? manager.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]) else { return }
+        for url in contents where url.lastPathComponent.hasPrefix("NightcoreShare-") {
+            guard let modified = try? url.resourceValues(
+                forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  Date().timeIntervalSince(modified) > 86_400 else { continue }
+            try? manager.removeItem(at: url)
+        }
+    }
+
     static func build(
         request: StoryVideoRequest,
         audioSource: StoryAudioSource?,
@@ -56,6 +72,7 @@ enum SharePackageBuilder {
         visualRhythm: RhythmAnalysisResult?,
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> SharePackage {
+        pruneExpiredPackages()
         let encoding = selectedProfile.encodingProfile(for: request.mode)
         let timeline = StoryRenderTimeline(request: request, profile: encoding)
         let folder = FileManager.default.temporaryDirectory
@@ -78,8 +95,11 @@ enum SharePackageBuilder {
             guard let videoTrack = tracks.first else { throw SharePackageError.invalidVideo }
             let size = try await videoTrack.load(.naturalSize)
             let videoDuration = try await asset.load(.duration)
+            let actualFPS = try await videoTrack.load(.nominalFrameRate)
             guard Int(size.width.rounded()) == encoding.width,
                   Int(size.height.rounded()) == encoding.height,
+                  actualFPS > 0,
+                  abs(actualFPS - Float(encoding.fps)) <= 1.5,
                   CMTimeGetSeconds(videoDuration).isFinite,
                   CMTimeGetSeconds(videoDuration) > 0 else {
                 throw SharePackageError.invalidVideo
@@ -112,7 +132,7 @@ enum SharePackageBuilder {
                 presetID: request.renderRuntime?.composition.program.id ??
                     request.reactiveProgram?.id ?? CreativePresetCatalog.defaultID,
                 materialID: request.renderRuntime?.material.id ?? VisualMaterial.legacyMarble.id,
-                duration: request.duration,
+                duration: CMTimeGetSeconds(videoDuration),
                 width: encoding.width, height: encoding.height, fps: encoding.fps,
                 codec: "h264", quality: selectedProfile.quality,
                 aspectRatio: selectedProfile.aspectRatio,
@@ -129,6 +149,7 @@ enum SharePackageBuilder {
 
             let destination = folder.appendingPathComponent("video.mp4")
             try FileManager.default.moveItem(at: video, to: destination)
+            try Task.checkCancellation()
             exportedVideo = nil
             progress(1)
             return SharePackage(videoURL: destination,
