@@ -116,6 +116,22 @@ final class ShareExportPipelineTests: XCTestCase {
         let pixels = try XCTUnwrap(preview.uiImage?.cgImage)
         XCTAssertEqual(pixels.width, exported.width)
         XCTAssertEqual(pixels.height, exported.height)
+
+        // Regression baseline: prior to 14A, ImageRenderer directly wrapped
+        // StorySceneView without any export canvas or crop adapter.
+        let legacy = ImageRenderer(content: StorySceneView(
+            request: clip, artwork: nil, frame: frame))
+        legacy.proposedSize = ProposedViewSize(StoryVideoRequest.size)
+        legacy.scale = profile.scale
+        let baseline = try XCTUnwrap(legacy.uiImage?.cgImage)
+        let encodedBytes = try XCTUnwrap(exported.dataProvider?.data) as Data
+        let previewBytes = try XCTUnwrap(pixels.dataProvider?.data) as Data
+        let baselineBytes = try XCTUnwrap(baseline.dataProvider?.data) as Data
+        XCTAssertEqual(encodedBytes, baselineBytes,
+                       "Default portrait pixels must match the old StorySceneView")
+        XCTAssertEqual(previewBytes, encodedBytes,
+                       "Preview and video must consume identical visual state")
+
         let resolved = clip.resolvedFrame(frame, audioTimeline: nil, rhythm: nil)
         XCTAssertEqual(StorySceneView(request: clip, artwork: nil, frame: frame).materialFrame,
                        resolved?.materialFrame)
