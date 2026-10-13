@@ -20,10 +20,10 @@ final class PlaybackCoordinator: ObservableObject {
     enum TransportState: Equatable {
         case idle
         case loading(String)
-        case playing(String)
-        case paused(String)
-        case seeking(String)
-        case ended(String)
+        case playing(String?)
+        case paused(String?)
+        case seeking(String?)
+        case ended(String?)
         case failed(String)
     }
 
@@ -78,8 +78,9 @@ final class PlaybackCoordinator: ObservableObject {
     /// Called after AudioEngineManager confirms play/pause. If a selection is
     /// preparing, only didStart/didFail may reconcile its generation token.
     func confirmPlayback(isPlaying: Bool, trackID: String?) {
-        guard !isPreparing, let trackID else { return }
+        guard !isPreparing else { return }
         requestedCommand = nil
+        // Imported local audio has no Track ID; nil denotes that valid state.
         transportState = isPlaying ? .playing(trackID) : .paused(trackID)
     }
 
@@ -112,7 +113,7 @@ final class PlaybackCoordinator: ObservableObject {
               audio.duration > 0 else { return }
         let clamped = min(max(0, seconds), audio.duration)
         requestedCommand = .seek(clamped)
-        if let trackID { transportState = .seeking(trackID) }
+        transportState = .seeking(trackID)
         audio.seek(to: clamped)
         confirmPlayback(isPlaying: audio.isPlaying, trackID: trackID)
     }
@@ -145,6 +146,18 @@ final class PlaybackCoordinator: ObservableObject {
     func enqueue(_ tracks: [Track], excluding currentID: String,
                  queue: PlaybackQueue) {
         queue.append(tracks, excluding: currentID)
+    }
+
+    @discardableResult
+    func reorderQueue(ids: [String], queue: PlaybackQueue) -> Bool {
+        queue.reorder(ids: ids)
+    }
+
+    func reorderAfterSkip(anchor: Track,
+                          vectors: [String: DiscoveryFeatureVector],
+                          recentlyPlayed: Set<String>, queue: PlaybackQueue) {
+        queue.reorderAfterSkip(anchor: anchor, vectors: vectors,
+                               recentlyPlayed: recentlyPlayed)
     }
 
     func clearQueue(_ queue: PlaybackQueue) {
