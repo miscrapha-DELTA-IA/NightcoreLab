@@ -53,6 +53,7 @@ struct PerformanceModeView: View {
     @State private var recorder = PerformanceRecorder()
     @State private var haptics = false
     @State private var heldPads: Set<String> = []
+    @State private var recordedSourceRevision: Int?
     @State private var isRenderingAudio = false
     @State private var exportedAudio: URL?
     @State private var renderError: String?
@@ -111,7 +112,11 @@ struct PerformanceModeView: View {
                         HStack(spacing: 12) {
                             Button {
                                 if recorder.isRecording { recorder.stop() }
-                                else { recorder.start(); exportedAudio = nil }
+                                else {
+                                    recordedSourceRevision = audio.playbackSourceRevision
+                                    recorder.start()
+                                    exportedAudio = nil
+                                }
                             } label: {
                                 Label(recorder.isRecording ? "Parar" : "Gravar",
                                       systemImage: recorder.isRecording ? "stop.fill" : "record.circle")
@@ -159,7 +164,8 @@ struct PerformanceModeView: View {
                                             in: RoundedRectangle(cornerRadius: 12))
                             }
                             .disabled(isRenderingAudio || audio.isExporting ||
-                                      audio.fileName == nil)
+                                      audio.fileName == nil ||
+                                      recordedSourceRevision != audio.playbackSourceRevision)
                             .accessibilityIdentifier("performance.renderAudio")
 
                             if let exportedAudio {
@@ -172,6 +178,9 @@ struct PerformanceModeView: View {
                             }
                             if audio.fileName == nil {
                                 Text("Carregue uma música para exportar o áudio misturado. Os pads funcionam sem música.")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            } else if recordedSourceRevision != audio.playbackSourceRevision {
+                                Text("A faixa foi alterada. Inicie uma nova gravação para exportar áudio com segurança.")
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
@@ -205,6 +214,10 @@ struct PerformanceModeView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(renderError ?? "")
+        }
+        .onChange(of: audio.playbackSourceRevision) { _, _ in
+            if recorder.isRecording { recorder.stop() }
+            exportedAudio = nil
         }
         .onDisappear {
             exportTask?.cancel()
@@ -262,7 +275,8 @@ struct PerformanceModeView: View {
     }
 
     private func renderPerformanceAudio() {
-        guard !isRenderingAudio, audio.fileName != nil else { return }
+        guard !isRenderingAudio, audio.fileName != nil,
+              recordedSourceRevision == audio.playbackSourceRevision else { return }
         let frozen = recorder.timeline()
         guard frozen.isValid && !frozen.events.isEmpty else { return }
         isRenderingAudio = true

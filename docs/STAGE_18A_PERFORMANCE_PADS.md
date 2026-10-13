@@ -77,3 +77,11 @@ temporary AVAudioEngine for export, not a second live playback graph.
    renderer. Audio-only export is available; video remains unchanged.
 3. Only then allow rights-safe sample slicing and loop regions. Stems, mic
    and scoring remain future work.
+
+## Source replacement protection
+
+Live track replacement stops all pad voices and increments a transient
+`AudioEngineManager.playbackSourceRevision`. The recording UI freezes that
+revision on capture start and forbids mixing a previous recording onto a
+newly loaded song. This revision is **never included** in JSON event shares
+or written to disk. Future sample slicing must retain provenance and rights.

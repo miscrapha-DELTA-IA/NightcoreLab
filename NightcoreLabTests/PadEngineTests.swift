@@ -202,6 +202,7 @@ final class PadEngineTests: XCTestCase {
         let audio = AudioEngineManager()
         XCTAssertTrue(audio.performancePadsReady)
         try audio.load(url: url)
+        let firstRevision = audio.playbackSourceRevision
         audio.play()
         XCTAssertTrue(audio.isPlaying)
         XCTAssertTrue(audio.triggerPad("kick"))
@@ -211,5 +212,7 @@ final class PadEngineTests: XCTestCase {
         audio.stopPerformancePads()
         XCTAssertTrue(audio.isPlaying)
         audio.pause()
+        try audio.load(url: url)
+        XCTAssertNotEqual(audio.playbackSourceRevision, firstRevision)
     }
 }

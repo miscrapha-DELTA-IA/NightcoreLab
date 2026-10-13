@@ -77,6 +77,9 @@ final class AudioEngineManager {
     private(set) var isPlaying = false
     private(set) var playbackCompletionCount = 0
     private(set) var fileName: String?
+    /// Ephemeral identity: changes every time the loaded source is replaced.
+    /// Never serialized with events or exported as a private file path.
+    private(set) var playbackSourceRevision = 0
     private(set) var duration: TimeInterval = 0
     private(set) var isExporting = false
     private(set) var exportProgress: Double = 0
@@ -174,6 +177,7 @@ final class AudioEngineManager {
         stopPlayback()
         audioFile = file
         sourceURL = url
+        playbackSourceRevision &+= 1
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
