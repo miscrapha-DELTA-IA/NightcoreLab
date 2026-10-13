@@ -45,10 +45,13 @@ temporary AVAudioEngine for export, not a second live playback graph.
 
 - Real-device pad→sound latency and CPU/memory/thermal load need measured
   baseline/after results. XCTest is not an audio latency benchmark.
-- The existing Story/MP4/audio exporter is **unchanged** at this point:
-  it does not yet mix pad events into exported audio/video.
-  The in-memory timeline contract is groundwork for deterministic future
-  rendering; no new export path has been inferred or claimed.
+- The existing **video/Story exporter** remains unchanged. The existing
+  `AudioEngineManager.renderOffline` now supports an optional frozen
+  PerformanceTimeline. A temporary chunked pad stem is mixed via the existing
+  offline graph upstream of the common limiter; normal exports do not pass it.
+  Performance Mode can share the resulting M4A when a music source is loaded.
+  Pad-only audio export, live FX automation and video/Story integration remain
+  pending. JSON share remains an event-only option.
 - Sample Picker, song slicing, loops, optional offline stem splitting,
   microphone capture, karaoke scoring and AUv3 are **not** in this MVP.
 - `PanelStore` still controls the existing Player/Karaoke visibility;
@@ -67,9 +70,10 @@ temporary AVAudioEngine for export, not a second live playback graph.
 
 ## Next bounded increments (subject to tests)
 
-1. Add opt-in offline rendering of a **frozen** PerformanceTimeline to the
-   existing offline exporter, matching live pad synthesis/voice allocation.
-2. Share a small recorded performance as a mixed audio file or Story, without
-   changing normal Player exports or existing visual presets.
+1. Run a real-device A/B test for pad→sound latency, polyphonic choke and
+   pre-/post-mix limiter behavior; verify the M4A stems sound representative
+   of the live kit at 44.1k and 48k sample rates.
+2. Integrate a frozen performance-event projection with the *existing* Story
+   renderer. Audio-only export is available; video remains unchanged.
 3. Only then allow rights-safe sample slicing and loop regions. Stems, mic
    and scoring remain future work.

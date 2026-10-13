@@ -44,7 +44,10 @@ struct PerformanceModeView: View {
     @State private var recorder = PerformanceRecorder()
     @State private var haptics = false
     @State private var lastHitID: String?
-    @State private var hits = 0
+    @State private var isRenderingAudio = false
+    @State private var exportedAudio: URL?
+    @State private var renderError: String?
+    @State private var exportTask: Task<Void, Never>?
 
     private let grid = [GridItem(.flexible(), spacing: 12),
                         GridItem(.flexible(), spacing: 12),
@@ -99,7 +102,7 @@ struct PerformanceModeView: View {
                         HStack(spacing: 12) {
                             Button {
                                 if recorder.isRecording { recorder.stop() }
-                                else { recorder.start() }
+                                else { recorder.start(); exportedAudio = nil }
                             } label: {
                                 Label(recorder.isRecording ? "Parar" : "Gravar",
                                       systemImage: recorder.isRecording ? "stop.fill" : "record.circle")
@@ -123,12 +126,49 @@ struct PerformanceModeView: View {
                                 .accessibilityIdentifier("performance.shareEvents")
                             }
                         }
-                        Text("A gravação salva somente ações e tempos em memória; o áudio final com pads e o vídeo serão integrados ao export em etapa própria.")
+                        Text("A captura guarda ações e tempos em memória. Você pode compartilhar os eventos em JSON e, com música carregada, renderizar um M4A com os pads. Exportação de Story com pads é etapa posterior.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                     .padding(14)
                     .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+
+                    if !recorder.isRecording && !recorder.events.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Button {
+                                renderPerformanceAudio()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "waveform.badge.plus")
+                                    Text(isRenderingAudio ? "Renderizando áudio…" : "Criar música + pads (M4A)")
+                                    Spacer()
+                                    if isRenderingAudio { ProgressView() }
+                                }
+                                .padding(14)
+                                .frame(maxWidth: .infinity)
+                                .background(accent.opacity(0.18),
+                                            in: RoundedRectangle(cornerRadius: 12))
+                            }
+                            .disabled(isRenderingAudio || audio.isExporting ||
+                                      audio.fileName == nil)
+                            .accessibilityIdentifier("performance.renderAudio")
+
+                            if let exportedAudio {
+                                ShareLink(item: exportedAudio) {
+                                    Label("Compartilhar áudio com pads", systemImage: "square.and.arrow.up")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .accessibilityIdentifier("performance.shareAudio")
+                            }
+                            if audio.fileName == nil {
+                                Text("Carregue uma música para exportar o áudio misturado. Os pads funcionam sem música.")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(14)
+                        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+                    }
 
                     Toggle("Feedback tátil", isOn: $haptics)
                         .font(.subheadline)
@@ -149,7 +189,16 @@ struct PerformanceModeView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert("Exportação da performance", isPresented: Binding(
+            get: { renderError != nil },
+            set: { if !$0 { renderError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(renderError ?? "")
+        }
         .onDisappear {
+            exportTask?.cancel()
             recorder.stop()
             audio.stopPerformancePads()
         }
@@ -192,9 +241,33 @@ struct PerformanceModeView: View {
         recorder.append(sample, velocity: velocity,
                         sourceTime: audio.isPlaying ? audio.playbackTime : nil)
         lastHitID = sample.id
-        hits &+= 1
+        exportedAudio = nil
         if haptics {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    private func renderPerformanceAudio() {
+        guard !isRenderingAudio, audio.fileName != nil else { return }
+        let frozen = recorder.timeline()
+        guard frozen.isValid && !frozen.events.isEmpty else { return }
+        isRenderingAudio = true
+        exportedAudio = nil
+        renderError = nil
+        exportTask = Task { @MainActor in
+            defer { isRenderingAudio = false; exportTask = nil }
+            do {
+                let result = try await audio.exportPerformanceAudio(timeline: frozen)
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: result)
+                    return
+                }
+                exportedAudio = result
+            } catch is CancellationError {
+                // The sheet was dismissed; the offline render is cancelled.
+            } catch {
+                renderError = error.localizedDescription
+            }
         }
     }
 

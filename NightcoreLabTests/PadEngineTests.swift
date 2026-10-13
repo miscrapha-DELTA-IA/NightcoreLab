@@ -97,6 +97,43 @@ final class PadEngineTests: XCTestCase {
         XCTAssertFalse(runtime.trigger(padID: "kick", velocity: .nan))
     }
 
+    func testOfflinePadScheduleClipsHatChokeAndVoiceSteal() throws {
+        let events = [
+            PadEvent(id: UUID(), padId: "closed-hat", timestamp: 0.1,
+                     velocity: 1, duration: 0.12, sourceTime: nil),
+            PadEvent(id: UUID(), padId: "open-hat", timestamp: 0.15,
+                     velocity: 1, duration: 0.54, sourceTime: nil),
+            PadEvent(id: UUID(), padId: "kick", timestamp: 0.2,
+                     velocity: 1, duration: 0.46, sourceTime: nil)
+        ]
+        let timeline = PerformanceTimeline(kitID: PadKit.starter.id, events: events)
+        let schedule = try PerformancePadMixdown.schedule(
+            timeline, kit: .starter, startTime: 0, speed: 1,
+            sampleRate: 48_000, polyphony: 2)
+        XCTAssertEqual(schedule.count, 3)
+        XCTAssertEqual(schedule[0].startFrame, 4800)
+        XCTAssertEqual(schedule[0].endFrame, 7200)
+        XCTAssertLessThanOrEqual(schedule[1].endFrame, Int64(0.2 * 48_000 + 0.5))
+    }
+
+    func testOfflineStemSilenceBeforeEventAndWaveformAfter() throws {
+        let event = PadEvent(id: UUID(), padId: "kick", timestamp: 0.25,
+                             velocity: 0.9, duration: 0.46, sourceTime: 1.25)
+        let timeline = PerformanceTimeline(kitID: PadKit.starter.id, events: [event])
+        let url = try PerformancePadMixdown.write(
+            timeline, startTime: 1, speed: 1, duration: 0.8,
+            sampleRate: 44_100)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32,
+                                   interleaved: false)
+        let buf = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                 frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buf)
+        let samples = try XCTUnwrap(buf.floatChannelData?[0])
+        XCTAssertTrue((0..<10_000).allSatisfy { samples[$0] == 0 })
+        XCTAssertGreaterThan((11_500..<14_500).map { abs(samples[$0]) }.max() ?? 0, 0.03)
+    }
+
     @MainActor
     func testExistingLiveEngineStillLoadsMusicAndAcceptsPads() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
