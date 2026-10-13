@@ -50,6 +50,20 @@ final class PlaybackCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.transportState, .idle)
     }
 
+    func testEndStateSurvivesPlaybackFalseObserverAndNewRequestResetsIt() {
+        let coordinator = PlaybackCoordinator()
+        let started = coordinator.begin(trackID: "old")
+        XCTAssertTrue(coordinator.didStart(started, trackID: "old"))
+        coordinator.didEnd(trackID: "old")
+        coordinator.confirmPlayback(isPlaying: false, trackID: "old")
+        XCTAssertEqual(coordinator.transportState, .ended("old"))
+
+        let next = coordinator.begin(trackID: "new")
+        XCTAssertTrue(coordinator.didStart(next, trackID: "new"))
+        coordinator.confirmPlayback(isPlaying: false, trackID: "new")
+        XCTAssertEqual(coordinator.transportState, .paused("new"))
+    }
+
     func testConfirmedStartCommitsOnlyChosenQueueEntry() {
         let coordinator = PlaybackCoordinator()
         let navigation = PlaybackNavigationHistory()
