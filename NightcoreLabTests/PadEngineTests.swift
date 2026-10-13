@@ -113,7 +113,8 @@ final class PadEngineTests: XCTestCase {
         XCTAssertEqual(schedule.count, 3)
         XCTAssertEqual(schedule[0].startFrame, 4800)
         XCTAssertEqual(schedule[0].endFrame, 7200)
-        XCTAssertLessThanOrEqual(schedule[1].endFrame, Int64(0.2 * 48_000 + 0.5))
+        XCTAssertGreaterThan(schedule[1].endFrame, Int64(0.60 * 48_000),
+                             "Kick must not choke the still-open hat")
     }
 
     func testOfflineStemSilenceBeforeEventAndWaveformAfter() throws {
