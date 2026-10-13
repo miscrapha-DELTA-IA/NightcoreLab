@@ -53,28 +53,33 @@ final class CreativeIntegrationTests: XCTestCase {
 
     // MARK: Preview = export, field by field
 
+    /// Preview and export must receive EXACTLY the same resolved state: the
+    /// preview's frame comes from `request.resolvedFrame` with the same audio
+    /// timeline and rhythm the exporter uses, and both carry the same
+    /// timestamp, AudioFeatures and RhythmFrame into the material.
     func testPreviewAndExportResolveIdenticalValues() throws {
         let source = rhythm()
+        let envelope = audioTimeline()
         for reactive in [false, true] {
             for style in TypographyStyle.allCases {
                 let story = try request(reactive: reactive, style: style)
+                let runtime = try XCTUnwrap(story.compositionRuntime)
                 let grid = StoryRenderTimeline(request: story, profile: .balanced)
                 for index in stride(from: 0, to: grid.frameCount, by: 11) {
                     let frame = grid.frame(index: index)
-                    let layer = TypographyLayer.forStory(
-                        lines: story.lines, lyricTime: frame.lyricTime,
-                        lyricOffset: story.lyricOffset, preset: story.typographyPreset,
-                        prepared: story.preparedLyrics)
-                    let supplied = story.compositionRuntime?.frame(
-                        at: frame.elapsed, audioTimeline: nil, typography: layer)
+                    // Exactly what StoryDraftPreview supplies.
+                    let supplied = story.resolvedFrame(frame, audioTimeline: envelope,
+                                                       rhythm: source)
                     let preview = StorySceneView(
                         request: story, artwork: nil, frame: grid.frame(at: frame.elapsed),
-                        visualRhythm: source, resolvedCompositionFrame: supplied)
+                        visualTimeline: envelope, visualRhythm: source,
+                        resolvedCompositionFrame: supplied)
                     let export = StorySceneView(request: story, artwork: nil, frame: frame,
-                                                visualRhythm: source)
+                                                visualTimeline: envelope, visualRhythm: source)
                     let context = "reactive=\(reactive) \(style) index=\(index)"
                     XCTAssertEqual(preview.resolvedCompositionFrame,
                                    export.resolvedCompositionFrame, context)
+                    XCTAssertEqual(preview.materialFrame, export.materialFrame, context)
                     XCTAssertEqual(preview.typographyFrame, export.typographyFrame, context)
                     XCTAssertEqual(preview.reactiveDistortion, export.reactiveDistortion, context)
                     XCTAssertEqual(preview.beatPulse, export.beatPulse, context)
@@ -85,6 +90,24 @@ final class CreativeIntegrationTests: XCTestCase {
                             ResolvedLayerFrame.storyModifiers(
                                 kind: kind, frame: export.resolvedCompositionFrame),
                             context)
+                    }
+                    // The shared inputs, recomputed independently: same timestamp,
+                    // same AudioFeatures, same RhythmFrame, same reaction gain.
+                    let composed = try XCTUnwrap(export.resolvedCompositionFrame, context)
+                    let sourceTime = composed.timestamp.sourceTime
+                    let expected = MaterialResolver.resolve(
+                        runtime.material,
+                        features: CompositionAudioSampler.sample(envelope, at: sourceTime),
+                        rhythm: RhythmFrame.at(sourceTime, in: source),
+                        timestamp: sourceTime,
+                        parameters: composed.programParameters,
+                        reactionGain: CreativeReactionProfile.gain(
+                            runtime.composition.program.preset.audioReaction))
+                    XCTAssertEqual(export.materialFrame, expected, context)
+                    XCTAssertEqual(export.materialFrame.timestamp, sourceTime, context)
+                    if !reactive {
+                        XCTAssertEqual(export.beatPulse, 0, context)
+                        XCTAssertEqual(export.reactiveDistortion, 0, context)
                     }
                 }
             }
@@ -168,20 +191,40 @@ final class CreativeIntegrationTests: XCTestCase {
 
     // MARK: Experience → material → uniforms (Stage 12)
 
-    func testExperiencePresetsDriveTheMarbleMaterial() throws {
+    /// Experiences no longer imply the Marble: each one resolves, through the
+    /// single material rule, to the material it authors; recipes to the
+    /// reaction-free Marble of their program.
+    func testExperiencesResolveTheirAuthoredMaterial() throws {
+        let expected: [String: (id: String, type: VisualMaterialType)] = [
+            "cyber-night": ("cyber-chrome", .marble),
+            "liquid-dream": ("liquid-dream", .marble),
+            "neon-pulse": ("neon-pulse", .marble)
+        ]
+        for (experienceID, material) in expected {
+            let preset = try XCTUnwrap(CreativePresetCatalog.selectedExperience(id: experienceID))
+            let resolved = CreativePresetCatalog.material(selection: experienceID)
+            XCTAssertEqual(resolved.id, material.id, experienceID)
+            XCTAssertEqual(resolved.type, material.type, experienceID)
+            XCTAssertEqual(resolved, preset.visualMaterial, experienceID)
+            XCTAssertEqual(resolved, CreativeExperienceResolver.material(experience: preset))
+            XCTAssertEqual(CreativeReactionProfile.materialRoute(for: resolved), .material,
+                           "\(experienceID) maps audio in the material layer only")
+        }
+        for recipe in CreativePresetCatalog.all {
+            let resolved = CreativePresetCatalog.material(selection: recipe.id)
+            XCTAssertEqual(resolved, VisualMaterial.marble(for: recipe), recipe.id)
+            XCTAssertEqual(resolved.type, .marble, recipe.id)
+            XCTAssertEqual(CreativeReactionProfile.materialRoute(for: resolved), .program,
+                           "\(recipe.id) keeps its program equations")
+        }
+        XCTAssertEqual(CreativePresetCatalog.material(selection: "unknown"),
+                       VisualMaterial.marble(for: CreativePresetCatalog.program(for: "original")))
+        // Every experience material resolves deterministically.
         for preset in CreativePresetCatalog.experiencePresets {
-            let material = preset.visualMaterial
-            XCTAssertEqual(material, VisualMaterial.marble(for: preset.composition.program))
-            XCTAssertEqual(material.kind, .marble)
-            let uniforms = MaterialResolver.marble(
-                material, parameters: .neutral,
-                rhythm: RhythmFrame.at(1.0, in: rhythm()))
-            XCTAssertTrue((0...1).contains(uniforms.beatPulse), preset.id)
-            XCTAssertEqual(uniforms.distortion, 0, preset.id)
-            // Deterministic.
-            XCTAssertEqual(uniforms, MaterialResolver.marble(
-                material, parameters: .neutral,
-                rhythm: RhythmFrame.at(1.0, in: rhythm())))
+            let frame = RhythmFrame.at(1.0, in: rhythm())
+            XCTAssertEqual(MaterialResolver.resolve(preset.visualMaterial, rhythm: frame, timestamp: 1),
+                           MaterialResolver.resolve(preset.visualMaterial, rhythm: frame, timestamp: 1),
+                           preset.id)
         }
     }
 
@@ -202,6 +245,20 @@ final class CreativeIntegrationTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Beats every 0.5 s and a moving envelope over 0…30 s.
+    private func audioTimeline() -> AudioFeatureTimeline {
+        var points: [AudioFeaturePoint] = []
+        for index in 0..<300 {
+            let time: Double = Double(index) * 0.1
+            let wave: Double = 0.5 + 0.5 * sin(Double(index) * 0.37)
+            let features = AudioFeatures(bass: wave, mid: 0.4, treble: 1 - wave,
+                                         energy: 0.3 + 0.6 * wave,
+                                         beatDetected: index % 5 == 0)
+            points.append(AudioFeaturePoint(time: time, features: features))
+        }
+        return AudioFeatureTimeline(points: points, duration: 30)
+    }
 
     private func rhythm() -> RhythmAnalysisResult {
         let grid: [RhythmAnalysisResult.BeatEvent] = (0..<40).map { (index: Int) in

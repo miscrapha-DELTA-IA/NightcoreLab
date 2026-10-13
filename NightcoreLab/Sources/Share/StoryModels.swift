@@ -55,6 +55,35 @@ struct StoryVideoRequest: Sendable {
             experienceMapping: typographyAudioMapping)
     }
 
+    /// The runtime every Story frame resolves through. Requests from
+    /// StoryRequestBuilder carry a frozen one; a request assembled without it
+    /// (direct/legacy construction) gets one frozen from its reactive program,
+    /// or a neutral recipe, so there is no second resolution path.
+    var renderRuntime: CompositionRuntime? {
+        if let compositionRuntime { return compositionRuntime }
+        let program = reactiveProgram ?? CreativePresetCatalog.effectiveProgram(
+            id: CreativePresetCatalog.defaultID, theme: theme,
+            typography: typographyPreset.style, background: playerStyle, reaction: .off)
+        return CompositionRuntime.freeze(
+            program: program, sourceStart: playbackTime,
+            speed: Double(speed), duration: duration
+        ).map { CompositionRuntime(composition: $0) }
+    }
+
+    /// THE resolved state of one Story frame. The scrub preview
+    /// (StoryDraftPreview) and the exporter (StorySceneView) both call this
+    /// with the same audio timeline and rhythm analysis, so they receive the
+    /// same timestamp, AudioFeatures, RhythmFrame, material and typography.
+    func resolvedFrame(_ frame: StoryRenderFrame,
+                       audioTimeline: AudioFeatureTimeline?,
+                       rhythm: RhythmAnalysisResult?,
+                       runtime: CompositionRuntime? = nil) -> ResolvedCompositionFrame? {
+        (runtime ?? renderRuntime)?.frame(
+            at: frame.elapsed, audioTimeline: audioTimeline,
+            typography: typographyLayer(atLyricTime: frame.lyricTime),
+            rhythmAnalysis: rhythm)
+    }
+
     /// Source-compatible view of the frozen composition.
     var visualComposition: VisualComposition? {
         get { compositionRuntime?.composition }
@@ -138,6 +167,14 @@ enum StoryRequestBuilder {
             speed: Double(speed), duration: seconds,
             deterministicSeed: CreativePresetCatalog.selectedExperience(id: creativePresetID)?
                 .composition.deterministicSeed ?? 0)
+        if let composition = request.visualComposition {
+            request.compositionRuntime = CompositionRuntime(
+                composition: composition,
+                // Single material rule, applied to the program actually frozen.
+                material: CreativeExperienceResolver.material(
+                    experience: CreativePresetCatalog.selectedExperience(id: creativePresetID),
+                    recipe: effective))
+        }
         request.typographyAudioMapping = CreativePresetCatalog.typographyAudioMapping(
             selection: creativePresetID, style: typographyStyle, reacts: reacts)
         request.preparedLyrics = Dictionary(

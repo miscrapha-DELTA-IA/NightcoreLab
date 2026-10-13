@@ -84,8 +84,13 @@ final class RuntimeStabilizationTests: XCTestCase {
                 // Includes exact keyframe hits (2-decimal grid) and the end.
                 let elapsed = Double(index) * 0.02
                 let input = features(index)
+                // Stage 13 adds material output; compare every pre-existing
+                // field against the untouched reference, then test material separately.
+                var current = runtime.frame(at: elapsed, features: input)
+                XCTAssertNotNil(current?.materialFrame)
+                current?.materialFrame = nil
                 XCTAssertEqual(
-                    runtime.frame(at: elapsed, features: input),
+                    current,
                     LegacyCompositionResolver.resolve(comp, elapsed: elapsed, features: input),
                     "seed \(seed) elapsed \(elapsed)")
             }

@@ -100,7 +100,8 @@ final class CreativeExperienceUXTests: XCTestCase {
                            source.preset.visualStyle.motion, id)
             XCTAssertEqual(effective.preset.theme, .acid, "the AppTheme is never replaced")
             // Material: same Marble material as the experience declares.
-            XCTAssertEqual(VisualMaterial.marble(for: effective), authored.visualMaterial, id)
+            XCTAssertEqual(CreativePresetCatalog.selectedExperience(id: id)?.material,
+                           authored.visualMaterial, id)
 
             // Typography: the style becomes the karaoke preference ...
             let style = CreativePresetCatalog.typographyStyle(afterSelecting: id, current: .neon)
@@ -157,7 +158,7 @@ final class CreativeExperienceUXTests: XCTestCase {
             XCTAssertEqual(story.typographyPreset, CreativePresetCatalog.typographyPreset(
                 selection: id, style: style, font: .mono, reacts: true), id)
             XCTAssertEqual(story.typographyAudioMapping, authored.audioMapping, id)
-            XCTAssertEqual(VisualMaterial.marble(for: story.reactiveProgram),
+            XCTAssertEqual(story.compositionRuntime?.material,
                            authored.visualMaterial, id)
 
             let quiet = try request(selection: id, style: style, reactive: false)

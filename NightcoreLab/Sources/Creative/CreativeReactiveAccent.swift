@@ -98,13 +98,15 @@ struct CreativeReactiveAccent: View {
         )
         onFeatureTimeline(timeline)
         // Marble material: same program, rhythm from the same cached analysis.
-        let material = VisualMaterial.marble(for: program)
-        if material.beatPulse > 0,
-           let rhythm = await featureEngine.cachedRhythm(for: sourceURL),
-           !rhythm.beatGrid.isEmpty,
-           !Task.isCancelled, activeRunID == runID {
-            onPulseDriver(MarblePulseDriver(material: material, rhythm: rhythm, clock: clock))
-        }
+        // Single material rule and single reaction profile (same as Story).
+        let material = CreativeExperienceResolver.material(
+            experience: CreativePresetCatalog.selectedExperience(id: selectedProgramID),
+            recipe: program)
+        let rhythm = await featureEngine.cachedRhythm(for: sourceURL)
+        guard !Task.isCancelled, activeRunID == runID else { return }
+        onPulseDriver(MarblePulseDriver(
+            material: material, rhythm: rhythm, clock: clock, timeline: timeline,
+            reactionGain: CreativeReactionProfile.gain(reaction)))
         while !Task.isCancelled && activeRunID == runID {
             let playing = clock.isPlaying
             let sourceTime = clock.lyricTime

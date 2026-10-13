@@ -11,7 +11,7 @@ enum ResolvedFrameRendererAdapter {
     }
 
     static func marbleDistortion(from frame: ResolvedCompositionFrame?) -> Double {
-        marbleParameters(from: frame).marbleDistortion
+        frame?.materialFrame?.parameters.distortion ?? marbleParameters(from: frame).marbleDistortion
     }
 
     /// The actual StoryFrameRenderer remains unchanged. Both consumers call

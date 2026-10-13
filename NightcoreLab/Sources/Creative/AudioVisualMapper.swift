@@ -23,12 +23,8 @@ struct VisualResponse: Equatable, Codable, Sendable {
 /// and the shader implementation. All outputs are bounded.
 enum AudioVisualMapper {
     static func map(_ features: AudioFeatures, preset: CreativePreset) -> VisualResponse {
-        let reaction: Double
-        switch preset.audioReaction {
-        case .off: return .neutral
-        case .subtle: reaction = 0.35
-        case .responsive: reaction = 1
-        }
+        guard preset.audioReaction != .off else { return .neutral }
+        let reaction = CreativeReactionProfile.gain(preset.audioReaction)
 
         let intensity = preset.visualStyle.intensity * reaction
         let bass = features.bass

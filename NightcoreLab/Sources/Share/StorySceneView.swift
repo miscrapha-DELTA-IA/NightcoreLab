@@ -9,7 +9,8 @@ struct StorySceneView: View {
     let visualTimeline: AudioFeatureTimeline?
     /// Stage 12: Marble beat pulse resolved from this frame's SOURCE time, so
     /// the scrub preview and every MP4 frame agree, at any frame rate.
-    let beatPulse: Double
+    var beatPulse: Double { materialFrame.parameters.beatPulse }
+    let materialFrame: MaterialFrame
     /// The material behind `beatPulse` (its warp/glow tuning reaches the shader).
     let marbleMaterial: VisualMaterial
     /// Resolved ONCE per scene (Stage 10C). Previously these were computed
@@ -41,55 +42,31 @@ struct StorySceneView: View {
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
-        let material = VisualMaterial.marble(for: request.reactiveProgram)
-        self.marbleMaterial = material
-        self.beatPulse = MaterialResolver.beatPulse(
-            material,
-            rhythm: visualRhythm.flatMap { RhythmFrame.at(frame.sourceTime, in: $0) })
-        // One deterministic query for both the scrub preview and the MP4 encoder.
-        let layer = request.typographyLayer(atLyricTime: frame.lyricTime)
-        let composed = Self.composition(
-            request: request, frame: frame, visualTimeline: visualTimeline,
-            supplied: resolvedCompositionFrame, typography: layer)
-        self.resolvedCompositionFrame = composed
-        if request.compositionRuntime != nil,
-           let typography = composed?.typographyFrame {
-            self.typographyFrame = typography
-        } else {
-            self.typographyFrame = layer?.resolve(at: frame.lyricTime, features: nil)
-        }
-    }
-
-    /// Null/offline feature sources produce exactly the original shader.
-    private static func composition(
-        request: StoryVideoRequest, frame: StoryRenderFrame,
-        visualTimeline: AudioFeatureTimeline?,
-        supplied: ResolvedCompositionFrame?,
-        typography: TypographyLayer?
-    ) -> ResolvedCompositionFrame? {
-        guard let runtime = request.compositionRuntime else { return nil }
-        if let supplied,
+        // ONE resolution path (no legacy branch): the request's runtime.
+        let runtime = request.renderRuntime
+        self.marbleMaterial = runtime?.material ?? .legacyMarble
+        let composed: ResolvedCompositionFrame?
+        if let supplied = resolvedCompositionFrame, supplied.materialFrame != nil,
+           let runtime,
            ResolvedFrameRendererAdapter.matches(
-                supplied, composition: runtime.composition,
-                elapsed: frame.elapsed) {
-            return supplied
+                supplied, composition: runtime.composition, elapsed: frame.elapsed) {
+            // The preview's frame from request.resolvedFrame (same inputs).
+            composed = supplied
+        } else {
+            composed = request.resolvedFrame(frame, audioTimeline: visualTimeline,
+                                             rhythm: visualRhythm, runtime: runtime)
         }
-        return runtime.frame(at: frame.elapsed, audioTimeline: visualTimeline,
-                             typography: typography)
+        self.resolvedCompositionFrame = composed
+        // Without a composition timestamp (invalid timeline) the Marble is
+        // neutral: no audio, no pulse.
+        self.materialFrame = composed?.materialFrame ??
+            MaterialResolver.resolve(.legacyMarble, timestamp: frame.sourceTime)
+        self.typographyFrame = composed?.typographyFrame ??
+            request.typographyLayer(atLyricTime: frame.lyricTime)?
+                .resolve(at: frame.lyricTime, features: nil)
     }
 
-    var reactiveDistortion: Double {
-        if request.compositionRuntime != nil {
-            return ResolvedFrameRendererAdapter.marbleDistortion(
-                from: resolvedCompositionFrame)
-        }
-        // Legacy callers constructing StoryVideoRequest directly, or inputs
-        // incompatible with the new timeline, retain the exact old behavior.
-        return CreativeMarbleFrameResolver.resolve(
-            program: request.reactiveProgram,
-            timeline: visualTimeline,
-            sourceTime: frame.sourceTime).marbleDistortion
-    }
+    var reactiveDistortion: Double { materialFrame.parameters.distortion }
 
     private var elapsed: TimeInterval { frame.elapsed }
     private var phase: Float { frame.marblePhase }
@@ -163,7 +140,7 @@ struct StorySceneView: View {
                                 extendIntoSafeArea: false, frozenTime: phase,
                                 reactiveDistortion: reactiveDistortion,
                                 beatPulse: beatPulse,
-                                material: marbleMaterial)
+                                material: marbleMaterial, materialFrame: materialFrame)
                 .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
         }
     }
