@@ -1117,14 +1117,19 @@ struct ContentView: View {
                 currentTrack = committedTrack
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
-                    finishDiscovery(reason: pendingSkip != nil ? .manualSelection :
+                    let isManualSkip = !automaticAdvance && navigation == .regular &&
+                        priorTrack != nil && priorTrack?.id != currentTrack.id
+                    finishDiscovery(reason: isManualSkip ? .manualSelection :
                                     (automaticAdvance ? .completed : .nextButton))
                     discoveryTracker.start(currentTrack.id, duration: audio.duration,
                                            speed: Double(speed))
-                    if pendingSkip != nil {
+                    if isManualSkip {
+                        let recentIDs = playHistory.entries.values.sorted {
+                            $0.lastPlayed > $1.lastPlayed
+                        }.prefix(10).map { $0.hit.id }
                         playbackQueue.reorderAfterSkip(anchor: currentTrack,
                             vectors: acousticVectors,
-                            recentlyPlayed: Set(playHistory.entries.keys))
+                            recentlyPlayed: Set(recentIDs))
                     }
                     analyzeDiscoveryAudio(track: currentTrack, localURL: localURL)
                     playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
