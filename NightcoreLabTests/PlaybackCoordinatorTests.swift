@@ -68,6 +68,28 @@ final class PlaybackCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.previousCandidate(navigation: navigation)?.id, previous.id)
     }
 
+    func testLocalImportPlaybackHasConfirmedStateWithoutInventedYouTubeID() {
+        let coordinator = PlaybackCoordinator()
+        coordinator.confirmPlayback(isPlaying: true, trackID: nil)
+        XCTAssertEqual(coordinator.transportState, .playing(nil))
+        coordinator.confirmPlayback(isPlaying: false, trackID: nil)
+        XCTAssertEqual(coordinator.transportState, .paused(nil))
+    }
+
+    func testQueueReorderRejectsMissingAndDuplicateIdsWithoutMutation() {
+        let coordinator = PlaybackCoordinator()
+        let queue = PlaybackQueue()
+        let a = track("aaaaaaaaaaa")
+        let b = track("bbbbbbbbbbb")
+        let c = track("ccccccccccc")
+        queue.replace(with: [a, b, c], excluding: "other")
+        XCTAssertFalse(coordinator.reorderQueue(ids: [a.id, c.id], queue: queue))
+        XCTAssertFalse(coordinator.reorderQueue(ids: [a.id, a.id, c.id], queue: queue))
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [a.id, b.id, c.id])
+        XCTAssertTrue(coordinator.reorderQueue(ids: [c.id, a.id, b.id], queue: queue))
+        XCTAssertEqual(queue.upNextQueue.map(\.id), [c.id, a.id, b.id])
+    }
+
     func testEnqueueClearAndExistingNavigationPreserved() {
         let coordinator = PlaybackCoordinator()
         let queue = PlaybackQueue()
