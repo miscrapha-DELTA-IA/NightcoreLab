@@ -135,6 +135,53 @@ final class PadEngineTests: XCTestCase {
         XCTAssertGreaterThan((11_500..<14_500).map { abs(samples[$0]) }.max() ?? 0, 0.03)
     }
 
+    func testOfflineAudioExportIncludesPadsWithoutChangingDefaultOutput() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 44_100))
+        buffer.frameLength = 44_100
+        for channel in 0..<2 {
+            let samples = try XCTUnwrap(buffer.floatChannelData?[channel])
+            for i in 0..<44_100 { samples[i] = 0 }
+        }
+        let out = try AVAudioFile(forWriting: url, settings: format.settings)
+        try out.write(from: buffer)
+        let settings = RenderSettings(speed: 1, pitch: 0, reverb: 0, bass: 0,
+                                      reverbPresetRaw: AVAudioUnitReverbPreset.mediumHall.rawValue)
+        let event = PadEvent(id: UUID(), padId: "kick", timestamp: 0.25,
+                             velocity: 0.9, duration: 0.46, sourceTime: 0.25)
+        let timeline = PerformanceTimeline(kitID: PadKit.starter.id,
+                                            events: [event])
+        let plain = try AudioEngineManager.renderOffline(
+            source: url, settings: settings, format: .wav, progress: { _ in })
+        let mixed = try AudioEngineManager.renderOffline(
+            source: url, settings: settings, format: .wav, progress: { _ in },
+            performance: timeline)
+        defer {
+            try? FileManager.default.removeItem(at: plain)
+            try? FileManager.default.removeItem(at: mixed)
+        }
+        func peak(_ fileURL: URL) throws -> Float {
+            let audio = try AVAudioFile(forReading: fileURL,
+                                        commonFormat: .pcmFormatFloat32, interleaved: false)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+                pcmFormat: audio.processingFormat,
+                frameCapacity: AVAudioFrameCount(audio.length)))
+            try audio.read(into: buffer)
+            let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+            var top: Float = 0
+            for i in 0..<Int(buffer.frameLength) {
+                top = max(top, abs(samples[i]))
+            }
+            return top
+        }
+        XCTAssertLessThan(try peak(plain), 0.003)
+        XCTAssertGreaterThan(try peak(mixed), 0.005)
+    }
+
     @MainActor
     func testExistingLiveEngineStillLoadsMusicAndAcceptsPads() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
