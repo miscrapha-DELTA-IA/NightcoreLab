@@ -4,7 +4,7 @@ import Observation
 /// Rights-clear, deterministic samples synthesized inside the application.
 /// No copyrighted audio is bundled, downloaded or copied into these pads.
 struct SampleDescriptor: Codable, Equatable, Sendable, Identifiable {
-    enum Category: String, Codable, Sendable { case drum, cymbal, bass }
+    enum Category: String, Codable, Sendable { case drum, cymbal, bass, sample }
     let id: String
     let name: String
     let category: Category
@@ -29,7 +29,9 @@ struct PadKit: Codable, Equatable, Sendable, Identifiable {
                 $0.duration > 0 && $0.duration <= 5 &&
                 $0.gain.isFinite && (0...1).contains($0.gain) &&
                 $0.defaultVelocity.isFinite && (0...1).contains($0.defaultVelocity) &&
-                $0.asset.hasPrefix("nightcore.original.")
+                ($0.asset.hasPrefix("nightcore.original.") ||
+                 ($0.id == PerformanceSourceClip.slotID &&
+                  $0.asset == "nightcore.source-clip.v1"))
             }
     }
 
@@ -71,10 +73,15 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
     let version: Int
     let kitID: String
     let events: [PadEvent]
+    /// Optional v1 additive field, absent from older event-only recordings.
+    /// No file path or original waveform is serialized.
+    let sourceClip: PerformanceSourceClip?
 
-    init(kitID: String, events: [PadEvent]) {
+    init(kitID: String, events: [PadEvent],
+         sourceClip: PerformanceSourceClip? = nil) {
         version = Self.schemaVersion
         self.kitID = kitID
+        self.sourceClip = sourceClip
         self.events = events.sorted {
             $0.timestamp == $1.timestamp
                 ? $0.id.uuidString < $1.id.uuidString
@@ -84,12 +91,30 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
 
     var isValid: Bool {
         version == Self.schemaVersion &&
+        (sourceClip?.isValid ?? true) &&
         events.count <= 4096 &&
         events.allSatisfy {
             $0.timestamp.isFinite && $0.timestamp >= 0 &&
             $0.velocity.isFinite && (0...1).contains($0.velocity) &&
             $0.duration.isFinite && $0.duration > 0 &&
             ($0.sourceTime == nil || ($0.sourceTime!.isFinite && $0.sourceTime! >= 0))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, kitID, events, sourceClip
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        kitID = try c.decode(String.self, forKey: .kitID)
+        sourceClip = try c.decodeIfPresent(PerformanceSourceClip.self, forKey: .sourceClip)
+        events = try c.decode([PadEvent].self, forKey: .events)
+        guard isValid else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .events, in: c,
+                debugDescription: "Invalid PerformanceTimeline payload")
         }
     }
 }
@@ -121,12 +146,14 @@ final class PerformanceRecorder {
                                duration: sample.duration, sourceTime: sourceTime))
     }
 
-    func timeline(kit: PadKit = .starter) -> PerformanceTimeline {
-        PerformanceTimeline(kitID: kit.id, events: events)
+    func timeline(kit: PadKit = .starter,
+                  sourceClip: PerformanceSourceClip? = nil) -> PerformanceTimeline {
+        PerformanceTimeline(kitID: kit.id, events: events, sourceClip: sourceClip)
     }
 
-    func shareJSON(kit: PadKit = .starter) -> String? {
-        let timeline = timeline(kit: kit)
+    func shareJSON(kit: PadKit = .starter,
+                   sourceClip: PerformanceSourceClip? = nil) -> String? {
+        let timeline = timeline(kit: kit, sourceClip: sourceClip)
         guard timeline.isValid,
               let data = try? JSONEncoder().encode(timeline) else { return nil }
         return String(data: data, encoding: .utf8)

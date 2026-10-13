@@ -70,6 +70,7 @@ final class PadAudioRuntime {
     let kit: PadKit
     let nodes: [AVAudioPlayerNode]
     private(set) var prepared: [String: AVAudioPCMBuffer] = [:]
+    private(set) var sourceClip: PerformanceSourceClip?
     private var allocator: PadVoiceAllocator
 
     init(kit: PadKit = .starter, polyphony: Int = 12) {
@@ -82,7 +83,29 @@ final class PadAudioRuntime {
     }
 
     var isReady: Bool {
-        kit.isValid && prepared.count == kit.samples.count
+        kit.isValid && kit.samples.allSatisfy { prepared[$0.id] != nil }
+    }
+
+    func descriptor(for padID: String) -> SampleDescriptor? {
+        kit.samples.first(where: { $0.id == padID }) ??
+            ((sourceClip != nil && padID == PerformanceSourceClip.slotID)
+             ? sourceClip?.descriptor : nil)
+    }
+
+    /// Main-actor installation of already decoded/prepared data.
+    /// The expensive read/resample runs in a detached task before this call.
+    func installSourceClip(_ clip: PerformanceSourceClip, pcm: PerformanceClipPCM) -> Bool {
+        guard clip.isValid, let buffer = pcm.makeBuffer() else { return false }
+        stopAll()
+        prepared[PerformanceSourceClip.slotID] = buffer
+        sourceClip = clip
+        return true
+    }
+
+    func clearSourceClip() {
+        stopAll()
+        prepared[PerformanceSourceClip.slotID] = nil
+        sourceClip = nil
     }
 
     func attach(to engine: AVAudioEngine) {
@@ -99,7 +122,7 @@ final class PadAudioRuntime {
 
     func trigger(padID: String, velocity: Float,
                  now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
-        guard let sample = kit.samples.first(where: { $0.id == padID }),
+        guard let sample = descriptor(for: padID),
               let buffer = prepared[padID], velocity.isFinite, velocity > 0 else { return false }
         let vel = min(max(velocity, 0), 1)
         guard let selection = allocator.allocate(
