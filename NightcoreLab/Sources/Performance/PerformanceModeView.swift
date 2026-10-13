@@ -5,17 +5,22 @@ import UIKit
 /// Distinct UIControls allow independent touches on different pads.
 private struct PadTouchSurface: UIViewRepresentable {
     let name: String
-    let onDown: () -> Void
+    let onDown: (TimeInterval) -> Void
     let onUp: () -> Void
 
     final class Coordinator: NSObject {
-        var onDown: () -> Void
+        var onDown: (TimeInterval) -> Void
         var onUp: () -> Void
-        init(_ onDown: @escaping () -> Void, _ onUp: @escaping () -> Void) {
+        init(_ onDown: @escaping (TimeInterval) -> Void,
+             _ onUp: @escaping () -> Void) {
             self.onDown = onDown
             self.onUp = onUp
         }
-        @objc func down() { onDown() }
+        @objc func down(_ sender: UIControl, forEvent event: UIEvent) {
+            // Event time comes from UIKit's actual input event, not when
+            // SwiftUI eventually re-evaluates a view.
+            onDown(event.timestamp)
+        }
         @objc func up() { onUp() }
     }
 
@@ -29,7 +34,7 @@ private struct PadTouchSurface: UIViewRepresentable {
         control.accessibilityTraits = .button
         control.accessibilityLabel = "Tocar \(name)"
         control.addTarget(context.coordinator,
-                          action: #selector(Coordinator.down), for: .touchDown)
+                          action: #selector(Coordinator.down(_:forEvent:)), for: .touchDown)
         control.addTarget(context.coordinator, action: #selector(Coordinator.up),
                           for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
         return control
@@ -65,6 +70,8 @@ struct PerformanceModeView: View {
     @State private var recordedClip: PerformanceSourceClip?
     @State private var preparingClip = false
     @State private var confirmSharingRights = false
+    @State private var latencyResult: PadLatencySummary?
+    @State private var latencyCaptureActive = false
 
     private let grid = [GridItem(.flexible(), spacing: 12),
                         GridItem(.flexible(), spacing: 12),
@@ -201,6 +208,8 @@ struct PerformanceModeView: View {
                         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
                     }
 
+                    padDiagnostics
+
                     Toggle("Feedback tátil", isOn: $haptics)
                         .font(.subheadline)
                         .tint(accent)
@@ -238,6 +247,8 @@ struct PerformanceModeView: View {
             exportedAudio = nil
         }
         .onDisappear {
+            audio.padLatencyProbe.cancel()
+            latencyCaptureActive = false
             clipTask?.cancel()
             exportTask?.cancel()
             heldPads.removeAll()
@@ -368,9 +379,9 @@ struct PerformanceModeView: View {
         }
         .frame(height: 102)
         .overlay {
-            PadTouchSurface(name: sample.name, onDown: {
+            PadTouchSurface(name: sample.name, onDown: { touchTimestamp in
+                strike(sample, touchEventUptime: touchTimestamp)
                 heldPads.insert(sample.id)
-                strike(sample)
             }, onUp: {
                 heldPads.remove(sample.id)
             })
@@ -378,15 +389,72 @@ struct PerformanceModeView: View {
         .accessibilityIdentifier("performance.pad.\(sample.id)")
     }
 
-    private func strike(_ sample: SampleDescriptor) {
+    private func strike(_ sample: SampleDescriptor, touchEventUptime: TimeInterval) {
         let velocity = sample.defaultVelocity
-        guard audio.triggerPad(sample.id, velocity: velocity) else { return }
+        guard audio.triggerPad(sample.id, velocity: velocity,
+                               touchEventUptime: touchEventUptime) else { return }
         recorder.append(sample, velocity: velocity,
                         sourceTime: audio.isPlaying ? audio.playbackTime : nil)
         exportedAudio = nil
         if haptics {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
+    }
+
+    /// User-initiated: reads bounded results after a session, never on touch.
+    private var padDiagnostics: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("DIAGNÓSTICO DE LATÊNCIA")
+                .font(.caption.weight(.bold)).tracking(1.5)
+            Text("Mede toque → envio ao motor de áudio, não o instante audível do alto-falante.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Button(latencyCaptureActive ? "Encerrar medição" : "Iniciar medição") {
+                if latencyCaptureActive {
+                    latencyResult = audio.padLatencyProbe.finish()
+                    latencyCaptureActive = false
+                } else {
+                    latencyResult = nil
+                    audio.padLatencyProbe.start()
+                    latencyCaptureActive = true
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .accessibilityIdentifier("performance.latencyCapture")
+            if let result = latencyResult {
+                Group {
+                    Text("Disparos: \(result.accepted) • não aceitos: \(result.failed)")
+                    Text("Quentes: \(result.warmCount) • frios: \(result.coldCount)")
+                    if let p = result.touchDispatch {
+                        Text(String(format: "Entrada UIKit → handler: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.touchToCommand {
+                        Text(String(format: "Toque → comando concluído: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.warmCommand {
+                        Text(String(format: "Comando quente: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.coldCommand {
+                        Text(String(format: "Comando frio: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.coldEngineStart {
+                        Text(String(format: "engine.start: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.nodeStop {
+                        Text(String(format: "node.stop: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.nodeSchedule {
+                        Text(String(format: "scheduleBuffer: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                    if let p = result.nodePlay {
+                        Text(String(format: "node.play: p50 %.1f / p95 %.1f ms", p.p50, p.p95))
+                    }
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .padding(14)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func renderPerformanceAudio() {

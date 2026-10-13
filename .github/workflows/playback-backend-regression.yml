@@ -2,7 +2,7 @@ name: Playback Foundation Backend Regression
 
 on:
   pull_request:
-    branches: [main, stage-16a-discovery-engine, stage-17-spotifast-playback-foundation, stage-17b-search-persistence-robustness, stage-17c-ios-remote-transport, stage-17d-karaoke-smoothness , stage-18a-performance-pad-engine]
+    branches: [main, stage-16a-discovery-engine, stage-17-spotifast-playback-foundation, stage-17b-search-persistence-robustness, stage-17c-ios-remote-transport, stage-17d-karaoke-smoothness , stage-18a-performance-pad-engine, stage-18a2-source-clip-pad]
     paths:
       - 'NightcoreLab/Sources/**'
       - 'NightcoreLabTests/**'
