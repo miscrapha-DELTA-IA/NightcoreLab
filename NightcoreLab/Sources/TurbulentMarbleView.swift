@@ -127,8 +127,7 @@ struct TurbulentMarbleView: View {
         Group {
             if let frozenTime {
                 // Export: a single GPU frame, with no TimelineView or animation clock.
-                marbleFrame(time: frozenTime, uniforms: resolvedUniforms(live: false),
-                            resolved: resolvedMaterial(live: false))
+                marbleFrame(time: frozenTime, resolved: resolvedFrame(live: false))
             } else {
                 TimelineView(.animation(
                     minimumInterval: 1.0 / max(maxFPS, 1.0),
@@ -136,8 +135,7 @@ struct TurbulentMarbleView: View {
                 )) { context in
                     let elapsed = isPaused || reduceMotion ? 0 :
                         context.date.timeIntervalSince(startedAt ?? start)
-                    marbleFrame(time: Float(elapsed * speed), uniforms: resolvedUniforms(live: true),
-                                resolved: resolvedMaterial(live: true))
+                    marbleFrame(time: Float(elapsed * speed), resolved: resolvedFrame(live: true))
                 }
             }
         }
@@ -149,32 +147,24 @@ struct TurbulentMarbleView: View {
         .accessibilityHidden(true)
     }
 
-    private func resolvedMaterial(live: Bool) -> MaterialFrame {
+    /// The ONE MaterialFrame handed to the shader for this render frame
+    /// (resolved once; previously uniforms and material were assembled by two
+    /// parallel functions, calling the live driver twice).
+    private func resolvedFrame(live: Bool) -> MaterialFrame {
         if let materialFrame { return materialFrame }
         let parameters = CreativeParameterFrame(
             playerGlow: 0, marbleDistortion: reactiveDistortion,
             lyricKinetics: 0, particleEmission: 0)
         if live, let pulseDriver { return pulseDriver.frame(parameters: parameters) }
+        // Still images and non-reactive callers: the same resolver (and audio
+        // route); an explicit pulse from the older API is carried over.
         return MaterialResolver.resolve(material, timestamp: 0, parameters: parameters)
+            .replacingBeatPulse(materialBound(beatPulse, 0...1))
     }
 
-    private func resolvedUniforms(live: Bool) -> MarbleUniforms {
-        if let materialFrame { return materialFrame.marbleUniforms }
-        if live, let pulseDriver {
-            return pulseDriver.frame(parameters: CreativeParameterFrame(
-                playerGlow: 0, marbleDistortion: reactiveDistortion,
-                lyricKinetics: 0, particleEmission: 0)).marbleUniforms
-        }
-        // Source-compatible still-image and non-reactive callers.
-        return MarbleUniforms(distortion: materialBound(reactiveDistortion, 0...1),
-                              beatPulse: materialBound(beatPulse, 0...1),
-                              warpAmount: material.warpAmount,
-                              brightnessBoost: material.brightnessBoost)
-    }
-
-    private func marbleFrame(time: Float, uniforms: MarbleUniforms,
-                             resolved: MaterialFrame) -> some View {
+    private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
         let palette = theme.palette
+        let uniforms = resolved.marbleUniforms
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in

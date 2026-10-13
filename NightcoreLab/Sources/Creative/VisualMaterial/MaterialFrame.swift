@@ -30,6 +30,20 @@ struct MaterialFrame: Equatable, Sendable {
     let controls: MaterialControls
     let signals: MaterialReactiveSignals
 
+    /// Compatibility for still-image callers that pass an explicit pulse
+    /// (pre-Stage-13 TurbulentMarbleView API): the same contract, pulse set.
+    func replacingBeatPulse(_ pulse: Double) -> MaterialFrame {
+        let p = parameters
+        return MaterialFrame(
+            materialID: materialID, type: type,
+            parameters: VisualParameterSet(
+                distortion: p.distortion, beatPulse: pulse, pulseDecay: p.pulseDecay,
+                offbeatScale: p.offbeatScale, warpAmount: p.warpAmount,
+                brightnessBoost: p.brightnessBoost),
+            intensity: intensity, audioResponse: audioResponse, timestamp: timestamp,
+            seed: seed, controls: controls, signals: signals)
+    }
+
     /// The shader binding is the resolved parameter set itself.
     var marbleUniforms: MarbleUniforms { parameters }
 }
