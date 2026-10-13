@@ -6,7 +6,7 @@ on:
   # workflows only build or run subsets.
   pull_request:
     # Stacked Stage 17A PRs also need the complete XCTest/Release/IPA gate.
-    branches: [ "main", "stage-16a-discovery-engine", "stage-17-spotifast-playback-foundation", "stage-17b-search-persistence-robustness", "stage-17c-ios-remote-transport", "stage-17d-karaoke-smoothness", "stage-18a-performance-pad-engine" ]
+    branches: [ "main", "stage-16a-discovery-engine", "stage-17-spotifast-playback-foundation", "stage-17b-search-persistence-robustness", "stage-17c-ios-remote-transport", "stage-17d-karaoke-smoothness", "stage-18a-performance-pad-engine", "stage-18a2-source-clip-pad" ]
   push:
     branches: [ "main" ]
     # Mudanças só no servidor Python (e no teste dele) não recompilam o app iOS
