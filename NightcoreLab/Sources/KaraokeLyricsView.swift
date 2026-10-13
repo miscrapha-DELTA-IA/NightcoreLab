@@ -297,7 +297,7 @@ struct KaraokeLyricsView: View {
                 }
                 .onChange(of: store.activeLineIndex) { _, new in
                     guard followsPlayback, let new else { return }
-                    scrollTo(new, proxy: proxy, animated: true)
+                    scrollTo(new, proxy: proxy, animated: true, automatic: true)
                 }
                 .onChange(of: store.trackID) { _, _ in followsPlayback = true }
                 .task(id: store.trackID) {
@@ -313,7 +313,11 @@ struct KaraokeLyricsView: View {
         .onDisappear { store.stopTracking() }
     }
 
-    private func scrollTo(_ id: Int, proxy: ScrollViewProxy, animated: Bool) {
+    private func scrollTo(_ id: Int, proxy: ScrollViewProxy, animated: Bool,
+                          automatic: Bool = false) {
+        KaraokePerformanceProbe.shared.scrollRequested(
+            animatedDuration: animated && !reduceMotion ? 0.40 : 0,
+            automatic: automatic)
         if animated && !reduceMotion {
             withAnimation(.smooth(duration: 0.40)) {
                 proxy.scrollTo(id, anchor: .center)
@@ -382,15 +386,23 @@ private struct KaraokeLineView: View {
         self.typographyMapping = typographyMapping
         self.liveUniforms = liveUniforms
         preparedTypography = TypographyPreparedLine(line)
+        KaraokePerformanceProbe.shared.preparedLineConstructed()
     }
 
     /// The Story's single entry point (TypographyLayer.resolve), with this
     /// line's status. Features are sampled at the SOURCE time, as in a Story.
     private func resolve(sourceTime: TimeInterval, features: AudioFeatures?) -> TypographyFrame {
-        TypographyLayer(state: lyricState, preset: typographyPreset,
-                        lyricOffset: offset, prepared: preparedTypography,
-                        experienceMapping: typographyMapping)
+        // Profiling is opt-in. No per-frame logging, I/O or observable state.
+        let probe = KaraokePerformanceProbe.shared
+        let start = probe.enabled ? ProcessInfo.processInfo.systemUptime : 0
+        let frame = TypographyLayer(state: lyricState, preset: typographyPreset,
+                                    lyricOffset: offset, prepared: preparedTypography,
+                                    experienceMapping: typographyMapping)
             .resolve(at: sourceTime + offset, features: features)
+        if probe.enabled {
+            probe.typographyResolved(in: ProcessInfo.processInfo.systemUptime - start)
+        }
+        return frame
     }
 
     var body: some View {
@@ -399,6 +411,8 @@ private struct KaraokeLineView: View {
         } else if status == .active && line.precision == .word {
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
+                KaraokePerformanceProbe.shared.timelineTick(
+                    expectedInterval: energyBudget.visualInterval)
                 let source = clock.lyricTime                // lido direto do engine, a cada frame
                 layout(frame: resolve(sourceTime: source,
                                       features: liveUniforms?.typographyFeatures(at: source)))
