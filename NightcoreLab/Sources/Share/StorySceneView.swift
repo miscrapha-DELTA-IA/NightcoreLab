@@ -138,9 +138,8 @@ struct StorySceneView: View {
             TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
                                 speed: 0, maxFPS: 1, isPaused: true,
                                 extendIntoSafeArea: false, frozenTime: phase,
-                                reactiveDistortion: reactiveDistortion,
-                                beatPulse: beatPulse,
-                                material: marbleMaterial, materialFrame: materialFrame)
+                                // The resolved MaterialFrame is the whole contract.
+                                materialFrame: materialFrame)
                 .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
         }
     }

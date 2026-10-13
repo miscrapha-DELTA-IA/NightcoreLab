@@ -1,4 +1,4 @@
-# Creative Runtime Integration (Stages 10A–12.5)
+# Creative Runtime Integration (Stages 10A–13B)
 
 Closes the integration of the Stage 10A–12 work on one branch, with CI as the
 validator. No new layers, shaders or engines.
@@ -134,6 +134,40 @@ is unchanged and every pulse term is still an exact zero when the pulse is
 | Live karaoke = Story for the same source time | `…testLiveKaraokeTypographyMatchesTheStory` |
 | Material tuning defaults = Stage 12 look; bounded; Codable-compatible | `VisualMaterialTests` (12.5 section) |
 | Rhythm on genre fixtures | `RhythmGenreFixtureTests`, see `RHYTHM_REAL_WORLD_VALIDATION_STAGE12_5.md` |
+
+## Material and reaction pipeline (Stages 13/13B, consolidated)
+
+Three single sources of truth; every consumer goes through them.
+
+| Concern | Single source | Consumers |
+|---|---|---|
+| **Which material** (Experience → Material) | `CreativeExperienceResolver.material(experience:recipe:)` — the experience's authored material, else the reaction-free Marble of its program | `StoryRequestBuilder`, `CreativeReactiveAccent` (live driver), `CompositionRuntime` (default), `CreativeExperiencePreset.visualMaterial`, `CreativePresetCatalog.material(selection:)` (used by `NowPlayingScreen`, which never decides) |
+| **How much it reacts** (Off / Subtle / Reactive) | `CreativeReactionProfile.gain` (0 / 0.35 / 1), applied once by `MaterialResolver` | `CompositionRuntime`, `MarblePulseDriver` (via `CreativeReactiveAccent`), `AudioVisualMapper`, `CreativeParameterResolver`, `LayerAudioBinding` |
+| **Which layer maps audio onto the material** | `CreativeReactionProfile.materialRoute` — `.program` (recipes: program equations drive distortion) or `.material` (experiences: the authored `MaterialAudioMapping` drives distortion, brightness, accent and movement). Never both. | `MaterialResolver` |
+| **Contract between composition and shader** | `MaterialFrame` (`parameters: VisualParameterSet`, type, controls, signals, seed, timestamp). `MarbleUniforms` is a typealias of `VisualParameterSet`. | `CompositionRuntime` → `ResolvedCompositionFrame.materialFrame` → `StorySceneView` / `TurbulentMarbleView` (`resolvedFrame` → shader) |
+
+```
+selection ─► CreativeExperienceResolver.material ─► CompositionRuntime (frozen)
+                                                        │ gain  = CreativeReactionProfile.gain
+                                                        │ route = CreativeReactionProfile.materialRoute
+                                                        ▼
+              timestamp + AudioFeatures + RhythmFrame ─► MaterialResolver ─► MaterialFrame ─► shader
+```
+
+- **Story**: `StoryVideoRequest.resolvedFrame(_:audioTimeline:rhythm:)` is the
+  one call used by the scrub preview and the exporter (same timestamp,
+  AudioFeatures and RhythmFrame). Requests without a frozen runtime get one
+  from `renderRuntime`; there is no second resolution branch.
+- **Live player**: `MarblePulseDriver.frame(parameters:)` calls the same
+  resolver with the same gain and material for the clock's source time;
+  `TurbulentMarbleView.resolvedFrame` produces one `MaterialFrame` per render
+  frame for both shader paths (Marble and procedural).
+- Tests: `VisualMaterialEngineTests` (route never summed, live = Story,
+  Stage 12.5 parity through the profile), `CreativeIntegrationTests`
+  (preview = export with shared inputs, experience → material),
+  `MaterialLibraryTests` (movement only from the material mapping).
+- Open product decision (not architecture): Cyber Night uses `cyber-chrome`
+  (chrome-tuned Marble) rather than the procedural `.chrome` material.
 
 ## Known gaps (UX review, updated in 12.5)
 1. ~~Creative Experience presets are not selectable.~~ Done in 12.5.
