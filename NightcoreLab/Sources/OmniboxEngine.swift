@@ -163,6 +163,7 @@ final class OmniboxEngine {
     @ObservationIgnored private var baseURL: URL
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let debounce: Duration
+    @ObservationIgnored private let now: () -> Date
 
     private final class Box {
         let hits: [TrackHit]
@@ -176,9 +177,11 @@ final class OmniboxEngine {
     }
 
     init(baseURL: URL, session: URLSession? = nil,
-         debounce: Duration = .milliseconds(220)) {
+         debounce: Duration = .milliseconds(220),
+         now: @escaping () -> Date = Date.init) {
         self.baseURL = baseURL
         self.debounce = debounce
+        self.now = now
         if let session {
             self.session = session
         } else {
@@ -238,7 +241,7 @@ final class OmniboxEngine {
             let key = MetadataCleaner.key(query) as NSString
             let candidate = cache.object(forKey: key)
             let freshness = candidate.map {
-                OmniboxCachePolicy.freshness(savedAt: $0.savedAt)
+                OmniboxCachePolicy.freshness(savedAt: $0.savedAt, now: now())
             } ?? .expired
 
             if let candidate, freshness != .expired {
@@ -310,8 +313,8 @@ final class OmniboxEngine {
                       self.requestGeneration == generation else { return }
                 if let freshHits {
                     self.cache.setObject(Box(freshHits,
-                        freshSuggestions ?? candidate?.suggestions ?? []),
-                        forKey: key)
+                        freshSuggestions ?? candidate?.suggestions ?? [],
+                        savedAt: self.now()), forKey: key)
                 }
                 self.isSearching = false
                 self.hasSearched = true
