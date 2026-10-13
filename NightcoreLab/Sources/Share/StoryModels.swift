@@ -29,7 +29,7 @@ struct StoryVideoRequest: Sendable {
     let lyricOffset: TimeInterval
     /// Frozen effect + font. The same value the live karaoke resolves with,
     /// so the Story reproduces the user's typography instead of a fixed Neon.
-    let typographyPreset: TypographyPreset
+    var typographyPreset: TypographyPreset
     let includeAudio: Bool
     /// Frozen declarative recipe; nil means the pre-existing Marble appearance.
     let reactiveProgram: CreativeVisualProgram?
@@ -45,6 +45,9 @@ struct StoryVideoRequest: Sendable {
     /// Stage 12.5: the selected experience's typography audio envelope,
     /// frozen with the preset (disabled for recipes or without reaction).
     var typographyAudioMapping: CreativeAudioMapping = .disabled
+    /// Frozen once per editor selection; shared by preview and export.
+    var layoutPolicy: CompositionLayoutPolicy? = nil
+    var creatorParameters: CreatorParameterSet = .neutral
 
     /// The active line's typography layer at a lyric time. The ONE builder
     /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).

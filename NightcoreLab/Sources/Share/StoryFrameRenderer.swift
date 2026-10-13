@@ -15,20 +15,14 @@ struct StoryExportCanvas: View {
     var visualRhythm: RhythmAnalysisResult? = nil
     var resolvedCompositionFrame: ResolvedCompositionFrame? = nil
 
-    var logicalSize: CGSize {
-        CGSize(width: StoryVideoRequest.size.width,
-               height: StoryVideoRequest.size.width *
-                   CGFloat(profile.height) / CGFloat(profile.width))
+    var layoutPolicy: CompositionLayoutPolicy {
+        request.layoutPolicy ?? CompositionLayoutPolicy.resolve(
+            profile: profile, mode: request.mode)
     }
 
-    var isLegacyPortrait: Bool {
-        profile.width * Int(StoryVideoRequest.size.height) ==
-            profile.height * Int(StoryVideoRequest.size.width)
-    }
-
-    var effectiveCropPolicy: ExportCropPolicy {
-        profile.cropPolicy.resolved(for: request.mode)
-    }
+    var logicalSize: CGSize { layoutPolicy.canvasSize }
+    var isLegacyPortrait: Bool { layoutPolicy.isLegacyPortrait }
+    var effectiveCropPolicy: ExportCropPolicy { layoutPolicy.cropPolicy }
 
     private var contentScale: CGFloat {
         let x = logicalSize.width / StoryVideoRequest.size.width
@@ -42,17 +36,24 @@ struct StoryExportCanvas: View {
                        resolvedCompositionFrame: resolvedCompositionFrame)
     }
 
+    private var adaptiveScene: StorySceneView {
+        StorySceneView(request: request, artwork: artwork, frame: frame,
+                       visualTimeline: visualTimeline, visualRhythm: visualRhythm,
+                       resolvedCompositionFrame: resolvedCompositionFrame,
+                       layoutPolicy: layoutPolicy)
+    }
+
     @ViewBuilder
     var body: some View {
         if isLegacyPortrait {
             // EXACT old layout, no additional ZStack or scaling.
             originalScene
+        } else if effectiveCropPolicy == .safeAreaPreserving {
+            adaptiveScene
         } else {
+            // Explicit legacy fit/crop, preserving historical framing choices.
             ZStack {
                 Color.black
-                if effectiveCropPolicy == .safeAreaPreserving {
-                    request.theme.accent.opacity(0.12)
-                }
                 originalScene
                     .frame(width: StoryVideoRequest.size.width,
                            height: StoryVideoRequest.size.height)
@@ -79,7 +80,7 @@ enum StoryFrameRenderer {
                                       visualRhythm: visualRhythm)
         let renderer = ImageRenderer(content: scene)
         renderer.proposedSize = ProposedViewSize(scene.logicalSize)
-        renderer.scale = profile.scale
+        renderer.scale = CGFloat(profile.width) / scene.logicalSize.width
         guard let image = renderer.uiImage?.cgImage,
               image.width == profile.width, image.height == profile.height
         else { throw StoryVideoError.renderFailed }

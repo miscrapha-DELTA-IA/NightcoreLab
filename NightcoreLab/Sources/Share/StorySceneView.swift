@@ -7,6 +7,7 @@ struct StorySceneView: View {
     let artwork: UIImage?
     let frame: StoryRenderFrame
     let visualTimeline: AudioFeatureTimeline?
+    let layoutPolicy: CompositionLayoutPolicy?
     /// Stage 12: Marble beat pulse resolved from this frame's SOURCE time, so
     /// the scrub preview and every MP4 frame agree, at any frame rate.
     var beatPulse: Double { materialFrame.parameters.beatPulse }
@@ -37,8 +38,10 @@ struct StorySceneView: View {
     init(request: StoryVideoRequest, artwork: UIImage?, frame: StoryRenderFrame,
          visualTimeline: AudioFeatureTimeline? = nil,
          visualRhythm: RhythmAnalysisResult? = nil,
-         resolvedCompositionFrame: ResolvedCompositionFrame? = nil) {
+         resolvedCompositionFrame: ResolvedCompositionFrame? = nil,
+         layoutPolicy: CompositionLayoutPolicy? = nil) {
         self.request = request
+        self.layoutPolicy = layoutPolicy
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
@@ -56,12 +59,15 @@ struct StorySceneView: View {
             composed = request.resolvedFrame(frame, audioTimeline: visualTimeline,
                                              rhythm: visualRhythm, runtime: runtime)
         }
-        self.resolvedCompositionFrame = composed
+        let adjusted = ControlMapping.apply(
+            composed, parameters: request.creatorParameters)
+        self.resolvedCompositionFrame = adjusted
         // Without a composition timestamp (invalid timeline) the Marble is
         // neutral: no audio, no pulse.
-        self.materialFrame = composed?.materialFrame ??
-            MaterialResolver.resolve(.legacyMarble, timestamp: frame.sourceTime)
-        self.typographyFrame = composed?.typographyFrame ??
+        self.materialFrame = (adjusted?.materialFrame ??
+            MaterialResolver.resolve(.legacyMarble, timestamp: frame.sourceTime))
+                .withViewport(layoutPolicy?.materialViewport)
+        self.typographyFrame = adjusted?.typographyFrame ??
             request.typographyLayer(atLyricTime: frame.lyricTime)?
                 .resolve(at: frame.lyricTime, features: nil)
     }
@@ -75,7 +81,16 @@ struct StorySceneView: View {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
     }
 
+    @ViewBuilder
     var body: some View {
+        if let layoutPolicy, !layoutPolicy.isLegacyPortrait {
+            adaptiveScene(layoutPolicy)
+        } else {
+            legacyScene
+        }
+    }
+
+    private var legacyScene: some View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
@@ -125,13 +140,64 @@ struct StorySceneView: View {
         .environment(\.colorScheme, .dark)
     }
 
+    /// Existing elements rearranged on a session-frozen canvas; no new renderer.
+    private func adaptiveScene(_ layout: CompositionLayoutPolicy) -> some View {
+        ZStack {
+            background
+                .storyLayer(.background, frame: resolvedCompositionFrame)
+            Color.black.opacity(0.40)
+                .storyLayer(.overlay, frame: resolvedCompositionFrame)
+
+            HStack {
+                Text("NIGHTCORELAB")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .tracking(2)
+                Spacer()
+                Text(request.theme.displayName.uppercased())
+                    .font(.system(size: 12, weight: .bold))
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(.black.opacity(0.45), in: Capsule())
+            }
+            .frame(width: layout.titleArea.width, height: layout.titleArea.height)
+            .position(x: layout.titleArea.midX, y: layout.titleArea.midY)
+
+            if request.mode == .player {
+                playerCard
+                    .frame(width: layout.mainArea.width)
+                    .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+            } else {
+                lyricsCard
+                    .storyLayer(.typography, frame: resolvedCompositionFrame)
+                    .frame(width: layout.lyricsArea.width)
+                    .position(x: layout.lyricsArea.midX, y: layout.lyricsArea.midY)
+            }
+
+            HStack {
+                Text(request.mode == .player ? "NOW PLAYING" : "KARAOKÊ · SYNC")
+                    .tracking(1.5)
+                Spacer()
+                Text("\(Int(elapsed)) / \(Int(request.duration)) s")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.80))
+            .frame(width: layout.footerArea.width, height: layout.footerArea.height)
+            .position(x: layout.footerArea.midX, y: layout.footerArea.midY)
+        }
+        .foregroundStyle(.white)
+        .frame(width: layout.canvasSize.width, height: layout.canvasSize.height)
+        .clipped()
+        .environment(\.colorScheme, .dark)
+    }
+
     @ViewBuilder
     private var background: some View {
         if request.mode == .lyrics && request.karaokeBackground == .cover,
            let artwork {
             Image(uiImage: artwork)
                 .resizable().scaledToFill()
-                .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
+                .frame(width: layoutPolicy?.canvasSize.width ?? StoryVideoRequest.size.width,
+                       height: layoutPolicy?.canvasSize.height ?? StoryVideoRequest.size.height)
                 .blur(radius: 50)
                 .clipped()
         } else {
@@ -140,14 +206,16 @@ struct StorySceneView: View {
                                 extendIntoSafeArea: false, frozenTime: phase,
                                 // The resolved MaterialFrame is the whole contract.
                                 materialFrame: materialFrame)
-                .frame(width: StoryVideoRequest.size.width, height: StoryVideoRequest.size.height)
+                .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
+                       height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }
     }
 
     private var playerCard: some View {
-        VStack(spacing: 13) {
+        VStack(spacing: layoutPolicy == nil ? 13 : 7) {
             artworkTile
-                .frame(width: 230, height: 230)
+                .frame(width: layoutPolicy?.artworkSide ?? 230,
+                       height: layoutPolicy?.artworkSide ?? 230)
                 .storyLayer(.artwork, frame: resolvedCompositionFrame)
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
@@ -158,15 +226,16 @@ struct StorySceneView: View {
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(1)
             }
-            HStack(spacing: 32) {
+            HStack(spacing: layoutPolicy == nil ? 32 : 22) {
                 Image(systemName: "backward.fill")
                 Image(systemName: "pause.fill")
                     .foregroundStyle(.black)
-                    .frame(width: 60, height: 60)
+                    .frame(width: layoutPolicy == nil ? 60 : 44,
+                           height: layoutPolicy == nil ? 60 : 44)
                     .background(.white, in: Circle())
                 Image(systemName: "forward.fill")
             }
-            .font(.title2)
+            .font(layoutPolicy == nil ? .title2 : .title3)
             VStack(alignment: .leading, spacing: 9) {
                 HStack {
                     Text("POSIÇÃO").font(.caption2.weight(.bold))
@@ -188,7 +257,7 @@ struct StorySceneView: View {
             .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
-        .padding(22)
+        .padding(layoutPolicy == nil ? 22 : 12)
         .background {
             if request.playerStyle == .turbulent {
                 // One animated shader per exported frame: the fullscreen marble
@@ -207,22 +276,27 @@ struct StorySceneView: View {
     }
 
     private var lyricsCard: some View {
-        VStack(spacing: 28) {
+        VStack(spacing: layoutPolicy == nil ? 28 : 17) {
             if let line = request.lines.last(where: {
                 $0.start <= frame.lyricTime && frame.lyricTime < $0.end
             }) {
                 if let previous = request.lines.last(where: { $0.end <= line.start && !$0.words.isEmpty }) {
                     Text(previous.text)
-                        .font(.system(size: 23, weight: .semibold, design: .rounded))
+                        .font(.system(size: layoutPolicy?.neighboringLyricFontSize ?? 23,
+                                      weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.43))
                         .multilineTextAlignment(.center)
                 }
                 if let typographyFrame, typographyFrame.lineID == line.id {
-                    StoryLyricLine(frame: typographyFrame, theme: request.theme)
+                    StoryLyricLine(frame: typographyFrame, theme: request.theme,
+                                   maxWordWidth: layoutPolicy.map { max(160, $0.lyricsArea.width - 30) } ?? 440,
+                                   fontSize: layoutPolicy?.lyricFontSize ?? 35,
+                                   glowMultiplier: request.creatorParameters.glow)
                 }
                 if let next = request.lines.first(where: { $0.start >= line.end && !$0.words.isEmpty }) {
                     Text(next.text)
-                        .font(.system(size: 23, weight: .semibold, design: .rounded))
+                        .font(.system(size: layoutPolicy?.neighboringLyricFontSize ?? 23,
+                                      weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.43))
                         .multilineTextAlignment(.center)
                 }
@@ -266,8 +340,9 @@ private struct StoryLyricLine: View {
     let theme: AppTheme
 
     /// Story canvas: 540 pt minus the scene (2 × 35) and card (2 × 15) insets.
-    static let maxWordWidth: CGFloat = 440
-    static let fontSize: CGFloat = 35
+    var maxWordWidth: CGFloat = 440
+    var fontSize: CGFloat = 35
+    var glowMultiplier: Double = 1
 
     /// Story colors expressed in the karaoke palette shape (unchanged values).
     private var palette: KaraokeTheme {
@@ -275,7 +350,7 @@ private struct StoryLyricLine: View {
                      fill: theme.accent,
                      glow: theme.accent.opacity(0.7),
                      pastOpacity: 0.55,
-                     font: frame.preset.font.font(size: Self.fontSize))
+                     font: frame.preset.font.font(size: fontSize))
     }
 
     var body: some View {
@@ -289,15 +364,15 @@ private struct StoryLyricLine: View {
                     fillColor: theme.accent,
                     glow: (animation?.glow ?? 1) > 0,
                     theme: colors,
-                    maxWordWidth: Self.maxWordWidth,
-                    fontSize: Self.fontSize,
+                    maxWordWidth: maxWordWidth,
+                    fontSize: fontSize,
                     typographyStyle: frame.preset.style,
                     magazineAppearance: resolved.magazine?.legacy,
                     isCurrentLine: frame.status == .active,
                     isPastLine: frame.status == .past,
                     animation: animation,
                     tracking: frame.preset.font.tracking,
-                    glowRadius: 7,
+                    glowRadius: 7 * glowMultiplier,
                     minimumScaleFactor: 0.55)
                 .gapAfter(resolved.word.spaceAfter ? 10 : 0)
             }

@@ -269,9 +269,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .sheet(item: $storyDraft) { draft in
             StoryDraftPreview(
                 draft: draft,
-                onExport: { profile, artwork, visualTimeline, visualRhythm in
+                onExport: { preset, frozenRequest, artwork, visualTimeline, visualRhythm in
                     storyDraft = nil
-                    exportApprovedDraft(draft, selectedProfile: profile,
+                    exportApprovedDraft(draft, request: frozenRequest,
+                                        selectedProfile: preset.exportProfile,
                                         artwork: artwork,
                                         visualTimeline: visualTimeline,
                                         visualRhythm: visualRhythm)
@@ -451,6 +452,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     }
 
     private func exportApprovedDraft(_ draft: StoryVideoDraft,
+                                     request: StoryVideoRequest,
                                      selectedProfile: ExportProfile,
                                      artwork: UIImage?,
                                      visualTimeline: AudioFeatureTimeline?,
@@ -465,7 +467,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             }
             do {
                 let package = try await SharePackageBuilder.build(
-                    request: draft.request, audioSource: draft.audioSource,
+                    request: request, audioSource: draft.audioSource,
                     artwork: artwork, selectedProfile: selectedProfile,
                     visualTimeline: visualTimeline, visualRhythm: visualRhythm,
                     progress: { storyProgress = $0 }

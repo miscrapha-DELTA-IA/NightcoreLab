@@ -74,6 +74,11 @@ enum SharePackageBuilder {
     ) async throws -> SharePackage {
         pruneExpiredPackages()
         let encoding = selectedProfile.encodingProfile(for: request.mode)
+        var request = request
+        if request.layoutPolicy == nil {
+            request.layoutPolicy = CompositionLayoutPolicy.resolve(
+                profile: encoding, mode: request.mode)
+        }
         let timeline = StoryRenderTimeline(request: request, profile: encoding)
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("NightcoreShare-\(UUID().uuidString)", isDirectory: true)
