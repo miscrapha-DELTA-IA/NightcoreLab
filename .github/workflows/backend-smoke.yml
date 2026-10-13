@@ -6,9 +6,10 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
+    # Apenas alterações no backend requerem um novo deploy no Render.
+    # Mudanças neste workflow podem ser verificadas via workflow_dispatch.
     paths:
       - 'backend/**'
-      - '.github/workflows/backend-smoke.yml'
 
 concurrency:
   group: backend-smoke
