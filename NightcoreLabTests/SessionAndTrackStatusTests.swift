@@ -40,6 +40,46 @@ final class SessionAndTrackStatusTests: XCTestCase {
         XCTAssertEqual(PlaybackSessionStorage.load(defaults: storage)?.position, 0)
     }
 
+    func testCurrentSessionIncludesVersionMarkerWithoutChangingLegacyFields() throws {
+        let storage = defaults()
+        PlaybackSessionStorage.save(track(), at: 17, defaults: storage)
+        let data = try XCTUnwrap(storage.data(forKey: PlaybackSessionStorage.key))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["schemaVersion"] as? Int, 2)
+        XCTAssertNotNil(json["track"])
+        XCTAssertEqual(json["position"] as? Double, 17)
+        XCTAssertEqual(PlaybackSessionStorage.load(defaults: storage)?.schemaVersion, 2)
+    }
+
+    func testLegacyUnversionedSessionRestoresAndMigratesOnSave() throws {
+        let storage = defaults()
+        // The original session format had only track and position.
+        let legacy = try JSONSerialization.data(withJSONObject: [
+            "track": ["id": "abcdefghijk", "title": "Legacy", "isCached": false],
+            "position": 23.5
+        ])
+        storage.set(legacy, forKey: PlaybackSessionStorage.key)
+        let restored = try XCTUnwrap(PlaybackSessionStorage.load(defaults: storage))
+        XCTAssertEqual(restored.track.id, "abcdefghijk")
+        XCTAssertEqual(restored.position, 23.5)
+        XCTAssertEqual(restored.schemaVersion, 2)
+        PlaybackSessionStorage.save(restored.track, at: restored.position, defaults: storage)
+        let storedData = try XCTUnwrap(storage.data(forKey: PlaybackSessionStorage.key))
+        let decoded = try JSONDecoder().decode(SavedPlaybackSession.self, from: storedData)
+        XCTAssertEqual(decoded.schemaVersion, 2)
+    }
+
+    func testUnknownSessionVersionDoesNotRestore() throws {
+        let storage = defaults()
+        PlaybackSessionStorage.save(track(), at: 10, defaults: storage)
+        let data = try XCTUnwrap(storage.data(forKey: PlaybackSessionStorage.key))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json["schemaVersion"] = 999
+        let invalid = try JSONSerialization.data(withJSONObject: json)
+        storage.set(invalid, forKey: PlaybackSessionStorage.key)
+        XCTAssertNil(PlaybackSessionStorage.load(defaults: storage))
+    }
+
     func testVisualTrackStatesRespectCacheFirst() {
         XCTAssertEqual(TrackStatus.resolve(cached: false, downloading: false), .none)
         XCTAssertEqual(TrackStatus.resolve(cached: false, downloading: true), .downloading)
