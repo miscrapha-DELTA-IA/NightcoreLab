@@ -5,7 +5,8 @@ on:
   # Full simulator test suite on every PR (Stage 10A proposal): the other PR
   # workflows only build or run subsets.
   pull_request:
-    branches: [ "main" ]
+    # Stacked Stage 17A PRs also need the complete XCTest/Release/IPA gate.
+    branches: [ "main", "stage-16a-discovery-engine" ]
   push:
     branches: [ "main" ]
     # Mudanças só no servidor Python (e no teste dele) não recompilam o app iOS
