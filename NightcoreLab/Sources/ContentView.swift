@@ -145,7 +145,7 @@ struct ContentView: View {
     @State private var acousticVectors: [String: DiscoveryFeatureVector] = [:]
     @State private var discoveryTracker = DiscoveryPlaybackTracker()
     @State private var discoveryAnalysisTask: Task<Void, Never>?
-    private let discoveryLog = DiscoveryEventLog()
+    @State private var discoveryLog = DiscoveryEventLog()
     @State private var playingTrackID: String?
     @State private var currentTrack: Track?
     @State private var resumeTrack: Track?
