@@ -68,8 +68,8 @@ final class PadLatencyProbe {
 
     func record(_ sample: PadLatencySample) {
         guard isCapturing else { return }
-        if !sample.succeeded { failed += 1 }
         guard samples.count < Self.maxSamples else { return }
+        if !sample.succeeded { failed += 1 }
         samples.append(sample)
     }
 

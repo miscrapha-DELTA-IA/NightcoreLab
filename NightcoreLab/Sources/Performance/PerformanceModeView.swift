@@ -71,6 +71,7 @@ struct PerformanceModeView: View {
     @State private var preparingClip = false
     @State private var confirmSharingRights = false
     @State private var latencyResult: PadLatencySummary?
+    @State private var latencyCaptureActive = false
 
     private let grid = [GridItem(.flexible(), spacing: 12),
                         GridItem(.flexible(), spacing: 12),
@@ -247,6 +248,7 @@ struct PerformanceModeView: View {
         }
         .onDisappear {
             audio.padLatencyProbe.cancel()
+            latencyCaptureActive = false
             clipTask?.cancel()
             exportTask?.cancel()
             heldPads.removeAll()
@@ -406,12 +408,14 @@ struct PerformanceModeView: View {
                 .font(.caption.weight(.bold)).tracking(1.5)
             Text("Mede toque → envio ao motor de áudio, não o instante audível do alto-falante.")
                 .font(.caption2).foregroundStyle(.secondary)
-            Button(audio.padLatencyProbe.isCapturing ? "Encerrar medição" : "Iniciar medição") {
-                if audio.padLatencyProbe.isCapturing {
+            Button(latencyCaptureActive ? "Encerrar medição" : "Iniciar medição") {
+                if latencyCaptureActive {
                     latencyResult = audio.padLatencyProbe.finish()
+                    latencyCaptureActive = false
                 } else {
                     latencyResult = nil
                     audio.padLatencyProbe.start()
+                    latencyCaptureActive = true
                 }
             }
             .font(.subheadline.weight(.semibold))
