@@ -165,6 +165,12 @@ enum StoryVideoExporter {
                        visualRhythm: RhythmAnalysisResult? = nil,
                        progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         try Task.checkCancellation()
+        // One viewport resolution for the entire export, not per MP4 frame.
+        var request = request
+        if request.layoutPolicy == nil {
+            request.layoutPolicy = CompositionLayoutPolicy.resolve(
+                profile: profile, mode: request.mode)
+        }
         var audioURL: URL?
         if request.includeAudio {
             guard let audioSource else { throw AudioEngineError.noFileLoaded }
