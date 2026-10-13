@@ -54,3 +54,29 @@ deterministic control-flow demonstration, not a real-device baseline.
 
 Phase 2 may fix redundant/overlapping scroll based on the confirmed calls
 and deterministic fixture. Phases 3/4 are conditional on profiling.
+
+## Stage 17D phase 2 — structural fast-line reproduction and scroll coordination
+
+The test fixture reproduces the *request overlap risk*: three consecutive
+0.18-second lyric starts cannot accommodate successive 0.40-second scroll
+animations. **This is not a measurement of actual device stutter.** A pure
+`KaraokeScrollPolicy` now suppresses repeated target requests and performs
+instant reposition for seek, restoration, nonadjacent jumps and short verses.
+For sufficiently spaced adjacent lines it requests a bounded animation of
+at most 0.16 seconds (or 22% of source-time spacing). The default 2x rate
+still leaves time for the requested animation in the synthetic model.
+Automatic focus/status transitions match the decision and avoid additional
+0.30-second overlap on fast passages. Manual drag disables auto-follow until
+return-to-live, preserving existing user control. No timers or delay offsets.
+
+### Baseline/result available without a physical iPhone
+
+| Synthetic scenario | Previous policy | New policy |
+|---|---:|---:|
+| Three scrolls 180ms apart | 2 overlapping requested 400ms animations | 0 requested animations |
+| Single ordinary adjacent transition | 400ms requested | <=160ms requested |
+| Seek, jump over several lines | 400ms animation | immediate |
+| Duplicate automatic target | can repeat request | suppressed |
+
+Physical before/after FPS, CPU/GPU and user-perceived stutter remain
+**unmeasured**; do not claim release acceptance from pure XCTest alone.

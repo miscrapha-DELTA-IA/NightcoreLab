@@ -46,3 +46,50 @@ enum KaraokeFocusResolver {
         max(95, min(340, height * 0.42))
     }
 }
+
+// MARK: - Stage 17D: pure scroll policy
+
+enum KaraokeScrollReason: Equatable {
+    case automatic
+    case seek
+    case returnToLive
+    case restoration
+}
+
+struct KaraokeScrollDecision: Equatable {
+    /// Nil decisions suppress redundant automatic requests. Duration zero
+    /// disables CoreAnimation rather than delaying or shifting music time.
+    let duration: TimeInterval
+    var animated: Bool { duration > 0 }
+}
+
+/// Source-LRC spacing is used only to bound how long a visual animation may
+/// outlive the next verse. EnginePlaybackClock remains the sole playback clock.
+enum KaraokeScrollPolicy {
+    static func decision(lines: [TimedLyricLine], targetID: Int,
+                         lastRequestedID: Int?, reason: KaraokeScrollReason,
+                         reduceMotion: Bool, allowsDecorativeMotion: Bool) -> KaraokeScrollDecision? {
+        guard let targetIndex = lines.firstIndex(where: { $0.id == targetID }) else { return nil }
+
+        switch reason {
+        case .seek, .restoration:
+            return KaraokeScrollDecision(duration: 0)
+        case .automatic, .returnToLive:
+            guard lastRequestedID != targetID else { return nil }
+            guard !reduceMotion, allowsDecorativeMotion,
+                  let previousID = lastRequestedID,
+                  let previousIndex = lines.firstIndex(where: { $0.id == previousID }),
+                  targetIndex == previousIndex + 1 else {
+                return KaraokeScrollDecision(duration: 0)
+            }
+            let gap = lines[targetIndex].start - lines[previousIndex].start
+            // No scroll animation on short verses. On longer consecutive
+            // verses, 0.22 * source seconds fits even at maximum 2x speed,
+            // without creating another playback clock or wall-timer.
+            guard gap.isFinite, gap >= 0.45 else {
+                return KaraokeScrollDecision(duration: 0)
+            }
+            return KaraokeScrollDecision(duration: min(0.16, gap * 0.22))
+        }
+    }
+}

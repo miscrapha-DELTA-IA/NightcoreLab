@@ -68,6 +68,68 @@ final class KaraokeExperienceTests: XCTestCase {
         XCTAssertEqual(KaraokeFocusResolver.scrollInset(for: 0), 95)
     }
 
+    func testAutomaticScrollSkipsDuplicateAndLongJump() {
+        let lines = lineFixture(starts: [0, 1.2, 2.4, 3.6])
+        XCTAssertNil(KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 1, lastRequestedID: 1, reason: .automatic,
+            reduceMotion: false, allowsDecorativeMotion: true))
+        let jump = KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 3, lastRequestedID: 0, reason: .automatic,
+            reduceMotion: false, allowsDecorativeMotion: true)
+        XCTAssertEqual(jump?.duration, 0)
+    }
+
+    func testFastVersesScrollInstantlyAtAnyPlaybackRate() {
+        // Fixture uses source-time starts, valid at 0.5x, 1x, 1.5x or 2x.
+        let lines = lineFixture(starts: [0, 0.18, 0.36, 0.54, 0.72])
+        for i in 1..<lines.count {
+            let decision = KaraokeScrollPolicy.decision(
+                lines: lines, targetID: i, lastRequestedID: i - 1,
+                reason: .automatic, reduceMotion: false,
+                allowsDecorativeMotion: true)
+            XCTAssertEqual(decision?.duration, 0)
+        }
+    }
+
+    func testNormalVerseScrollIsBoundedAndInterruptibleBySeek() {
+        let lines = lineFixture(starts: [0, 1.8, 3.6])
+        let follow = KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 1, lastRequestedID: 0, reason: .automatic,
+            reduceMotion: false, allowsDecorativeMotion: true)
+        XCTAssertEqual(follow?.duration, 0.16)
+        let seek = KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 0, lastRequestedID: 1, reason: .seek,
+            reduceMotion: false, allowsDecorativeMotion: true)
+        XCTAssertEqual(seek?.duration, 0)
+        let resume = KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 2, lastRequestedID: nil, reason: .returnToLive,
+            reduceMotion: false, allowsDecorativeMotion: true)
+        XCTAssertEqual(resume?.duration, 0)
+    }
+
+    func testReduceMotionAndEnergySuspensionDisableScrollAnimation() {
+        let lines = lineFixture(starts: [0, 2])
+        for reduceMotion in [false, true] {
+            for allowed in [false, true] {
+                let decision = KaraokeScrollPolicy.decision(
+                    lines: lines, targetID: 1, lastRequestedID: 0,
+                    reason: .automatic, reduceMotion: reduceMotion,
+                    allowsDecorativeMotion: allowed)
+                XCTAssertEqual(decision?.animated, allowed && !reduceMotion)
+            }
+        }
+    }
+
+    private func lineFixture(starts: [TimeInterval]) -> [TimedLyricLine] {
+        starts.enumerated().map { index, start in
+            TimedLyricLine(id: index, start: start,
+                           end: start + 0.16, words: [
+                            WordSync(id: 0, text: "WORD", start: start,
+                                     end: start + 0.16, spaceAfter: false)
+                           ], precision: .word)
+        }
+    }
+
     func testPresentationDoesNotModifyExistingWordClockOrPrecision() {
         let word = WordSync(id: 0, text: "Hello", start: 4, end: 6, spaceAfter: false)
         let timed = TimedLyricLine(id: 3, start: 4, end: 6, words: [word], precision: .word)
