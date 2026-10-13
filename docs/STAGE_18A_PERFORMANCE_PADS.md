@@ -85,3 +85,17 @@ Live track replacement stops all pad voices and increments a transient
 revision on capture start and forbids mixing a previous recording onto a
 newly loaded song. This revision is **never included** in JSON event shares
 or written to disk. Future sample slicing must retain provenance and rights.
+
+## CI regression: safe temporary audio cleanup
+
+PR #53 XCTest previously failed at `testExistingLiveEngineStillLoadsMusicAndAcceptsPads`:
+`AudioEngineManager.init` deleted an arbitrary UUID-named WAV in the
+shared temp directory. Only NightcoreLab-generated `nightcore_export_*`
+files, `NightcorePerformance-*` stems and `nightcore_import_*` directories
+are now eligible for initialization cleanup. New exports use an explicit
+`nightcore_export_` prefix; legacy arbitrarily named exports are deliberately
+left intact because their ownership cannot be proven. Test WAV writing is
+closed before the engine reads it. A regression test asserts foreign WAVs
+survive while owned temporary audio is cleaned. The checkout transient
+`curl 56/early EOF` was retried successfully by GitHub Actions and is
+unrelated to the XCTest failure.

@@ -691,10 +691,10 @@ final class AudioEngineManager {
 
     // MARK: - Limpeza de cache
 
-    /// Apaga do diretório temporário os áudios de sessões anteriores: exports (.m4a/.wav)
-    /// e as cópias de músicas importadas (.mp3, .aac, .flac…).
-    /// Roda de forma síncrona no init: nada está carregado ainda, e assim não há risco
-    /// de apagar um arquivo que o usuário acabou de importar.
+    /// Only clean temporary files and import directories OWNED by NightcoreLab.
+    /// The shared application temp directory can contain inputs for tests,
+    /// share extensions and other features: deleting every audio file here
+    /// would destroy a source immediately before load(url:).
     private func clearTempAudioFiles() {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory
@@ -712,7 +712,13 @@ final class AudioEngineManager {
                 try? fileManager.removeItem(at: url)
                 continue
             }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+            // Old audio exports had arbitrary source-name prefixes. They cannot
+            // safely be distinguished from user files, so intentionally keep
+            // them rather than deleting someone else's temporary WAV.
+            let owned = url.lastPathComponent.hasPrefix("nightcore_export_") ||
+                        url.lastPathComponent.hasPrefix("NightcorePerformance-")
+            guard owned,
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   let type = UTType(filenameExtension: url.pathExtension),
                   type.conforms(to: .audio) else { continue }
 
@@ -930,7 +936,7 @@ final class AudioEngineManager {
         let baseName = source.deletingPathExtension().lastPathComponent
         let tag = settings.speed >= 1 ? "nightcore" : "slowed"
         let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(baseName)_\(tag)_\(UUID().uuidString.prefix(8)).\(format.rawValue)")
+            .appendingPathComponent("nightcore_export_\(baseName)_\(tag)_\(UUID().uuidString.prefix(8)).\(format.rawValue)")
         var completed = false
         defer { if !completed { try? FileManager.default.removeItem(at: outputURL) } }
 

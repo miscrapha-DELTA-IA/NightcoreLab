@@ -184,6 +184,32 @@ final class PadEngineTests: XCTestCase {
     }
 
     @MainActor
+    func testEngineStartupCleansOnlyNightcoreOwnedTempAudio() throws {
+        let temporary = FileManager.default.temporaryDirectory
+        let foreign = temporary.appendingPathComponent(
+            UUID().uuidString + ".wav")
+        let legacy = temporary.appendingPathComponent(
+            "userSong_nightcore_\(UUID().uuidString).wav")
+        let owned = temporary.appendingPathComponent(
+            "nightcore_export_fixture_\(UUID().uuidString).wav")
+        let ownedStem = temporary.appendingPathComponent(
+            "NightcorePerformance-\(UUID().uuidString).wav")
+        let files = [foreign, legacy, owned, ownedStem]
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        for file in files {
+            try Data([0x52, 0x49, 0x46, 0x46]).write(to: file)
+        }
+
+        // A new manager must never destroy unowned WAV inputs.
+        let manager = AudioEngineManager()
+        XCTAssertTrue(manager.performancePadsReady)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: foreign.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedStem.path))
+    }
+
+    @MainActor
     func testExistingLiveEngineStillLoadsMusicAndAcceptsPads() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString + ".wav")
@@ -197,8 +223,9 @@ final class PadEngineTests: XCTestCase {
                 d[i] = 0.03 * sin(Float(i) * 2 * .pi * 220 / 44_100)
             }
         }
-        let wav = try AVAudioFile(forWriting: url, settings: format.settings)
-        try wav.write(from: buffer)
+        var wav: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
+        try wav?.write(from: buffer)
+        wav = nil // Finalize the WAV before AudioEngineManager reads it.
         let audio = AudioEngineManager()
         XCTAssertTrue(audio.performancePadsReady)
         try audio.load(url: url)
