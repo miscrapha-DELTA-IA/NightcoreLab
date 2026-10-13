@@ -457,7 +457,8 @@ final class AudioEngineManager {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
         guard generation == scheduleGeneration else { return }
         player.stop()
-        padRuntime.stopAll()
+        // Pads are an independent performance surface: ending the song must
+        // not choke a cymbal or 808 that the user is still hearing.
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0

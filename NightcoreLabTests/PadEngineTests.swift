@@ -147,8 +147,9 @@ final class PadEngineTests: XCTestCase {
             let samples = try XCTUnwrap(buffer.floatChannelData?[channel])
             for i in 0..<44_100 { samples[i] = 0 }
         }
-        let out = try AVAudioFile(forWriting: url, settings: format.settings)
-        try out.write(from: buffer)
+        var outputWriter: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
+        try outputWriter?.write(from: buffer)
+        outputWriter = nil // Close the WAV header before AVAudioFile opens the same URL.
         let settings = RenderSettings(speed: 1, pitch: 0, reverb: 0, bass: 0,
                                       reverbPresetRaw: AVAudioUnitReverbPreset.mediumHall.rawValue)
         let event = PadEvent(id: UUID(), padId: "kick", timestamp: 0.25,
