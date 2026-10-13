@@ -116,8 +116,9 @@ final class ShareExportPipelineTests: XCTestCase {
         let pixels = try XCTUnwrap(preview.uiImage?.cgImage)
         XCTAssertEqual(pixels.width, exported.width)
         XCTAssertEqual(pixels.height, exported.height)
-        XCTAssertEqual(clip.resolvedFrame(frame, audioTimeline: nil, rhythm: nil)?.timestamp,
-                       clip.resolvedFrame(frame, audioTimeline: nil, rhythm: nil)?.timestamp)
+        let resolved = clip.resolvedFrame(frame, audioTimeline: nil, rhythm: nil)
+        XCTAssertEqual(StorySceneView(request: clip, artwork: nil, frame: frame).materialFrame,
+                       resolved?.materialFrame)
     }
 
     @MainActor
@@ -149,8 +150,8 @@ final class ShareExportPipelineTests: XCTestCase {
         XCTAssertEqual(thumb.cgImage?.height, 540)
 
         let asset = AVURLAsset(url: output.videoURL)
-        let video = try XCTUnwrap(
-            try await asset.loadTracks(withMediaType: .video).first)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let video = try XCTUnwrap(tracks.first)
         let size = try await video.load(.naturalSize)
         XCTAssertEqual(size.width, 540)
         XCTAssertEqual(size.height, 540)
