@@ -93,7 +93,7 @@ enum CreatorPresetStore {
     static func save(_ preset: CreatorPreset,
                      defaults: UserDefaults = .standard) throws {
         guard preset.isValid else { throw CreatorPresetStoreError.invalidPreset }
-        try defaults.set(JSONEncoder().encode(preset), forKey: key)
+        defaults.set(try JSONEncoder().encode(preset), forKey: key)
     }
 
     static func load(defaults: UserDefaults = .standard) -> CreatorPreset? {

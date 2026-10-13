@@ -290,7 +290,8 @@ struct StorySceneView: View {
                 if let typographyFrame, typographyFrame.lineID == line.id {
                     StoryLyricLine(frame: typographyFrame, theme: request.theme,
                                    maxWordWidth: layoutPolicy?.lyricsArea.width ?? 440,
-                                   fontSize: layoutPolicy?.lyricFontSize ?? 35)
+                                   fontSize: layoutPolicy?.lyricFontSize ?? 35,
+                                   glowMultiplier: request.creatorParameters.glow)
                 }
                 if let next = request.lines.first(where: { $0.start >= line.end && !$0.words.isEmpty }) {
                     Text(next.text)
@@ -341,6 +342,7 @@ private struct StoryLyricLine: View {
     /// Story canvas: 540 pt minus the scene (2 × 35) and card (2 × 15) insets.
     var maxWordWidth: CGFloat = 440
     var fontSize: CGFloat = 35
+    var glowMultiplier: Double = 1
 
     /// Story colors expressed in the karaoke palette shape (unchanged values).
     private var palette: KaraokeTheme {
@@ -370,7 +372,7 @@ private struct StoryLyricLine: View {
                     isPastLine: frame.status == .past,
                     animation: animation,
                     tracking: frame.preset.font.tracking,
-                    glowRadius: 7,
+                    glowRadius: 7 * glowMultiplier,
                     minimumScaleFactor: 0.55)
                 .gapAfter(resolved.word.spaceAfter ? 10 : 0)
             }

@@ -148,18 +148,24 @@ enum ControlMapping {
         if let material = frame.materialFrame {
             let base = material.parameters
             let adjusted = VisualParameterSet(
-                distortion: base.distortion + parameters.distortion,
-                beatPulse: base.beatPulse * parameters.beatSensitivity,
+                distortion: base.distortion * parameters.intensity + parameters.distortion,
+                beatPulse: base.beatPulse * parameters.intensity *
+                    parameters.beatSensitivity,
                 pulseDecay: base.pulseDecay,
                 offbeatScale: base.offbeatScale,
-                warpAmount: base.warpAmount + parameters.movement,
-                brightnessBoost: base.brightnessBoost + parameters.brightness)
+                warpAmount: base.warpAmount * parameters.intensity + parameters.movement,
+                brightnessBoost: base.brightnessBoost * parameters.intensity +
+                    parameters.brightness +
+                    (parameters.energyResponse - 1) * material.audioResponse.brightness)
             let signal = material.signals
             let signals = MaterialReactiveSignals(
-                energy: materialBound(signal.energy * parameters.energyResponse, 0...1),
-                bass: signal.bass,
-                movement: materialBound(signal.movement + parameters.movement, 0...1),
-                brightness: materialBound(signal.brightness * parameters.energyResponse, 0...1))
+                energy: materialBound(signal.energy * parameters.energyResponse *
+                    parameters.intensity, 0...1),
+                bass: materialBound(signal.bass * parameters.intensity, 0...1),
+                movement: materialBound((signal.movement + parameters.movement) *
+                    parameters.intensity, 0...1),
+                brightness: materialBound(signal.brightness * parameters.energyResponse *
+                    parameters.intensity, 0...1))
             let updated = MaterialFrame(
                 materialID: material.materialID, type: material.type,
                 parameters: adjusted,
