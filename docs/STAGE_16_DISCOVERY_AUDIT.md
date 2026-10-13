@@ -2,13 +2,13 @@
 
 Data: 13/10/2026. Base examinada: `f08a20fcddf20b71a88cc765e60262527e263e3c`, main após merge do 15C (PR #46).
 
-**Status: auditoria estática preliminar; implementação não iniciada.** Este arquivo não declara o milestone concluído nem valida qualidade de recomendações.
+**Status: fundação implementada na branch e aguardando CI macOS, validação funcional e benchmarks.** Este arquivo não declara o milestone concluído nem valida qualidade de recomendações.
 
 ## Referências e pendência
 
 Lido integralmente o anexo `NightcoreLab — Discovery Engine pesquisa e auditoria arquitetural(1).md`, de 13/10/2026. Lidos os contratos e caminhos de execução abaixo na base atual.
 
-O segundo documento obrigatório, `NightcoreLab — Mapa open source de áudio, plugins, presets e voz.md`, não foi anexado nem localizado por título completo e buscas abreviadas. Sua leitura permanece pendente antes da implementação. As referências externas do anexo não foram reavaliadas nesta auditoria; nenhum código ou dependência externa foi incorporado.
+O segundo documento obrigatório, `NightcoreLab — Mapa open source de áudio, plugins, presets e voz.md`, foi lido na retomada de 13/10/2026, junto com o documento de pesquisa e auditoria arquitetural. A integração de efeitos nativos, AUv3, libebur128, ML, stems e novos DSPs pertence a milestones distintos; nada disso foi incluído no 16A. As referências externas dos anexos não foram reavaliadas em produção.
 
 O roadmap do anexo propõe medir uso real antes de ativar pesos acústicos. O pedido atual solicita a fundação do ranker v2 e smart queue; isso autoriza desenvolver esses contratos, mas não permite afirmar que seus pesos melhoram a qualidade musical sem avaliação posterior.
 
@@ -61,19 +61,19 @@ A política de fila é separada do score: continuidade de energia, BPM compatív
 
 ## 5. Onde guardar e semântica do log
 
-Proposta, ainda não implementada:
+Política adotada (com ressalvas de validação):
 
 - Manter `omnibox.playHistory` e compatibilidade de seus campos existentes.
-- Adicionar log versionado em Application Support, gravação atômica fora do MainActor, limite por quantidade e bytes, exclusão de backup e ação de apagar dados locais.
+- `DiscoveryEventLog` actor guarda `events-v1.json` em Application Support/NightcoreLab/Discovery com gravação atômica, exclusão de backup, limite de 1.000 eventos / 1 MiB e método `clear()`. A UI ainda não expõe um botão para apagar o log: pendência de UX antes de declarar o requisito de exclusão completo.
 - `DiscoveryEvent`: trackID, timestamp, playDuration, completionRatio, skipReason, selectedPreset, materialID, experienceID, speed, audioPreset, exported. Campos desconhecidos permanecem opcionais.
 - `playDuration` deve acumular intervalos efetivamente em reprodução com relógio monotônico; pause/resume, seek, troca de velocidade e fim de sessão são eventos, sem polling. Definir completionRatio separadamente de posição/seek e limitar a [0,1].
-- Capturar contexto criativo no momento do evento; usar o ID de seleção de catálogo disponível, sem fingir que `CreatorPreset` v1 possui um UUID salvo. Só registrar exported após sucesso da geração, não por abrir a folha de compartilhamento.
-- Cache compacto de perfis por identidade/revisão e versão do algoritmo; mapear trackID ao arquivo analisado e invalidar substituição da fonte. Reutilizar MusicAnalysisCache; não duplicar timelines no log.
+- Capturar contexto criativo no momento do evento com o ID do catálogo existente, sem fingir que `CreatorPreset` v1 possui um UUID salvo. O pipeline de exportação de áudio marca `exported = true` somente após sucesso. Outros exportadores (story/SharePackage) ainda precisam integração específica, caso usados fora desta tela.
+- Os vetores curtos ficam em cache de sessão por trackID (até 200, com descarte) e são derivados do `MusicIntelligenceEngine` no arquivo local confirmado, que já valida identidade/revisão e persiste a análise. Ainda não foi criado um cache próprio persistente de DiscoveryFeatureVector; o próximo play pode reconstruí-lo do cache de análise.
 - Limites iniciais sugeridos para revisão: 1.000 eventos / 1 MiB e 200 perfis / 1 MiB. São limites propostos, não memória medida nem contratos já publicados.
 
 ## 6. Custos e validação necessária
 
-Não foram executados benchmark ou XCTest do Discovery, pois só a auditoria foi produzida. Nenhum ganho de qualidade/CPU/bateria é alegado.
+Foram adicionados testes XCTest para os contratos, mas nenhum benchmark, XCTest macOS ou medição de energia em iPhone foi validado nesta atualização. Nenhum ganho de qualidade/CPU/bateria é alegado.
 
 Para C candidatos, H entradas de histórico, E eventos e D descritores pequenos: reconstruir preferência uma vez por evento/lote custa O(E·D); o ranker v1 inclui varredura de H por candidato, O(C·H), seguida de ordenação O(C log C). Uma fila gulosa de Q faixas com comparação por par pode custar O(Q²·D); limitar horizonte e executar apenas ao receber lote ou confirmar skip. Não mover trabalho desnecessariamente para cada atualização SwiftUI.
 
@@ -83,6 +83,21 @@ Testes necessários: cold start/histórico vazio, histórico recorrente, skip re
 
 Qualidade musical exige replay e uso real: taxas de skip/conclusão, diversidade e comparação contra Mix/v1. Energia, latência e RSS precisam de iPhone/Instruments. Testes de contratos não validam preferência musical.
 
-## 7. Próximo requisito
+## 7. Implementação e limites verificáveis (13/10/2026)
 
-Receber e ler `NightcoreLab — Mapa open source de áudio, plugins, presets e voz.md`, conforme a lista obrigatória do pedido. Até lá, a branch contém somente esta auditoria; não há DiscoveryEvent, ranker v2, smart queue nova ou teste executado sendo declarado pronto.
+- `NightcoreLab/Sources/Recommendation/DiscoveryEngine.swift`: evento Codable local, ator de armazenamento limitado, tracker monotônico de escuta, MusicFeatureProfile, MusicDiscoveryFeatures, DiscoveryFeatureVector, similaridade BPM em oitavas, componentes explicáveis de score e política determinística de fila.
+- `RecommendationRanker.swift`: preserva pesos v1, compatibilidade das chamadas antigas e cold start literal; recebe snapshot v2 opcional, acrescentando apenas sinais disponíveis. O ranker não pode criar radio quando /related está vazio.
+- `ContentView.swift`: somente em playback confirmado grava/finaliza eventos, admite análise de um arquivo local por vez conforme EnergyBudget, passa snapshot ao ranker e reordena fila somente após skip manual confirmado. O prefetch existente continua intacto.
+- `SearchView.swift`: mostra a razão somente quando há sinal local que contribuiu para a pontuação. Resultados de busca textual não herdam explicações do rádio.
+- `NightcoreLabTests/DiscoveryEngineTests.swift`: cobre cold start, capacidade ausente, BPM invariante a oitava, áudio, preset/material, skip, fila, tempo efetivamente ouvido, export, limites sanitizados e persistência/limpeza.
+- As fontes atuais de candidatos são Mix e familiaridade local: nenhum backend obrigatório, serviço ou conta adicional foi introduzido.
+- A qualidade do algoritmo é **hipótese** até replay e métricas de uso reais. A medição da execução Apple (xcodegen, XCTest completo, Release, IPA, memória, Energy Log) permanece exigida antes do merge.
+
+## 8. Impacto de custo (estimativas, não medições)
+
+- Vetores acústicos: 4 valores opcionais normalizados + confiança e revisão, no máximo 200 por sessão; dimensão constante D ≤ 5.
+- Log: até 1.000 eventos e 1 MiB serializado, com gravação atômica em mudanças discretas de estado. Não há timer de Discovery durante playback.
+- Ranking: avaliação por lote, comparações de até 10 candidatos e eventos até o limite do log. O pior caso ingênuo cresce com O(C × E) para o bônus criativo; manter perfis agregados passa a ser relevante se a fonte de candidatos crescer.
+- Fila gulosa: O(Q²) quando acionada por skip confirmado, usando vetores já disponíveis. O número de downloads e o limite do prefetch não são alterados.
+- CPU de análise de áudio: não é zero no miss de cache. Apenas no arquivo local confirmado, em tarefa cancelável, prioridade utility e quando EnergyBudget permite. FFT/rhythm existente pode decodificar o arquivo em duas passagens; confirmar no iPhone.
+
