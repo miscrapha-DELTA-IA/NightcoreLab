@@ -64,8 +64,9 @@ struct StorySceneView: View {
         self.resolvedCompositionFrame = adjusted
         // Without a composition timestamp (invalid timeline) the Marble is
         // neutral: no audio, no pulse.
-        self.materialFrame = adjusted?.materialFrame ??
-            MaterialResolver.resolve(.legacyMarble, timestamp: frame.sourceTime)
+        self.materialFrame = (adjusted?.materialFrame ??
+            MaterialResolver.resolve(.legacyMarble, timestamp: frame.sourceTime))
+                .withViewport(layoutPolicy?.materialViewport)
         self.typographyFrame = adjusted?.typographyFrame ??
             request.typographyLayer(atLyricTime: frame.lyricTime)?
                 .resolve(at: frame.lyricTime, features: nil)
