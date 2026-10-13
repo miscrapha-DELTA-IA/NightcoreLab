@@ -153,11 +153,35 @@ final class ShareExportPipelineTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
             XCTAssertGreaterThan(try Data(contentsOf: file).count, 0)
         }
+        let bytes = try Data(contentsOf: output.metadataURL)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        // The sidecar's ISO-8601 contract stores seconds, whereas Date() in
+        // SharePackage.metadata retains subsecond precision. Assert exact
+        // serialized content rather than incorrectly comparing those Dates.
+        XCTAssertEqual(bytes, try encoder.encode(output.metadata),
+                       "Persisted sidecar must match the full in-memory metadata")
+
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let metadata = try decoder.decode(
-            ShareMetadata.self, from: Data(contentsOf: output.metadataURL))
-        XCTAssertEqual(metadata, output.metadata)
+        let metadata = try decoder.decode(ShareMetadata.self, from: bytes)
+        let expectedPersisted = try decoder.decode(
+            ShareMetadata.self, from: encoder.encode(output.metadata))
+        XCTAssertEqual(metadata, expectedPersisted,
+                       "Every ShareMetadata field must survive its declared JSON contract")
+
+        // Independent profile expectations; do not mistake Square + Economy
+        // for the legacy portrait dimensions.
+        let encoding = profile.encodingProfile(for: clip.mode)
+        XCTAssertEqual(metadata.schemaVersion, ShareMetadata.currentSchemaVersion)
+        XCTAssertEqual(metadata.quality, profile.quality)
+        XCTAssertEqual(metadata.aspectRatio, profile.aspectRatio)
+        XCTAssertEqual(metadata.cropPolicy, encoding.cropPolicy)
+        XCTAssertEqual(metadata.codec, "h264")
+        XCTAssertEqual(metadata.width, encoding.width)
+        XCTAssertEqual(metadata.height, encoding.height)
+        XCTAssertEqual(metadata.fps, encoding.fps)
         XCTAssertEqual(metadata.width, 540)
         XCTAssertEqual(metadata.height, 540)
         XCTAssertEqual(metadata.thumbnailFrameIndex, 0)
@@ -169,7 +193,8 @@ final class ShareExportPipelineTests: XCTestCase {
         let tracks = try await asset.loadTracks(withMediaType: .video)
         let video = try XCTUnwrap(tracks.first)
         let size = try await video.load(.naturalSize)
-        XCTAssertEqual(size.width, 540)
-        XCTAssertEqual(size.height, 540)
+        XCTAssertEqual(size.width, CGFloat(encoding.width))
+        XCTAssertEqual(size.height, CGFloat(encoding.height))
+        XCTAssertEqual(metadata.thumbnailElapsed, 0)
     }
 }
