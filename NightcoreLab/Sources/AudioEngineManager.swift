@@ -106,6 +106,7 @@ final class AudioEngineManager {
     @ObservationIgnored private let padRuntime = PadAudioRuntime()
 
     var performanceKit: PadKit { padRuntime.kit }
+    var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
     var performancePadsReady: Bool { padRuntime.isReady }
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
@@ -182,7 +183,7 @@ final class AudioEngineManager {
         duration = Double(file.length) / file.processingFormat.sampleRate
 
         engine.stop()
-        padRuntime.stopAll()
+        padRuntime.clearSourceClip()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
         padRuntime.nodes.forEach { engine.disconnectNodeOutput($0) }
 
@@ -202,12 +203,38 @@ final class AudioEngineManager {
 
     // MARK: Performance pads
 
+    /// Prepare at most five seconds from the currently loaded local source.
+    /// Decode/resample is off the main actor; no disk IO on the pad's touch path.
+    /// A source swap during preparation invalidates the result atomically.
+    func assignPerformanceSourceClip(startTime: TimeInterval, duration: TimeInterval,
+                                     expectedRevision: Int) async throws -> PerformanceSourceClip {
+        guard !isExporting, playbackSourceRevision == expectedRevision,
+              let sourceURL, sourceURL.isFileURL,
+              let clip = PerformanceSourceClip(
+                startTime: startTime, duration: duration, sourceDuration: self.duration) else {
+            throw AudioEngineError.unsupportedAudio
+        }
+        let capturedURL = sourceURL
+        let pcm = try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let data = try PerformanceClipExtractor.decode(from: capturedURL, clip: clip)
+            try Task.checkCancellation()
+            return data
+        }.value
+        try Task.checkCancellation()
+        guard playbackSourceRevision == expectedRevision, self.sourceURL == capturedURL,
+              padRuntime.installSourceClip(clip, pcm: pcm) else {
+            throw AudioEngineError.unsupportedAudio
+        }
+        return clip
+    }
+
     /// Fast path: buffers and voice nodes were already created. Does not
     /// read files, reconfigure DSP or inspect lyrics when tapping a pad.
     @discardableResult
     func triggerPad(_ padID: String, velocity: Float = 0.85) -> Bool {
         guard !isExporting, padRuntime.isReady,
-              padRuntime.kit.samples.contains(where: { $0.id == padID }),
+              padRuntime.descriptor(for: padID) != nil,
               velocity.isFinite && velocity > 0 else { return false }
         cancelIdleStop()
         do {
@@ -861,7 +888,7 @@ final class AudioEngineManager {
             try PerformancePadMixdown.write($0, startTime: startTime,
                                             speed: settings.speed,
                                             duration: selectedSeconds + tailSeconds,
-                                            sampleRate: outputRate)
+                                            sampleRate: outputRate, sourceURL: source)
         }
         defer {
             if let padStemURL { try? FileManager.default.removeItem(at: padStemURL) }
