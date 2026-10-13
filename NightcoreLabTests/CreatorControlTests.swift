@@ -64,8 +64,9 @@ final class CreatorControlTests: XCTestCase {
     }
 
     func testPresetPersistsAndRestoresWithoutBackend() throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "CreatorPreset-\(UUID())"))
-        defer { defaults.removePersistentDomain(forName: defaults.volatileDomainNames.first ?? "unused") }
+        let suite = "CreatorPreset-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
         var controls = CreatorControls()
         controls.set(0.78, for: .distortion)
         let source = CreatorPreset(

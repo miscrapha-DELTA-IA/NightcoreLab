@@ -85,7 +85,7 @@ final class AdaptiveCompositionLayoutTests: XCTestCase {
             let scene = StorySceneView(
                 request: frozen, artwork: nil, frame: frame,
                 layoutPolicy: frozen.layoutPolicy)
-            XCTAssertEqual(scene.materialFrame.viewport?.aspectRatio,
+            XCTAssertEqual(try XCTUnwrap(scene.materialFrame.viewport?.aspectRatio),
                            Double(profile.width) / Double(profile.height),
                            accuracy: 1e-12)
             XCTAssertEqual(canvas.logicalSize, frozen.layoutPolicy?.canvasSize)

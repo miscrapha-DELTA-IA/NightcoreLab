@@ -289,7 +289,7 @@ struct StorySceneView: View {
                 }
                 if let typographyFrame, typographyFrame.lineID == line.id {
                     StoryLyricLine(frame: typographyFrame, theme: request.theme,
-                                   maxWordWidth: layoutPolicy?.lyricsArea.width ?? 440,
+                                   maxWordWidth: layoutPolicy.map { max(160, $0.lyricsArea.width - 30) } ?? 440,
                                    fontSize: layoutPolicy?.lyricFontSize ?? 35,
                                    glowMultiplier: request.creatorParameters.glow)
                 }
