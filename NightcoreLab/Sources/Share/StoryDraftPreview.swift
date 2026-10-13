@@ -24,6 +24,7 @@ struct StoryDraftPreview: View {
     @State private var selectedExperienceID: String
     @State private var selectedMaterialID: String
     @State private var selectedTypography: TypographyStyle
+    @State private var selectedTypographyPreset: TypographyPreset
     @State private var controls: CreatorControls
     @State private var frozenRequest: StoryVideoRequest
     @State private var frozenTimeline: StoryRenderTimeline
@@ -64,6 +65,7 @@ struct StoryDraftPreview: View {
         _selectedExperienceID = State(initialValue: initial.experienceID)
         _selectedMaterialID = State(initialValue: initial.materialID)
         _selectedTypography = State(initialValue: initial.typography.style)
+        _selectedTypographyPreset = State(initialValue: initial.typography)
         _controls = State(initialValue: initial.controls)
         _frozenRequest = State(initialValue: frozen)
         _frozenTimeline = State(initialValue: StoryRenderTimeline(
@@ -76,16 +78,10 @@ struct StoryDraftPreview: View {
     }
 
     private var selectedPreset: CreatorPreset {
-        let font = frozenRequest.typographyPreset.font
-        let existing = frozenRequest.typographyPreset
-        let typography = selectedTypography == existing.style ? existing :
-            TypographyPreset(style: selectedTypography,
-                             audioReaction: existing.audioReaction,
-                             font: font)
-        return CreatorPreset(experienceID: selectedExperienceID,
-                             materialID: selectedMaterialID,
-                             typography: typography,
-                             controls: controls, exportProfile: selectedProfile)
+        CreatorPreset(experienceID: selectedExperienceID,
+                      materialID: selectedMaterialID,
+                      typography: selectedTypographyPreset,
+                      controls: controls, exportProfile: selectedProfile)
     }
 
     private var encodingProfile: StoryEncodingProfile {
@@ -280,6 +276,22 @@ struct StoryDraftPreview: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancelar", action: onCancel)
                 }
+            }
+            .onChange(of: selectedExperienceID) { _, selection in
+                selectedMaterialID = CreativePresetCatalog.material(selection: selection).id
+                let style = CreativePresetCatalog.typographyStyle(
+                    afterSelecting: selection, current: selectedTypography)
+                selectedTypography = style
+                selectedTypographyPreset = CreativePresetCatalog.typographyPreset(
+                    selection: selection, style: style,
+                    font: draft.request.typographyPreset.font,
+                    reacts: draft.request.reactiveProgram != nil)
+            }
+            .onChange(of: selectedTypography) { _, style in
+                selectedTypographyPreset = CreativePresetCatalog.typographyPreset(
+                    selection: selectedExperienceID, style: style,
+                    font: draft.request.typographyPreset.font,
+                    reacts: draft.request.reactiveProgram != nil)
             }
             .onChange(of: selectedPreset) { _, preset in
                 freezeSession(preset)
