@@ -110,6 +110,10 @@ final class AudioEngineManager {
     @ObservationIgnored private var scheduleGeneration = 0
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
+    @ObservationIgnored private weak var remoteRelay: RemotePlaybackRelay?
+    @ObservationIgnored private var remoteCanSkipNext = false
+    @ObservationIgnored private var remoteCanSkipPrevious = false
+    @ObservationIgnored private var interruptedSourceURL: URL?
     @ObservationIgnored private var lastKnownTime: TimeInterval = 0
     @ObservationIgnored private var scheduledStartTime: TimeInterval = 0
 
@@ -142,6 +146,7 @@ final class AudioEngineManager {
     // MARK: Carregar arquivo
 
     func load(url: URL) throws {
+        interruptedSourceURL = nil // A replacement must never resume a prior source.
         // Core Audio decodifica MP3/AAC para PCM float; não há conversão com perdas na importação.
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard file.length > 0, file.processingFormat.sampleRate > 0,
@@ -185,6 +190,7 @@ final class AudioEngineManager {
             }
             lyricsClock.refreshOutputLatency()
             player.play()
+            interruptedSourceURL = nil
             isPlaying = true
             setupNowPlaying()
         } catch {
@@ -194,6 +200,7 @@ final class AudioEngineManager {
 
     func pause() {
         guard audioFile != nil else { return }
+        interruptedSourceURL = nil // Manual pause invalidates pending auto-resume.
         lastKnownTime = currentTime   // captura antes de pausar, enquanto lastRenderTime é válido
         lyricsClock.didPause(at: lastKnownTime)
         player.pause()
@@ -434,37 +441,100 @@ final class AudioEngineManager {
             MPNowPlayingInfoPropertyDefaultPlaybackRate: Double(speed),
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
         ]
+        updateRemoteCommandAvailability()
+    }
+
+    /// SwiftUI owns the relay. The engine's weak link avoids retaining a view
+    /// through its callbacks. Removing the relay disables navigational controls.
+    func connectRemoteCommands(_ relay: RemotePlaybackRelay?) {
+        remoteRelay = relay
+        updateRemoteCommandAvailability()
+    }
+
+    /// Only enable actions backed by the current queue/navigation and audio.
+    /// Previous is available for restart-from-zero even without older tracks.
+    func updateRemoteCommandAvailability(canSkipNext: Bool? = nil,
+                                         canSkipPrevious: Bool? = nil) {
+        if let canSkipNext { remoteCanSkipNext = canSkipNext }
+        if let canSkipPrevious { remoteCanSkipPrevious = canSkipPrevious }
+        let commands = MPRemoteCommandCenter.shared()
+        let available = fileName != nil && !isExporting
+        commands.playCommand.isEnabled = available
+        commands.pauseCommand.isEnabled = available
+        commands.togglePlayPauseCommand.isEnabled = available
+        commands.changePlaybackPositionCommand.isEnabled =
+            available && duration > 0 && remoteRelay != nil
+        commands.nextTrackCommand.isEnabled =
+            available && remoteCanSkipNext && remoteRelay != nil
+        commands.previousTrackCommand.isEnabled =
+            available && remoteCanSkipPrevious && remoteRelay != nil
     }
 
     private func setupRemoteTransportControls() {
         let commands = MPRemoteCommandCenter.shared()
 
-        commands.playCommand.isEnabled = true
+        // These targets are registered exactly once, at AudioEngineManager init.
+        // MPRemote callbacks are delivered outside our actor; commands are
+        // enqueued onto MainActor, then PlaybackCoordinator reconciles results.
         commands.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.play() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let relay = self.remoteRelay { _ = relay.dispatch(.play) }
+                else { self.play() }
+            }
             return .success
         }
 
-        commands.pauseCommand.isEnabled = true
         commands.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.pause() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let relay = self.remoteRelay { _ = relay.dispatch(.pause) }
+                else { self.pause() }
+            }
             return .success
         }
 
-        // Fones com botão único e o botão central dos AirPods usam este comando.
-        commands.togglePlayPauseCommand.isEnabled = true
         commands.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.togglePlayback() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let relay = self.remoteRelay { _ = relay.dispatch(.toggle) }
+                else { self.togglePlayback() }
+            }
             return .success
         }
 
-        // Sem playlist nem seek: esconde esses controles para não aparecerem botões mortos.
-        [commands.nextTrackCommand,
-         commands.previousTrackCommand,
-         commands.skipForwardCommand,
-         commands.skipBackwardCommand,
-         commands.changePlaybackPositionCommand,
+        commands.nextTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let relay = self?.remoteRelay else { return }
+                _ = relay.dispatch(.next)
+            }
+            return .success
+        }
+
+        commands.previousTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let relay = self?.remoteRelay else { return }
+                _ = relay.dispatch(.previous)
+            }
+            return .success
+        }
+
+        commands.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent,
+                  event.positionTime.isFinite, event.positionTime >= 0 else {
+                return .commandFailed
+            }
+            let position = event.positionTime
+            Task { @MainActor [weak self] in
+                guard let relay = self?.remoteRelay else { return }
+                _ = relay.dispatch(.seek(position))
+            }
+            return .success
+        }
+
+        [commands.skipForwardCommand, commands.skipBackwardCommand,
          commands.changePlaybackRateCommand].forEach { $0.isEnabled = false }
+        updateRemoteCommandAvailability()
     }
 
     private func configureSession() {
@@ -482,20 +552,58 @@ final class AudioEngineManager {
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            Task { @MainActor in self?.pause() }
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            let optionsRaw = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let systemAllows = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+                .contains(.shouldResume)
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch type {
+                case .began:
+                    let wasPlaying = self.isPlaying
+                    let source = self.sourceURL
+                    self.pause()
+                    // Pause invalidates any previous request. Capture *after*
+                    // it so a later user pause or replacement cancels resumption.
+                    self.interruptedSourceURL = wasPlaying ? source : nil
+                case .ended:
+                    let priorSource = self.interruptedSourceURL
+                    self.interruptedSourceURL = nil
+                    let shouldResume = AudioInterruptionResumePolicy.shouldResume(
+                        wasPlaying: priorSource != nil,
+                        systemAllows: systemAllows,
+                        sameSource: self.sourceURL == priorSource,
+                        userOverrode: false)
+                    if shouldResume && !self.isPlaying {
+                        do {
+                            try AVAudioSession.sharedInstance().setActive(true)
+                            self.play()
+                        } catch {
+                            // Remain paused when reactivation fails.
+                            self.setupNowPlaying()
+                        }
+                    }
+                @unknown default: break
+                }
+            }
         }
 
-        // Fone desconectado (cabo puxado, AirPods fora do ouvido/desligados):
-        // pausa para o som não sair de repente pelo alto-falante.
+        // A disconnected output pauses without auto-switching to speaker.
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] note in
-            // Any route change can change output latency (speaker ↔ Bluetooth).
-            Task { @MainActor in self?.lyricsClock.refreshOutputLatency() }
-            guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                  AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
-            Task { @MainActor in self?.pause() }
+            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let removed = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ==
+                .oldDeviceUnavailable
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.lyricsClock.refreshOutputLatency()
+                if removed {
+                    self.interruptedSourceURL = nil
+                    self.pause()
+                }
+            }
         }
     }
 
