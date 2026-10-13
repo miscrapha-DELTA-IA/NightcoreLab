@@ -102,6 +102,7 @@ struct ContentView: View {
     @StateObject private var playbackQueue = PlaybackQueue()
     @StateObject private var playbackTransition = PlaybackCoordinator()
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
+    @State private var remoteRelay = RemotePlaybackRelay()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
     @State private var suggestionReasons: [String: String] = [:]
@@ -219,6 +220,13 @@ struct ContentView: View {
             restoreDiscoverExpansionPreference()
             if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
+            remoteRelay.connect { action in handleRemotePlayback(action) }
+            audio.connectRemoteCommands(remoteRelay)
+            synchronizeRemoteAvailability()
+        }
+        .onDisappear {
+            audio.connectRemoteCommands(nil)
+            remoteRelay.disconnect()
         }
         .onOpenURL { incomingURL in
             guard let components = URLComponents(
@@ -254,6 +262,7 @@ struct ContentView: View {
         }
         .onChange(of: audio.isPlaying) { _, playing in
             playbackTransition.confirmPlayback(isPlaying: playing, trackID: playingTrackID)
+            synchronizeRemoteAvailability()
             discoveryTracker.playbackChanged(isPlaying: playing, speed: Double(speed))
             if playing {
                 if let currentTrack {
@@ -264,6 +273,22 @@ struct ContentView: View {
             } else if let currentTrack {
                 playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
             }
+        }
+        // The system's lock-screen controls reflect confirmed queue state.
+        .onChange(of: playbackQueue.upNextQueue.map(\.id)) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: navigationHistory.previousTrack?.id) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: navigationHistory.forwardTrack?.id) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: audio.fileName) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: audio.isExporting) { _, _ in
+            synchronizeRemoteAvailability()
         }
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, _ in
@@ -1007,6 +1032,48 @@ struct ContentView: View {
     }
 
     // MARK: - Ações
+
+    /// Remote playback and on-screen controls use the same queue/navigation
+    /// transition and the same AVAudioEngine. No second player is created.
+    private func handleRemotePlayback(_ action: RemotePlaybackAction) -> Bool {
+        guard !audio.isExporting, !playbackTransition.isPreparing else { return false }
+        switch action {
+        case .play:
+            guard hasTrack else { return false }
+            playbackTransition.resume(audio: audio, trackID: playingTrackID)
+            return audio.isPlaying
+        case .pause:
+            guard hasTrack else { return false }
+            playbackTransition.pause(audio: audio, trackID: playingTrackID)
+            return !audio.isPlaying
+        case .toggle:
+            guard hasTrack else { return false }
+            playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID)
+            return true
+        case .next:
+            guard navigationHistory.forwardTrack != nil ||
+                  !playbackQueue.upNextQueue.isEmpty else { return false }
+            goToNextTrack()
+            return true // Playback is confirmed asynchronously before queue commit.
+        case .previous:
+            guard hasTrack else { return false }
+            goToPreviousTrack()
+            return true
+        case .seek(let position):
+            guard hasTrack, position.isFinite, position >= 0,
+                  audio.duration > 0 else { return false }
+            playbackTransition.seek(to: position, audio: audio, trackID: playingTrackID)
+            return true
+        }
+    }
+
+    private func synchronizeRemoteAvailability() {
+        audio.updateRemoteCommandAvailability(
+            canSkipNext: !audio.isExporting &&
+                (navigationHistory.forwardTrack != nil ||
+                 !playbackQueue.upNextQueue.isEmpty),
+            canSkipPrevious: !audio.isExporting && hasTrack)
+    }
 
     private func applyPitch() {
         audio.setPlayback(speed: speed, keepOriginalPitch: keepOriginalPitch)
