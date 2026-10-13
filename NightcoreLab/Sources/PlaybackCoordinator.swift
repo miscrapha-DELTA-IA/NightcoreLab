@@ -79,6 +79,11 @@ final class PlaybackCoordinator: ObservableObject {
     /// preparing, only didStart/didFail may reconcile its generation token.
     func confirmPlayback(isPlaying: Bool, trackID: String?) {
         guard !isPreparing else { return }
+        // At natural EOF, audio.isPlaying becomes false before the queue
+        // advances. A secondary SwiftUI onChange must not downgrade ended
+        // into paused (or the lock screen would show an ordinary pause).
+        if !isPlaying, case .ended(let endedID) = transportState,
+           endedID == trackID { return }
         requestedCommand = nil
         // Imported local audio has no Track ID; nil denotes that valid state.
         transportState = isPlaying ? .playing(trackID) : .paused(trackID)
