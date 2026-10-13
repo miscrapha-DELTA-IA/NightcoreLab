@@ -380,6 +380,34 @@ final class AudioEngineManager {
         return url
     }
 
+    /// Frozen additive pad-event export reuses the same offline music graph.
+    /// The live engine remains untouched. No export is started by a pad tap.
+    func exportPerformanceAudio(timeline: PerformanceTimeline,
+                                format: ExportFormat = .m4a) async throws -> URL {
+        guard let sourceURL else { throw AudioEngineError.noFileLoaded }
+        guard !isExporting, timeline.isValid,
+              timeline.kitID == padRuntime.kit.id else {
+            throw AudioEngineError.exportInProgress
+        }
+        isExporting = true
+        exportProgress = 0
+        defer { isExporting = false }
+        let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb,
+                                      bass: bass, reverbPresetRaw: Self.defaultReverbPreset.rawValue)
+        let task = Task.detached(priority: .userInitiated) {
+            try Self.renderOffline(source: sourceURL, settings: settings,
+                                   format: format, progress: { _ in },
+                                   performance: timeline)
+        }
+        let url = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        exportProgress = 1
+        return url
+    }
+
     /// Capture the source and DSP values synchronously when the user taps Share.
     /// A later track change cannot alter the sound of an in-flight Story.
     func storyAudioSource() throws -> StoryAudioSource {
@@ -799,7 +827,8 @@ final class AudioEngineManager {
                                                   format: ExportFormat,
                                                   progress: @Sendable (Double) -> Void,
                                                   startTime: TimeInterval = 0,
-                                                  maxDuration: TimeInterval? = nil) throws -> URL {
+                                                  maxDuration: TimeInterval? = nil,
+                                                  performance: PerformanceTimeline? = nil) throws -> URL {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let sourceRate = file.processingFormat.sampleRate
         guard file.length > 0, sourceRate > 0, (1...2).contains(file.processingFormat.channelCount),
@@ -809,6 +838,23 @@ final class AudioEngineManager {
         }
         // AAC em taxas convencionais; WAV mantém a taxa original.
         let outputRate = format == .m4a ? (sourceRate == 44_100 ? 44_100.0 : 48_000.0) : sourceRate
+        let sourceSeconds = Double(file.length) / sourceRate
+        let tailSeconds = maxDuration == nil ? (settings.reverb > 0 ? 3.0 : 0.1) : 0.0
+        let available = max(0, sourceSeconds - min(max(startTime, 0), sourceSeconds))
+                        / Double(settings.speed)
+        let selectedSeconds = min(maxDuration ?? available, available)
+        guard selectedSeconds > 0 else { throw AudioEngineError.unsupportedAudio }
+        // Pad stem is generated ONLY during requested export (chunked file IO).
+        // It enters the same limiter as the song, before final PCM/AAC encoding.
+        let padStemURL = try performance.map {
+            try PerformancePadMixdown.write($0, startTime: startTime,
+                                            speed: settings.speed,
+                                            duration: selectedSeconds + tailSeconds,
+                                            sampleRate: outputRate)
+        }
+        defer {
+            if let padStemURL { try? FileManager.default.removeItem(at: padStemURL) }
+        }
 
         // Engine separada: o export não interrompe o playback.
         let engine = AVAudioEngine()
@@ -820,6 +866,16 @@ final class AudioEngineManager {
         let reverb = makeReverb()
         let limiter = makeLimiter()
         [player, upmix, varispeed, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
+        let performanceMixer = padStemURL.map { _ in AVAudioMixerNode() }
+        let padPlayer = padStemURL.map { _ in AVAudioPlayerNode() }
+        if let performanceMixer, let padPlayer {
+            engine.attach(performanceMixer)
+            engine.attach(padPlayer)
+        }
+        let padFile = try padStemURL.map {
+            try AVAudioFile(forReading: $0, commonFormat: .pcmFormatFloat32,
+                            interleaved: false)
+        }
 
         configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: settings.speed, pitch: settings.pitch)
         eq.bands[0].gain = settings.bass
@@ -831,7 +887,11 @@ final class AudioEngineManager {
         let renderFormat = AVAudioFormat(standardFormatWithSampleRate: outputRate, channels: 2)!
         connectGraph(engine: engine, player: player, upmix: upmix, varispeed: varispeed, timePitch: timePitch, eq: eq,
                      reverb: reverb, limiter: limiter,
-                     fileFormat: file.processingFormat, graphFormat: renderFormat)
+                     fileFormat: file.processingFormat, graphFormat: renderFormat,
+                     performanceMixer: performanceMixer)
+        if let padPlayer, let performanceMixer {
+            engine.connect(padPlayer, to: performanceMixer, format: renderFormat)
+        }
 
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
         try engine.start()
@@ -848,18 +908,17 @@ final class AudioEngineManager {
             player.scheduleFile(file, at: nil)
         }
         player.play()
+        if let padPlayer, let padFile {
+            padPlayer.scheduleFile(padFile, at: nil)
+            padPlayer.play()
+        }
         defer {
+            padPlayer?.stop()
             player.stop()
             engine.stop()
         }
 
         // Duração final = duração original / speed + cauda do reverb.
-        let sourceSeconds = Double(file.length) / sourceRate
-        let tailSeconds = maxDuration == nil ? (settings.reverb > 0 ? 3.0 : 0.1) : 0.0
-        let available = max(0, sourceSeconds - min(max(startTime, 0), sourceSeconds))
-                        / Double(settings.speed)
-        let selectedSeconds = min(maxDuration ?? available, available)
-        guard selectedSeconds > 0 else { throw AudioEngineError.unsupportedAudio }
         let totalFrames = AVAudioFramePosition((selectedSeconds + tailSeconds) * outputRate)
 
         // Arquivo de saída
