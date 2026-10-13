@@ -41,6 +41,18 @@ final class PlaybackQueue: ObservableObject {
         upNextQueue.append(contentsOf: fresh)
     }
 
+    /// Manual reorder must preserve every candidate exactly once.
+    /// Invalid/stale reorder requests leave the queue untouched.
+    @discardableResult
+    func reorder(ids: [String]) -> Bool {
+        let existing = Dictionary(uniqueKeysWithValues: upNextQueue.map { ($0.id, $0) })
+        guard ids.count == upNextQueue.count,
+              Set(ids).count == ids.count,
+              Set(ids) == Set(existing.keys) else { return false }
+        upNextQueue = ids.compactMap { existing[$0] }
+        return true
+    }
+
     /// A committed skip may change priority, but never enqueue or prefetch a new file.
     func reorderAfterSkip(anchor: Track, vectors: [String: DiscoveryFeatureVector],
                           recentlyPlayed: Set<String> = []) {
@@ -1091,9 +1103,9 @@ struct ContentView: View {
                         let recentIDs = playHistory.entries.values.sorted {
                             $0.lastPlayed > $1.lastPlayed
                         }.prefix(10).map { $0.hit.id }
-                        playbackQueue.reorderAfterSkip(anchor: currentTrack,
+                        playbackTransition.reorderAfterSkip(anchor: currentTrack,
                             vectors: acousticVectors,
-                            recentlyPlayed: Set(recentIDs))
+                            recentlyPlayed: Set(recentIDs), queue: playbackQueue)
                     }
                     analyzeDiscoveryAudio(track: currentTrack, localURL: localURL)
                     playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
