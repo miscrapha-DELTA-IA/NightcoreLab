@@ -55,54 +55,6 @@ final class PlaybackQueue: ObservableObject {
     func clear() { upNextQueue.removeAll() }
 }
 
-@MainActor
-final class PlaybackTransitionCoordinator: ObservableObject {
-    enum Phase: Equatable {
-        case idle
-        case preparing(String)
-        case playing(String)
-        case failed(String)
-    }
-
-    @Published private(set) var phase: Phase = .idle
-    private var token = UUID()
-
-    @discardableResult
-    func begin(trackID: String) -> UUID {
-        token = UUID()
-        phase = .preparing(trackID)
-        return token
-    }
-
-    func isCurrent(_ request: UUID, trackID: String) -> Bool {
-        request == token && phase == .preparing(trackID)
-    }
-
-    @discardableResult
-    func didStart(_ request: UUID, trackID: String) -> Bool {
-        guard isCurrent(request, trackID: trackID) else { return false }
-        phase = .playing(trackID)
-        return true
-    }
-
-    @discardableResult
-    func didFail(_ request: UUID, trackID: String) -> Bool {
-        guard isCurrent(request, trackID: trackID) else { return false }
-        phase = .failed(trackID)
-        return true
-    }
-
-    var isPreparing: Bool {
-        if case .preparing = phase { return true }
-        return false
-    }
-
-    func reset() {
-        token = UUID()
-        phase = .idle
-    }
-}
-
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
 
@@ -136,7 +88,7 @@ struct ContentView: View {
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
     @StateObject private var playbackQueue = PlaybackQueue()
-    @StateObject private var playbackTransition = PlaybackTransitionCoordinator()
+    @StateObject private var playbackTransition = PlaybackCoordinator()
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
@@ -223,7 +175,7 @@ struct ContentView: View {
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
             playerBackgroundStyle: bgStyle,
-            onPlayPause: { audio.togglePlayback() },
+            onPlayPause: { playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID) },
             onPrevious: { goToPreviousTrack() },
             onNext: { goToNextTrack() },
             header: { header },
@@ -283,11 +235,13 @@ struct ContentView: View {
         .task(id: relatedRequestID) { await loadRelatedVideos() }
         .task { discoveryEvents = await discoveryLog.snapshot() }
         .onChange(of: audio.playbackCompletionCount) { _, _ in
+            if let playingTrackID { playbackTransition.didEnd(trackID: playingTrackID) }
             finishDiscovery(reason: .completed)
             if let currentTrack { playHistory.completePlayback(trackID: currentTrack.id) }
             advanceQueue()
         }
         .onChange(of: audio.isPlaying) { _, playing in
+            playbackTransition.confirmPlayback(isPlaying: playing, trackID: playingTrackID)
             discoveryTracker.playbackChanged(isPlaying: playing, speed: Double(speed))
             if playing {
                 if let currentTrack {
@@ -296,7 +250,7 @@ struct ContentView: View {
                 // A manual play/pause is not a request to start radio.
                 prefetchUpcoming()
             } else if let currentTrack {
-                downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
             }
         }
         // Áudio muda instantaneamente enquanto o dedo arrasta
@@ -319,7 +273,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 if let currentTrack {
-                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                    playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
                 }
                 TelemetryManager.shared.flush()
             }
@@ -686,7 +640,7 @@ struct ContentView: View {
                             return
                         }
                         let percent = min(max(Double(value.location.x / max(geometry.size.width, 1)), 0), 1)
-                        audio.seek(to: percent * audio.duration)
+                        playbackTransition.seek(to: percent * audio.duration, audio: audio, trackID: playingTrackID)
                         isDraggingTime = false
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
@@ -1066,10 +1020,10 @@ struct ContentView: View {
     /// track. With no prior track, fall back to restarting the current one.
     private func goToPreviousTrack() {
         guard !audio.isExporting else { return }
-        if let previous = navigationHistory.previousTrack {
+        if let previous = playbackTransition.previousCandidate(navigation: navigationHistory) {
             playTrack(previous, navigation: .backward)
         } else {
-            audio.seek(to: 0)
+            playbackTransition.seek(to: 0, audio: audio, trackID: playingTrackID)
         }
     }
 
@@ -1096,7 +1050,7 @@ struct ContentView: View {
             duration: audio.duration,
             automaticAdvance: automaticAdvance || navigation != .regular)
         let resumingPrevious = navigation == .regular && resumeTrack?.id == track.id
-        let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
+        let resumeAt = resumingPrevious ? playbackTransition.restoredSession()?.position : nil
         resumeTrack = nil
         let token = playbackTransition.begin(trackID: track.id)
         downloader.select(track, onReady: { localURL, downloadedCoverURL in
@@ -1120,11 +1074,8 @@ struct ContentView: View {
                 // download selection time. Back/forward leave Up Next intact.
                 let priorTrack = currentTrack
                 let committedTrack = downloader.cachedTrack(track)
-                navigationHistory.commitStarted(committedTrack, replacing: priorTrack,
-                                                direction: navigation)
-                if navigation == .regular {
-                    playbackQueue.commitPlaying(track)
-                }
+                playbackTransition.commitStarted(committedTrack, replacing: priorTrack,
+                    direction: navigation, queue: playbackQueue, navigation: navigationHistory)
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
@@ -1147,7 +1098,7 @@ struct ContentView: View {
                     analyzeDiscoveryAudio(track: currentTrack, localURL: localURL)
                     playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
                                               replacing: pendingSkip)
-                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                    playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
                     startLyricsPrefetch(for: currentTrack)
                 }
                 prefetchUpcoming()
@@ -1170,7 +1121,7 @@ struct ContentView: View {
         guard !didRestoreSession else { return }
         didRestoreSession = true
         guard !hasTrack, !downloader.isDownloading,
-              let saved = downloader.loadLastTrack() else { return }
+              let saved = playbackTransition.restoredSession() else { return }
         guard let local = downloader.cachedAudioURL(for: saved.track) else {
             // No silent server request after a cold launch or cache eviction.
             resumeTrack = saved.track
@@ -1267,7 +1218,7 @@ struct ContentView: View {
                 context: RecContext(speed: audio.speed, now: .now),
                 discovery: snapshot).map { (track.id, $0) }
         })
-        playbackQueue.append(ranked, excluding: playingTrackID)
+        playbackTransition.enqueue(ranked, excluding: playingTrackID, queue: playbackQueue)
         prefetchUpcoming()
         if autoplayWhenRadioReady {
             autoplayWhenRadioReady = false
@@ -1306,8 +1257,8 @@ struct ContentView: View {
             if let lyricsPrefetcher { Task { await lyricsPrefetcher.cancel() } }
             showLyrics = false
             resumeTrack = nil
-            downloader.clearLastTrack()
-            playbackQueue.clear()
+            playbackTransition.clearSession()
+            playbackTransition.clearQueue(playbackQueue)
             navigationHistory.clear()
             playbackTransition.reset()
             downloader.cancel()
