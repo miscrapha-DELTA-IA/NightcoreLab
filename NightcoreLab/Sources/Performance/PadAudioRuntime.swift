@@ -121,19 +121,30 @@ final class PadAudioRuntime {
     }
 
     func trigger(padID: String, velocity: Float,
-                 now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+                 now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                 timing: ((PadNodeDispatchTiming) -> Void)? = nil) -> Bool {
         guard let sample = descriptor(for: padID),
               let buffer = prepared[padID], velocity.isFinite, velocity > 0 else { return false }
         let vel = min(max(velocity, 0), 1)
         guard let selection = allocator.allocate(
             id: padID, chokeGroup: sample.chokeGroup,
             duration: sample.duration, at: now) else { return false }
+        let measuring = timing != nil
+        let started = measuring ? ProcessInfo.processInfo.systemUptime : 0
         for index in selection.chokeIndices { nodes[index].stop() }
         let node = nodes[selection.voiceIndex]
         node.stop()
+        let stopped = measuring ? ProcessInfo.processInfo.systemUptime : 0
         node.volume = sample.gain * vel
         node.scheduleBuffer(buffer, at: nil, options: .interrupts)
+        let scheduled = measuring ? ProcessInfo.processInfo.systemUptime : 0
         node.play()
+        if let timing {
+            let played = ProcessInfo.processInfo.systemUptime
+            timing(PadNodeDispatchTiming(stopMS: max(0, stopped - started) * 1_000,
+                                         scheduleMS: max(0, scheduled - stopped) * 1_000,
+                                         playMS: max(0, played - scheduled) * 1_000))
+        }
         return true
     }
 

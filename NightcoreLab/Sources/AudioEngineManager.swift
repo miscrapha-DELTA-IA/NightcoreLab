@@ -104,6 +104,8 @@ final class AudioEngineManager {
     /// Only the existing live AVAudioEngine produces sound.
     private let performanceMixer = AVAudioMixerNode()
     @ObservationIgnored private let padRuntime = PadAudioRuntime()
+    /// Opt-in local metrics; no per-hit Observable notifications.
+    @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
 
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
@@ -232,20 +234,65 @@ final class AudioEngineManager {
     /// Fast path: buffers and voice nodes were already created. Does not
     /// read files, reconfigure DSP or inspect lyrics when tapping a pad.
     @discardableResult
-    func triggerPad(_ padID: String, velocity: Float = 0.85) -> Bool {
+    func triggerPad(_ padID: String, velocity: Float = 0.85,
+                    touchEventUptime: TimeInterval? = nil) -> Bool {
+        let profiling = padLatencyProbe.isCapturing
+        let began = profiling ? ProcessInfo.processInfo.systemUptime : 0
         guard !isExporting, padRuntime.isReady,
               padRuntime.descriptor(for: padID) != nil,
-              velocity.isFinite && velocity > 0 else { return false }
-        cancelIdleStop()
-        do {
-            if !engine.isRunning { try engine.start() }
-            let played = padRuntime.trigger(padID: padID, velocity: velocity)
-            if !isPlaying { scheduleIdleStop() }
-            return played
-        } catch {
-            if !isPlaying { scheduleIdleStop() }
+              velocity.isFinite && velocity > 0 else {
+            if profiling {
+                padLatencyProbe.record(.init(
+                    touchToHandlerMS: nil, touchToCommandMS: nil,
+                    commandMS: 0, engineStartMS: 0, nodeStopMS: 0,
+                    nodeScheduleMS: 0, nodePlayMS: 0,
+                    wasCold: !engine.isRunning, succeeded: false))
+            }
             return false
         }
+        let wasCold = !engine.isRunning
+        var engineStartMS = 0.0
+        var nodeTiming = PadNodeDispatchTiming(stopMS: 0, scheduleMS: 0, playMS: 0)
+        cancelIdleStop()
+        var played = false
+        do {
+            if wasCold {
+                let start = profiling ? ProcessInfo.processInfo.systemUptime : 0
+                try engine.start()
+                if profiling {
+                    engineStartMS = (ProcessInfo.processInfo.systemUptime - start) * 1_000
+                }
+            }
+            if profiling {
+                played = padRuntime.trigger(padID: padID, velocity: velocity) {
+                    nodeTiming = $0
+                }
+            } else {
+                played = padRuntime.trigger(padID: padID, velocity: velocity)
+            }
+            if !isPlaying { scheduleIdleStop() }
+        } catch {
+            if !isPlaying { scheduleIdleStop() }
+        }
+        if profiling {
+            let done = ProcessInfo.processInfo.systemUptime
+            let inputDelay = touchEventUptime.flatMap { event -> Double? in
+                let ms = (began - event) * 1_000
+                // OS event timestamps and uptime use the same monotonic origin.
+                // Drop obviously invalid/discontinuous observations.
+                return ms.isFinite && ms >= 0 && ms < 2_000 ? ms : nil
+            }
+            padLatencyProbe.record(.init(
+                touchToHandlerMS: inputDelay,
+                touchToCommandMS: inputDelay.map { $0 + (done - began) * 1_000 },
+                commandMS: max(0, done - began) * 1_000,
+                engineStartMS: engineStartMS,
+                nodeStopMS: nodeTiming.stopMS,
+                nodeScheduleMS: nodeTiming.scheduleMS,
+                nodePlayMS: nodeTiming.playMS,
+                wasCold: wasCold, succeeded: played))
+        }
+        return played
     }
 
     func stopPerformancePads() {
