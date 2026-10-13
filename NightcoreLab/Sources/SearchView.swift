@@ -148,6 +148,18 @@ struct SearchView: View {
                 .padding(14)
                 .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
 
+                if typedText != nil && omnibox.isShowingStaleCache {
+                    Text("Resultados salvos · tentando atualizar")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Resultados em cache; atualização em andamento ou indisponível")
+                } else if typedText != nil && omnibox.lastRequestFailed &&
+                            omnibox.loadState == .partial {
+                    Text("Resultados parciais · um serviço está indisponível")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 if typedText != nil && !omnibox.suggestions.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
