@@ -51,7 +51,8 @@ enum RecommendationRanker {
         return strength * exp(-days / Policy.skipDecayDays)
     }
 
-    static func score(_ candidate: RecCandidate, profile: UserTasteProfile, context: RecContext) -> Double {
+    static func score(_ candidate: RecCandidate, profile: UserTasteProfile, context: RecContext,
+                      discovery: DiscoverySnapshot = .empty) -> Double {
         let features = candidate.features
         let prior = candidate.mixIndex.map { 1 / (1 + 0.35 * Double($0)) } ?? 0
         var audioContext = 0.0
@@ -75,16 +76,19 @@ enum RecommendationRanker {
         let durationPenalty = features.duration.map {
             !Policy.durationRange.contains($0) && !features.allowsLongDuration ? Weights.duration : 0
         } ?? 0
+        let discoveryBonus = DiscoveryScoring.contribution(for: candidate, profile: profile,
+                                                            context: context, snapshot: discovery).total
         return Weights.affinity * profile.affinity(for: features)
             + Weights.history * OmniboxRanker.frecency(entry, now: context.now)
             + Weights.mixOrder * prior + Weights.context * audioContext
             + (entry == nil ? Weights.novelty : 0)
-            - Weights.skip * skip - durationPenalty
+            - Weights.skip * skip - durationPenalty + discoveryBonus
     }
 
     static func rank(_ candidates: [RecCandidate], profile: UserTasteProfile,
-                     context: RecContext) -> [RecCandidate] {
-        candidates.map { ($0, score($0, profile: profile, context: context)) }
+                     context: RecContext, discovery: DiscoverySnapshot = .empty) -> [RecCandidate] {
+        candidates.map { ($0, score($0, profile: profile, context: context,
+                                    discovery: discovery)) }
             .sorted {
                 if $0.1 != $1.1 { return $0.1 > $1.1 }
                 let lhs = $0.0.mixIndex ?? Int.max, rhs = $1.0.mixIndex ?? Int.max
@@ -134,8 +138,18 @@ enum RecommendationRanker {
         return output
     }
 
+    static func whyAppeared(_ track: Track, history: [String: HistoryEntry],
+                            context: RecContext, discovery: DiscoverySnapshot) -> String? {
+        guard !discovery.events.isEmpty || !discovery.vectors.isEmpty else { return nil }
+        return DiscoveryScoring.contribution(
+            for: RecCandidate(track: track, mixIndex: 0),
+            profile: UserTasteProfile(history: history),
+            context: context, snapshot: discovery).explanation
+    }
+
     static func recommendations(mix: [Track], history: [String: HistoryEntry],
-                                currentID: String, queued: [Track], context: RecContext) -> [Track] {
+                                currentID: String, queued: [Track], context: RecContext,
+                                discovery: DiscoverySnapshot = .empty) -> [Track] {
         // Never substitute a history-only radio when /related fails or is empty.
         guard !mix.isEmpty else { return [] }
         var excluded = Set(queued.map(\.id))
@@ -157,7 +171,8 @@ enum RecommendationRanker {
                context.now.timeIntervalSince(skipped) < Policy.skipDecayDays * 86_400 { return nil }
             return RecCandidate(track: entry.hit.asTrack, mixIndex: nil)
         }
-        let ranked = rank(freshMix + familiar, profile: profile, context: context)
+        let ranked = rank(freshMix + familiar, profile: profile, context: context,
+                          discovery: discovery)
         return diversify(ranked, familiarShare: familiarShare(eventCount: profile.eventCount),
                          precedingArtists: queued.suffix(Policy.maxArtistRun).map { TrackFeatures(track: $0).primaryArtist })
     }
