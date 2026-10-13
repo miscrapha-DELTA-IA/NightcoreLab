@@ -41,6 +41,13 @@ final class PlaybackQueue: ObservableObject {
         upNextQueue.append(contentsOf: fresh)
     }
 
+    /// A committed skip may change priority, but never enqueue or prefetch a new file.
+    func reorderAfterSkip(anchor: Track, vectors: [String: DiscoveryFeatureVector],
+                          recentlyPlayed: Set<String> = []) {
+        upNextQueue = DiscoveryQueuePolicy.afterSkip(upNextQueue, anchor: anchor,
+                        vectors: vectors, recentlyPlayed: recentlyPlayed)
+    }
+
     func shouldFetchRadio(afterAutomaticAdvance: Bool) -> Bool {
         afterAutomaticAdvance && upNextQueue.count < 2
     }
@@ -133,6 +140,12 @@ struct ContentView: View {
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
+    @State private var suggestionReasons: [String: String] = [:]
+    @State private var discoveryEvents: [DiscoveryEvent] = []
+    @State private var acousticVectors: [String: DiscoveryFeatureVector] = [:]
+    @State private var discoveryTracker = DiscoveryPlaybackTracker()
+    @State private var discoveryAnalysisTask: Task<Void, Never>?
+    private let discoveryLog = DiscoveryEventLog()
     @State private var playingTrackID: String?
     @State private var currentTrack: Track?
     @State private var resumeTrack: Track?
@@ -161,6 +174,7 @@ struct ContentView: View {
     @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.energyBudget) private var energyBudget
 
     // Troque pelo seu link (Ko-fi, GitHub Sponsors, página com QR Code do Pix…)
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
@@ -265,11 +279,14 @@ struct ContentView: View {
             startDownload(receivedLink)
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
+        .task { discoveryEvents = await discoveryLog.snapshot() }
         .onChange(of: audio.playbackCompletionCount) { _, _ in
+            finishDiscovery(reason: .completed)
             if let currentTrack { playHistory.completePlayback(trackID: currentTrack.id) }
             advanceQueue()
         }
         .onChange(of: audio.isPlaying) { _, playing in
+            discoveryTracker.playbackChanged(isPlaying: playing, speed: Double(speed))
             if playing {
                 if let currentTrack {
                     playHistory.resumePlaybackIfNeeded(currentTrack, sourceDuration: audio.duration)
@@ -282,6 +299,7 @@ struct ContentView: View {
         }
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, _ in
+            discoveryTracker.contextChanged(speed: Double(speed))
             applyPitch()
         }
         .onChange(of: keepOriginalPitch) { _, _ in applyPitch() }
@@ -459,6 +477,7 @@ struct ContentView: View {
                     downloader: downloader, theme: currentTheme,
                     isEnabled: !audio.isExporting,
                     suggestedTracks: relatedVideos,
+                    suggestionReasons: suggestionReasons,
                     isLoadingSuggestions: isLoadingRelated,
                     canRefreshSuggestions: currentTrack != nil,
                     onRefreshSuggestions: { startRadio() },
@@ -1087,6 +1106,17 @@ struct ContentView: View {
                 playingTrackID = track.id
                 currentTrack = committedTrack
                 if let currentTrack {
+                    // End the previous listening interval only after replacement starts.
+                    finishDiscovery(reason: pendingSkip != nil ? .manualSelection :
+                                    (automaticAdvance ? .completed : .nextButton))
+                    discoveryTracker.start(currentTrack.id, duration: audio.duration,
+                                           speed: Double(speed))
+                    if pendingSkip != nil {
+                        playbackQueue.reorderAfterSkip(anchor: currentTrack,
+                            vectors: acousticVectors,
+                            recentlyPlayed: Set(playHistory.entries.keys))
+                    }
+                    analyzeDiscoveryAudio(track: currentTrack, localURL: localURL)
                     playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
                                               replacing: pendingSkip)
                     downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
@@ -1200,8 +1230,15 @@ struct ContentView: View {
         }
         let ranked = RecommendationRanker.recommendations(
             mix: videos, history: playHistory.entries, currentID: playingTrackID,
-            queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now))
+            queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now),
+            discovery: discoverySnapshot)
         relatedVideos = ranked
+        let snapshot = discoverySnapshot
+        suggestionReasons = Dictionary(uniqueKeysWithValues: ranked.compactMap { track in
+            RecommendationRanker.whyAppeared(track, history: playHistory.entries,
+                context: RecContext(speed: audio.speed, now: .now),
+                discovery: snapshot).map { (track.id, $0) }
+        })
         playbackQueue.append(ranked, excluding: playingTrackID)
         prefetchUpcoming()
         if autoplayWhenRadioReady {
@@ -1234,6 +1271,8 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
+            finishDiscovery(reason: .stopped)
+            discoveryAnalysisTask?.cancel()
             playHistory.endSession()
             lyricsStore.clear()
             if let lyricsPrefetcher { Task { await lyricsPrefetcher.cancel() } }
@@ -1252,6 +1291,58 @@ struct ContentView: View {
         }
     }
 
+    private var discoverySnapshot: DiscoverySnapshot {
+        DiscoverySnapshot(events: discoveryEvents, vectors: acousticVectors,
+            currentID: playingTrackID ?? "",
+            materialID: CreativePresetCatalog.material(selection: selectedCreativePresetID).id,
+            presetID: selectedCreativePresetID)
+    }
+
+    private var discoveryAudioPreset: String? {
+        if abs(speed - 1.25) < 0.001 && abs(reverb) < 0.01 && abs(bass - 5) < 0.01 {
+            return "nightcore"
+        }
+        if abs(speed - 0.8) < 0.001 && abs(reverb - 35) < 0.01 && abs(bass) < 0.01 {
+            return "lentidao"
+        }
+        if abs(speed - 1) < 0.001 && abs(reverb) < 0.01 && abs(bass) < 0.01 {
+            return "reset"
+        }
+        return nil // Manual audio controls are not falsely labeled as a preset.
+    }
+
+    private func finishDiscovery(reason: DiscoveryEvent.SkipReason?, exported: Bool = false) {
+        let event = discoveryTracker.finish(reason: reason, selectedPreset: selectedCreativePresetID,
+            materialID: CreativePresetCatalog.material(selection: selectedCreativePresetID).id,
+            experienceID: selectedCreativePresetID, audioPreset: discoveryAudioPreset,
+            exported: exported)
+        guard let event else { return }
+        discoveryEvents.append(event)
+        if discoveryEvents.count > DiscoveryEventLog.eventLimit {
+            discoveryEvents.removeFirst(discoveryEvents.count - DiscoveryEventLog.eventLimit)
+        }
+        Task { await discoveryLog.append(event) }
+    }
+
+    private func analyzeDiscoveryAudio(track: Track, localURL: URL) {
+        discoveryAnalysisTask?.cancel()
+        guard energyBudget.allowsNewAnalysis, localURL.isFileURL else { return }
+        // One cancelable offline analysis for the confirmed local track, never per frame.
+        discoveryAnalysisTask = Task(priority: .utility) {
+            do {
+                let result = try await MusicIntelligenceEngine.shared.analysis(for: localURL)
+                guard !Task.isCancelled, playingTrackID == track.id else { return }
+                acousticVectors[track.id] = DiscoveryFeatureVector(analysis: result)
+                if acousticVectors.count > 200 {
+                    let permitted = Set(playHistory.entries.keys).union([track.id])
+                    acousticVectors = acousticVectors.filter { permitted.contains($0.key) }
+                }
+            } catch {
+                // Missing local features are nil and never block listening.
+            }
+        }
+    }
+
     private func export() {
         guard !downloader.isDownloading, !audio.isExporting else { return }
         let format = exportFormat
@@ -1263,6 +1354,7 @@ struct ContentView: View {
                 let seconds = Double(elapsed.components.seconds)
                     + Double(elapsed.components.attoseconds) / 1e18
                 TelemetryManager.shared.log(.exportCompleted(format: format, renderSeconds: seconds))
+                finishDiscovery(reason: nil, exported: true)
                 shareItem = ShareItem(url: url)
             } catch {
                 TelemetryManager.shared.log(.exportFailed(format: format))
