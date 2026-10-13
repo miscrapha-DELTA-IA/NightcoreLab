@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Contributions after clamping. Brightness/accent adjust the existing pulse
 /// glow coefficient: they do not add an independent lighting pass.
@@ -18,6 +19,14 @@ struct MaterialReactiveSignals: Equatable, Sendable {
     let brightness: Double
 }
 
+/// Logical viewport selected by CompositionLayoutPolicy; the Metal shader
+/// still receives GeometryReader pixels and is never rebuilt.
+struct MaterialViewport: Equatable, Sendable {
+    let width: Double
+    let height: Double
+    var aspectRatio: Double { width / height }
+}
+
 /// Immutable Stage 13 frame, extended rather than replaced.
 struct MaterialFrame: Equatable, Sendable {
     let materialID: String
@@ -29,6 +38,16 @@ struct MaterialFrame: Equatable, Sendable {
     let seed: UInt64
     let controls: MaterialControls
     let signals: MaterialReactiveSignals
+    /// Optional session-frozen viewport: nil preserves every Stage 13 caller.
+    var viewport: MaterialViewport? = nil
+
+    func withViewport(_ geometry: CGRect?) -> MaterialFrame {
+        guard let geometry else { return self }
+        var copy = self
+        copy.viewport = MaterialViewport(
+            width: Double(geometry.width), height: Double(geometry.height))
+        return copy
+    }
 
     /// Compatibility for still-image callers that pass an explicit pulse
     /// (pre-Stage-13 TurbulentMarbleView API): the same contract, pulse set.
@@ -41,7 +60,8 @@ struct MaterialFrame: Equatable, Sendable {
                 offbeatScale: p.offbeatScale, warpAmount: p.warpAmount,
                 brightnessBoost: p.brightnessBoost),
             intensity: intensity, audioResponse: audioResponse, timestamp: timestamp,
-            seed: seed, controls: controls, signals: signals)
+            seed: seed, controls: controls, signals: signals,
+            viewport: viewport)
     }
 
     /// The shader binding is the resolved parameter set itself.
