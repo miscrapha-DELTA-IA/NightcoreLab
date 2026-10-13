@@ -6,13 +6,18 @@ on:
   # workflows only build or run subsets.
   pull_request:
     # Stacked Stage 17A PRs also need the complete XCTest/Release/IPA gate.
-    branches: [ "main", "stage-16a-discovery-engine", "stage-17-spotifast-playback-foundation", "stage-17b-search-persistence-robustness" ]
+    branches: [ "main", "stage-16a-discovery-engine", "stage-17-spotifast-playback-foundation", "stage-17b-search-persistence-robustness", "stage-17c-ios-remote-transport" ]
   push:
     branches: [ "main" ]
     # Mudanças só no servidor Python (e no teste dele) não recompilam o app iOS
     paths-ignore:
       - 'backend/**'
       - '.github/workflows/backend-smoke.yml'
+
+# Stop obsolete jobs only for the *same* PR. Never cancel another PR's gates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

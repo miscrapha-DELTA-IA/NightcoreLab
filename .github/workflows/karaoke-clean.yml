@@ -6,10 +6,21 @@ on:
       - 'NightcoreLab/Sources/LyricsControlCenter.swift'
       - 'NightcoreLab/Sources/LyricsView.swift'
       - 'NightcoreLab/Sources/KaraokeLyricsView.swift'
+      - 'NightcoreLab/Sources/KaraokeFocusMode.swift'
+      - 'NightcoreLab/Sources/KaraokePerformanceProbe.swift'
+      - 'NightcoreLab/Sources/LyricsStore.swift'
+      - 'NightcoreLab/Sources/EnergyBudget.swift'
       - 'NightcoreLab/Sources/NowPlayingScreen.swift'
       - 'NightcoreLab/Sources/ContentView.swift'
       - 'NightcoreLabTests/KaraokeCleanModeTests.swift'
+      - 'NightcoreLabTests/KaraokeExperienceTests.swift'
+      - 'NightcoreLabTests/KaraokePerformanceProbeTests.swift'
       - '.github/workflows/karaoke-clean.yml'
+
+# Stop obsolete jobs only for the *same* PR. Never cancel another PR's gates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   karaoke:
