@@ -178,7 +178,11 @@ final class AudioEngineManager {
         defer { transportSignposter.endInterval("Audio resume", interval) }
         do {
             if !engine.isRunning { try engine.start() }
-            if needsScheduling { schedule(file, startingAt: lastKnownTime) }
+            if needsScheduling {
+                // Preserve the existing replay-from-start behavior at EOF.
+                if lastKnownTime >= duration { lastKnownTime = 0 }
+                schedule(file, startingAt: lastKnownTime)
+            }
             lyricsClock.refreshOutputLatency()
             player.play()
             isPlaying = true

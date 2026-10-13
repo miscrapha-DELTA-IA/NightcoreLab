@@ -71,6 +71,19 @@ final class PerformanceRegressionTests: XCTestCase {
     }
 
     @MainActor
+    func testSeekToEndThenPlayRestarts() async throws {
+        let audio = AudioEngineManager(idleStopDelay: .milliseconds(50))
+        try audio.load(url: source())
+        audio.seek(to: audio.duration)
+        XCTAssertEqual(audio.playbackTime, audio.duration)
+        audio.play()
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertLessThan(audio.playbackTime, 1)
+        audio.pause()
+        try await Task.sleep(for: .milliseconds(250))
+    }
+
+    @MainActor
     func testInterruptionUsesSameSafePausePath() async throws {
         let audio = AudioEngineManager(idleStopDelay: .milliseconds(50))
         try audio.load(url: source())

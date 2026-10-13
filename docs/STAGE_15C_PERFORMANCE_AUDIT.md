@@ -50,3 +50,35 @@ Audio stop/resume resets the live DSP tail after the idle grace period; sample
 position and settings must survive, but bit-identical reverb tails across a long
 pause cannot be claimed. Background suspension can delay a timer. Daily metrics
 may be absent in simulator. Device parity and energy validation remain pending.
+
+
+## Implemented scope
+
+- `EnergyBudget.swift`: scene environment, one power/thermal observer pair,
+  value policy (nominal 60, fair/LPM 30, serious 15, critical/background paused).
+  `allowsExport` is exposed for admission by future consumers; it does not
+  interrupt or alter the existing export pipeline.
+- `AudioEngineManager.swift`: configurable 10-second idle grace, cancellable
+  deadline, source position and DSP controls retained, stale callback guard,
+  transport signposts for Instruments. Replay at EOF still restarts from zero.
+- `ContentView.swift`, `KaraokeLyricsView.swift`, `TurbulentMarbleView.swift`,
+  `PlayerBackground.swift`, `NowPlayingScreen.swift`: live frame scheduling.
+- `Creative/CreativeReactiveAccent.swift`, `Creative/AudioFeatureEngine.swift`:
+  shared admission policy for automatic analysis and live reactions. Existing
+  cached export entry points and legacy response API remain unchanged.
+- `NightcoreLabApp.swift`, `LocalPerformanceMetrics.swift`: app-owned subscriber,
+  serial utility IO, allowlisted numbers, 30 records / 64 KiB, atomic protected
+  file in Application Support/LocalPerformance, excluded from backup. Missing
+  metrics remain nil. No raw payload or device metadata retained.
+- `EnergyBudgetTests.swift`, `PerformanceRegressionTests.swift`: policy matrix,
+  denied-analysis IO, actual AVAudioEngine pause/resume/seek/EOF/replacement/
+  interruption and bounded persistent numeric metric records.
+
+MetricKit uses `scrollHitchTimeRatio` (iOS 14+) for iOS 17 compatibility.
+The first CI compile revealed that general `hitchTimeRatio` requires iOS 26;
+that API was replaced, without raising the deployment target. Scroll hitch
+ratio is explicitly not a Metal FPS measurement.
+
+Existing `RuntimeStabilizationTests`, material/typography parity suites and
+`AudioQualityTests` supply the rendering/DSP regression gates; they are not
+replaced by policy-only assertions. Physical-device parity remains unverified.

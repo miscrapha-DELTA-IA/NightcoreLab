@@ -9,12 +9,13 @@ struct LocalPerformanceSample: Codable, Equatable, Sendable {
     var gpuSeconds: Double?
     var peakMemoryBytes: Double?
     var backgroundAudioSeconds: Double?
-    var animationHitchRatio: Double?
-    var animationHitchUnit: String?
+    var scrollHitchRatio: Double?
+    var scrollHitchUnit: String?
 }
 
 /// Serial utility queue owns disk IO. At most 30 compact aggregate records.
-final class LocalPerformanceMetrics: NSObject, MXMetricManagerSubscriber {
+// Stored references are immutable; all mutable file state is confined to queue.
+final class LocalPerformanceMetrics: NSObject, MXMetricManagerSubscriber, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.nightcorelab.local-metrics", qos: .utility)
     private let fileURL: URL
     private let logger = Logger(subsystem: "com.nightcorelab.app", category: "LocalMetrics")
@@ -38,8 +39,8 @@ final class LocalPerformanceMetrics: NSObject, MXMetricManagerSubscriber {
                 peakMemoryBytes: payload.memoryMetrics?.peakMemoryUsage.converted(to: .bytes).value,
                 backgroundAudioSeconds: payload.applicationTimeMetrics?
                     .cumulativeBackgroundAudioTime.converted(to: .seconds).value,
-                animationHitchRatio: payload.animationMetrics?.hitchTimeRatio.value,
-                animationHitchUnit: payload.animationMetrics?.hitchTimeRatio.unit.symbol)
+                scrollHitchRatio: payload.animationMetrics?.scrollHitchTimeRatio.value,
+                scrollHitchUnit: payload.animationMetrics?.scrollHitchTimeRatio.unit.symbol)
         }
         record(samples)
     }
