@@ -97,9 +97,18 @@ final class AudioEngineManager {
     private let bassEQ = AudioEngineManager.makeBassEQ()
     private let reverbNode = AudioEngineManager.makeReverb()
     private let limiter = AudioEngineManager.makeLimiter()
+    /// Additive pad bus joins the music AFTER song DSP, BEFORE the peak limiter.
+    /// Only the existing live AVAudioEngine produces sound.
+    private let performanceMixer = AVAudioMixerNode()
+    @ObservationIgnored private let padRuntime = PadAudioRuntime()
+
+    var performanceKit: PadKit { padRuntime.kit }
+    var performancePadsReady: Bool { padRuntime.isReady }
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
-    private var processingNodes: [AVAudioNode] { [player, upmix, varispeed, timePitch, bassEQ, reverbNode, limiter] }
+    private var processingNodes: [AVAudioNode] {
+        [player, upmix, varispeed, timePitch, bassEQ, reverbNode, performanceMixer, limiter]
+    }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
@@ -137,6 +146,15 @@ final class AudioEngineManager {
     /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
+        padRuntime.attach(to: engine)
+        // Pads can sound before a song has been selected.
+        let standaloneFormat = AVAudioFormat(
+            standardFormatWithSampleRate: PadSampleSynthesizer.sampleRate, channels: 2)!
+        engine.connect(performanceMixer, to: limiter, format: standaloneFormat)
+        engine.connect(limiter, to: engine.mainMixerNode, format: standaloneFormat)
+        padRuntime.connect(to: engine, mixer: performanceMixer)
+        engine.mainMixerNode.outputVolume = pow(10, Self.outputHeadroomDB / 20)
+        engine.prepare()
 
         Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
         bassEQ.bands[0].gain = bass
@@ -160,18 +178,48 @@ final class AudioEngineManager {
         duration = Double(file.length) / file.processingFormat.sampleRate
 
         engine.stop()
+        padRuntime.stopAll()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
+        padRuntime.nodes.forEach { engine.disconnectNodeOutput($0) }
 
         let graphFormat = AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate,
                                         channels: 2)!
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
                           varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
-                          fileFormat: file.processingFormat, graphFormat: graphFormat)
+                          fileFormat: file.processingFormat, graphFormat: graphFormat,
+                          performanceMixer: performanceMixer)
+        padRuntime.connect(to: engine, mixer: performanceMixer)
         engine.prepare()
         needsScheduling = true
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+    }
+
+    // MARK: Performance pads
+
+    /// Fast path: buffers and voice nodes were already created. Does not
+    /// read files, reconfigure DSP or inspect lyrics when tapping a pad.
+    @discardableResult
+    func triggerPad(_ padID: String, velocity: Float = 0.85) -> Bool {
+        guard !isExporting, padRuntime.isReady,
+              padRuntime.kit.samples.contains(where: { $0.id == padID }),
+              velocity.isFinite && velocity > 0 else { return false }
+        cancelIdleStop()
+        do {
+            if !engine.isRunning { try engine.start() }
+            let played = padRuntime.trigger(padID: padID, velocity: velocity)
+            if !isPlaying { scheduleIdleStop() }
+            return played
+        } catch {
+            if !isPlaying { scheduleIdleStop() }
+            return false
+        }
+    }
+
+    func stopPerformancePads() {
+        padRuntime.stopAll()
+        if !isPlaying { scheduleIdleStop() }
     }
 
     // MARK: Transporte
@@ -381,6 +429,7 @@ final class AudioEngineManager {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
         guard generation == scheduleGeneration else { return }
         player.stop()
+        padRuntime.stopAll()
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0
@@ -658,15 +707,22 @@ final class AudioEngineManager {
                                                  reverb: AVAudioUnitReverb,
                                                  limiter: AVAudioUnitEffect,
                                                  fileFormat: AVAudioFormat,
-                                                 graphFormat: AVAudioFormat) {
+                                                 graphFormat: AVAudioFormat,
+                                                 performanceMixer: AVAudioMixerNode? = nil) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
         engine.connect(player, to: upmix, format: fileFormat)
         engine.connect(upmix, to: varispeed, format: graphFormat)
         engine.connect(varispeed, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
         engine.connect(eq, to: reverb, format: graphFormat)
-        // Limiter por último: segura os picos somados de graves + cauda do reverb.
-        engine.connect(reverb, to: limiter, format: graphFormat)
+        // Pad samples join after the song-specific DSP so a 0.5x playback
+        // speed does not slow the live drums. Both inputs share the limiter.
+        if let performanceMixer {
+            engine.connect(reverb, to: performanceMixer, format: graphFormat)
+            engine.connect(performanceMixer, to: limiter, format: graphFormat)
+        } else {
+            engine.connect(reverb, to: limiter, format: graphFormat)
+        }
         engine.connect(limiter, to: engine.mainMixerNode, format: graphFormat)
         engine.mainMixerNode.outputVolume = pow(10, outputHeadroomDB / 20)
     }
