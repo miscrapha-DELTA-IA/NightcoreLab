@@ -20,11 +20,24 @@ struct NightcoreLabApp: App {
                 .environment(lyricsStore)
                 .environment(panelStore)
                 .environment(playHistory)
+                .modifier(EnergyBudgetProvider())
         }
     }
 }
 
 final class NightcoreAppDelegate: NSObject, UIApplicationDelegate {
+    private let performanceMetrics = LocalPerformanceMetrics()
+
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        performanceMetrics.start()
+        return true
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        performanceMetrics.stop()
+    }
+
     func application(_ application: UIApplication,
                      handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {

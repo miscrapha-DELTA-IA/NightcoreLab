@@ -641,14 +641,14 @@ private struct BackgroundLayer: View {
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
 
-    @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @Environment(\.energyBudget) private var energyBudget
 
     var body: some View {
         ZStack {
             switch style {
             case .marble:
                 TurbulentMarbleView(theme: theme, speed: 0.8,
-                                    maxFPS: lowPower ? 30 : 60,
+                                    maxFPS: energyBudget.maxVisualFPS,
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
                                     reactiveDistortion: reactiveDistortion,
@@ -664,9 +664,7 @@ private struct BackgroundLayer: View {
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.6), value: style)
-        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
-            lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-        }
+
     }
 }
 

@@ -120,8 +120,8 @@ struct TurbulentMarbleView: View {
     var materialFrame: MaterialFrame? = nil
 
     @State private var start = Date()
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.energyBudget) private var energyBudget
+
 
     var body: some View {
         Group {
@@ -130,10 +130,10 @@ struct TurbulentMarbleView: View {
                 marbleFrame(time: frozenTime, resolved: resolvedFrame(live: false))
             } else {
                 TimelineView(.animation(
-                    minimumInterval: 1.0 / max(maxFPS, 1.0),
-                    paused: isPaused || reduceMotion || scenePhase != .active
+                    minimumInterval: 1.0 / max(min(maxFPS, energyBudget.maxVisualFPS), 1.0),
+                    paused: isPaused || !energyBudget.allowsDecorativeMotion
                 )) { context in
-                    let elapsed = isPaused || reduceMotion ? 0 :
+                    let elapsed = isPaused || !energyBudget.allowsDecorativeMotion ? 0 :
                         context.date.timeIntervalSince(startedAt ?? start)
                     marbleFrame(time: Float(elapsed * speed), resolved: resolvedFrame(live: true))
                 }

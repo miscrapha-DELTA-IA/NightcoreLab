@@ -3,6 +3,7 @@ import AudioToolbox
 import MediaPlayer
 import Observation
 import UniformTypeIdentifiers
+import OSLog
 
 // MARK: - Tipos de apoio
 
@@ -112,7 +113,15 @@ final class AudioEngineManager {
     @ObservationIgnored private var lastKnownTime: TimeInterval = 0
     @ObservationIgnored private var scheduledStartTime: TimeInterval = 0
 
-    init() {
+    @ObservationIgnored private var idleStopTask: Task<Void, Never>?
+    @ObservationIgnored private var idleStopGeneration = 0
+    private let idleStopDelay: Duration
+    private let transportSignposter = OSSignposter(
+        subsystem: "com.nightcorelab.app", category: "AudioTransport")
+    var isAudioEngineRunning: Bool { engine.isRunning }
+
+    init(idleStopDelay: Duration = .seconds(10)) {
+        self.idleStopDelay = max(.zero, idleStopDelay)
         clearTempAudioFiles()
         configureSession()
         setupEngine()
@@ -164,9 +173,12 @@ final class AudioEngineManager {
 
     func play() {
         guard let file = audioFile else { return }
+        cancelIdleStop()
+        let interval = transportSignposter.beginInterval("Audio resume")
+        defer { transportSignposter.endInterval("Audio resume", interval) }
         do {
             if !engine.isRunning { try engine.start() }
-            if needsScheduling { schedule(file) }
+            if needsScheduling { schedule(file, startingAt: lastKnownTime) }
             lyricsClock.refreshOutputLatency()
             player.play()
             isPlaying = true
@@ -177,11 +189,39 @@ final class AudioEngineManager {
     }
 
     func pause() {
+        guard audioFile != nil else { return }
         lastKnownTime = currentTime   // captura antes de pausar, enquanto lastRenderTime é válido
         lyricsClock.didPause(at: lastKnownTime)
         player.pause()
         isPlaying = false
         setupNowPlaying()
+        scheduleIdleStop()
+    }
+
+    private func cancelIdleStop() {
+        idleStopGeneration &+= 1
+        idleStopTask?.cancel()
+        idleStopTask = nil
+    }
+
+    private func scheduleIdleStop() {
+        cancelIdleStop()
+        let generation = idleStopGeneration
+        let delay = idleStopDelay
+        idleStopTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard !Task.isCancelled, let self,
+                  generation == self.idleStopGeneration, !self.isPlaying else { return }
+            // Capture happened at pause/seek, before invalidating node time.
+            self.scheduleGeneration += 1
+            self.player.stop()
+            self.engine.stop()
+            self.needsScheduling = true
+            self.scheduledStartTime = self.lastKnownTime
+            self.lyricsClock.didPause(at: self.lastKnownTime)
+            self.idleStopTask = nil
+            self.transportSignposter.emitEvent("Audio idle stop")
+        }
     }
 
     func togglePlayback() {
@@ -336,10 +376,12 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lyricsClock.didSeek(to: 0)
         setupNowPlaying()
+        scheduleIdleStop()
         playbackCompletionCount += 1
     }
 
     private func stopPlayback() {
+        cancelIdleStop()
         scheduleGeneration += 1
         player.stop()
         needsScheduling = true
@@ -353,10 +395,11 @@ final class AudioEngineManager {
 
     /// Posição atual em segundos da música original (antes do speed).
     private var currentTime: TimeInterval {
+        guard isPlaying else { return lastKnownTime }
         guard !needsScheduling,
               let nodeTime = player.lastRenderTime,
               let playerTime = player.playerTime(forNodeTime: nodeTime) else {
-            return needsScheduling ? 0 : lastKnownTime
+            return lastKnownTime
         }
         let seconds = scheduledStartTime + Double(playerTime.sampleTime) / playerTime.sampleRate
         return min(max(seconds, 0), duration)

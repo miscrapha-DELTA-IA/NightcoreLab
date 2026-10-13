@@ -334,6 +334,7 @@ struct KaraokeLyricsView: View {
 /// Só a linha ATIVA (modo .word) contém TimelineView. As demais são estáticas,
 /// então por frame só ~5-10 palavras recalculam, não a letra inteira.
 private struct KaraokeLineView: View {
+    @Environment(\.energyBudget) private var energyBudget
     enum Status: Equatable { case past, active, upcoming }
 
     let line: TimedLyricLine
@@ -396,7 +397,8 @@ private struct KaraokeLineView: View {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
         } else if status == .active && line.precision == .word {
-            TimelineView(.animation(paused: !isPlaying)) { _ in
+            TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
+                                    paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
                 let source = clock.lyricTime                // lido direto do engine, a cada frame
                 layout(frame: resolve(sourceTime: source,
                                       features: liveUniforms?.typographyFeatures(at: source)))
