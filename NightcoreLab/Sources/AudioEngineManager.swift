@@ -211,9 +211,9 @@ final class AudioEngineManager {
     private func scheduleIdleStop() {
         cancelIdleStop()
         let generation = idleStopGeneration
-        let delay = idleStopDelay
+        let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: delay) } catch { return }
+            do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
                   generation == self.idleStopGeneration, !self.isPlaying else { return }
             // Capture happened at pause/seek, before invalidating node time.

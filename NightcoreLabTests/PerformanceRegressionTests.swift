@@ -3,6 +3,16 @@ import AVFoundation
 @testable import NightcoreLab
 
 final class PerformanceRegressionTests: XCTestCase {
+    @MainActor
+    private func waitForIdleStop(_ audio: AudioEngineManager,
+                                 file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while audio.isAudioEngineRunning && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(audio.isAudioEngineRunning, "Idle stop did not execute within timeout", file: file, line: line)
+    }
+
     private func source() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
@@ -29,7 +39,7 @@ final class PerformanceRegressionTests: XCTestCase {
         XCTAssertTrue(audio.isAudioEngineRunning)
         audio.pause()
         audio.seek(to: 3)
-        try await Task.sleep(for: .milliseconds(250))
+        try await waitForIdleStop(audio)
         XCTAssertFalse(audio.isAudioEngineRunning)
         XCTAssertFalse(audio.isPlaying)
         XCTAssertEqual(audio.playbackTime, 3, accuracy: 0.001)
@@ -44,7 +54,7 @@ final class PerformanceRegressionTests: XCTestCase {
         XCTAssertEqual(audio.bass, 3)
         XCTAssertGreaterThanOrEqual(audio.playbackTime, 3.9)
         audio.pause()
-        try await Task.sleep(for: .milliseconds(250))
+        try await waitForIdleStop(audio)
     }
 
     @MainActor
@@ -80,7 +90,7 @@ final class PerformanceRegressionTests: XCTestCase {
         XCTAssertTrue(audio.isPlaying)
         XCTAssertLessThan(audio.playbackTime, 1)
         audio.pause()
-        try await Task.sleep(for: .milliseconds(250))
+        try await waitForIdleStop(audio)
     }
 
     @MainActor
@@ -90,14 +100,14 @@ final class PerformanceRegressionTests: XCTestCase {
         audio.play()
         NotificationCenter.default.post(name: AVAudioSession.interruptionNotification,
             object: nil, userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
-        try await Task.sleep(for: .milliseconds(250))
+        try await waitForIdleStop(audio)
         XCTAssertFalse(audio.isPlaying)
         XCTAssertFalse(audio.isAudioEngineRunning)
         XCTAssertEqual(audio.playbackCompletionCount, 0)
         audio.play()
         XCTAssertTrue(audio.isPlaying)
         audio.pause()
-        try await Task.sleep(for: .milliseconds(250))
+        try await waitForIdleStop(audio)
     }
 
     func testLocalMetricsBoundedAndNumericOnly() async throws {
