@@ -25,6 +25,8 @@ struct StoryEncodingProfile: Sendable {
     let height: Int
     let fps: Int32
     let bitRate: Int
+    /// Canvas policy; the legacy 9:16 values still bypass any new framing view.
+    var cropPolicy: ExportCropPolicy = .safeAreaPreserving
     var scale: CGFloat { CGFloat(width) / StoryVideoRequest.size.width }
     func frameCount(duration: TimeInterval) -> Int {
         max(1, Int(ceil(duration * Double(fps))))
