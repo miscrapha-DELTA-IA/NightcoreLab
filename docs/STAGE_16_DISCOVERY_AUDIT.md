@@ -64,7 +64,7 @@ A política de fila é separada do score: continuidade de energia, BPM compatív
 Política adotada (com ressalvas de validação):
 
 - Manter `omnibox.playHistory` e compatibilidade de seus campos existentes.
-- `DiscoveryEventLog` actor guarda `events-v1.json` em Application Support/NightcoreLab/Discovery com gravação atômica, exclusão de backup, limite de 1.000 eventos / 1 MiB e método `clear()`. A UI ainda não expõe um botão para apagar o log: pendência de UX antes de declarar o requisito de exclusão completo.
+- `DiscoveryEventLog` actor guarda `events-v1.json` em Application Support/NightcoreLab/Discovery com gravação atômica, exclusão de backup, limite de 1.000 eventos / 1 MiB e método `clear()`. A área de exportação oferece botão explícito para apagar somente o log de Discovery; o histórico de reproduções legado permanece separado.
 - `DiscoveryEvent`: trackID, timestamp, playDuration, completionRatio, skipReason, selectedPreset, materialID, experienceID, speed, audioPreset, exported. Campos desconhecidos permanecem opcionais.
 - `playDuration` deve acumular intervalos efetivamente em reprodução com relógio monotônico; pause/resume, seek, troca de velocidade e fim de sessão são eventos, sem polling. Definir completionRatio separadamente de posição/seek e limitar a [0,1].
 - Capturar contexto criativo no momento do evento com o ID do catálogo existente, sem fingir que `CreatorPreset` v1 possui um UUID salvo. O pipeline de exportação de áudio marca `exported = true` somente após sucesso. Outros exportadores (story/SharePackage) ainda precisam integração específica, caso usados fora desta tela.
