@@ -14,6 +14,7 @@ struct SearchView: View {
     let theme: AppTheme
     let isEnabled: Bool
     let suggestedTracks: [Track]
+    var suggestionReasons: [String: String] = [:]
     let isLoadingSuggestions: Bool
     let canRefreshSuggestions: Bool
     let onRefreshSuggestions: () -> Void
@@ -242,6 +243,14 @@ struct SearchView: View {
                                                     .font(.caption2)
                                                     .foregroundStyle(status == .downloaded
                                                         ? Color.green.opacity(0.85) : theme.accent)
+                                            }
+                                            if !isSearchMode,
+                                               let reason = suggestionReasons[track.id] {
+                                                Text("Por que apareceu: " + reason)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(3)
+                                                    .accessibilityLabel("Por que apareceu: " + reason)
                                             }
                                         }
                                         .frame(width: 152)
