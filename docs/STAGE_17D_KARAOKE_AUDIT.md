@@ -80,3 +80,11 @@ return-to-live, preserving existing user control. No timers or delay offsets.
 
 Physical before/after FPS, CPU/GPU and user-perceived stutter remain
 **unmeasured**; do not claim release acceptance from pure XCTest alone.
+
+## Instrumentation correction
+
+A paused/background interval must not be counted as an animation hitch.
+`timelineSuspended()` resets only the tick-to-tick interval baseline on
+pause, inactive/critical visual suspension, track replacement and view exit.
+Counters are retained until an explicit `reset()`. Device capture remains
+required; the long-frame metric observes SwiftUI tick gaps, not GPU hitch time.

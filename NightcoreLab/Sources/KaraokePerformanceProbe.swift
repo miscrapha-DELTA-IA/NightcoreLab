@@ -69,6 +69,15 @@ final class KaraokePerformanceProbe: @unchecked Sendable {
         lastTick = now
     }
 
+    /// Paused/background time is not a dropped frame. Reset only the interval
+    /// anchor, retaining the aggregate from the active portion of the session.
+    func timelineSuspended() {
+        guard enabled else { return }
+        lock.lock()
+        lastTick = nil
+        lock.unlock()
+    }
+
     func typographyResolved(in duration: TimeInterval) {
         guard enabled, duration.isFinite, duration >= 0 else { return }
         lock.lock()

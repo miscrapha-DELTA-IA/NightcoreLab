@@ -312,6 +312,7 @@ struct KaraokeLyricsView: View {
                     scrollTo(new, proxy: proxy, reason: .automatic)
                 }
                 .onChange(of: store.trackID) { _, _ in
+                    KaraokePerformanceProbe.shared.timelineSuspended()
                     followsPlayback = true
                     lastRequestedLineID = nil
                     animateLineTransition = false
@@ -326,7 +327,16 @@ struct KaraokeLyricsView: View {
             }
         }
         .onAppear { store.startTracking() }
-        .onDisappear { store.stopTracking() }
+        .onChange(of: store.isPlaying) { _, playing in
+            if !playing { KaraokePerformanceProbe.shared.timelineSuspended() }
+        }
+        .onChange(of: energyBudget.allowsVisualUpdates) { _, allowed in
+            if !allowed { KaraokePerformanceProbe.shared.timelineSuspended() }
+        }
+        .onDisappear {
+            KaraokePerformanceProbe.shared.timelineSuspended()
+            store.stopTracking()
+        }
     }
 
     private func scrollTo(_ id: Int, proxy: ScrollViewProxy,

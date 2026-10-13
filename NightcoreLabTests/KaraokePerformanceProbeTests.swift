@@ -31,6 +31,16 @@ final class KaraokePerformanceProbeTests: XCTestCase {
         XCTAssertEqual(result.requestedAnimationSeconds, 1.2, accuracy: 0.0001)
     }
 
+    func testPausedOrBackgroundIntervalIsNotMisreportedAsStutter() {
+        let probe = KaraokePerformanceProbe(enabled: true)
+        probe.timelineTick(expectedInterval: 1.0 / 60, at: 10)
+        probe.timelineTick(expectedInterval: 1.0 / 60, at: 10.017)
+        probe.timelineSuspended()
+        probe.timelineTick(expectedInterval: 1.0 / 60, at: 51.0)
+        XCTAssertEqual(probe.snapshot().longFrameGaps, 0)
+        XCTAssertEqual(probe.snapshot().maxFrameIntervalMS, 17, accuracy: 0.0001)
+    }
+
     func testTimelineIntervalsAndTypographicResolutionAreAggregated() {
         let probe = KaraokePerformanceProbe(enabled: true)
         probe.timelineTick(expectedInterval: 1.0 / 60, at: 5)
