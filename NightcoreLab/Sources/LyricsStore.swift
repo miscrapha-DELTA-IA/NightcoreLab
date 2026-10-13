@@ -129,7 +129,10 @@ final class LyricsStore {
 
         let t = clock.lyricTime + userOffset
         let idx = lines.activeIndex(at: t)
-        if idx != activeLineIndex { activeLineIndex = idx }
+        if idx != activeLineIndex {
+            KaraokePerformanceProbe.shared.activeLineChanged()
+            activeLineIndex = idx
+        }
     }
 }
 

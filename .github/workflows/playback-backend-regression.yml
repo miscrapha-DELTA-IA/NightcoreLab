@@ -2,13 +2,18 @@ name: Playback Foundation Backend Regression
 
 on:
   pull_request:
-    branches: [main, stage-16a-discovery-engine, stage-17-spotifast-playback-foundation, stage-17b-search-persistence-robustness]
+    branches: [main, stage-16a-discovery-engine, stage-17-spotifast-playback-foundation, stage-17b-search-persistence-robustness, stage-17c-ios-remote-transport]
     paths:
       - 'NightcoreLab/Sources/**'
       - 'NightcoreLabTests/**'
       - 'backend/**'
       - '.github/workflows/playback-backend-regression.yml'
   workflow_dispatch:
+
+# Stop obsolete jobs only for the *same* PR. Never cancel another PR's gates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   python-offline-tests:

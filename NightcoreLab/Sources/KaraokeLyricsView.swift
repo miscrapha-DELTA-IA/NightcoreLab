@@ -180,7 +180,10 @@ struct KaraokeLyricsView: View {
     /// Present inside NowPlayingScreen; elsewhere the karaoke gets no features.
     @Environment(CreativeLiveUniforms.self) private var liveUniforms: CreativeLiveUniforms?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.energyBudget) private var energyBudget
     @State private var followsPlayback = true
+    @State private var lastRequestedLineID: Int?
+    @State private var animateLineTransition = false
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
@@ -231,7 +234,8 @@ struct KaraokeLyricsView: View {
                                 fontSize: KaraokeLayoutMetrics.fontSize(for: viewport.size.width),
                                 typographyPreset: preset,
                                 typographyMapping: mapping,
-                                liveUniforms: liveUniforms
+                                liveUniforms: liveUniforms,
+                                allowStatusAnimation: animateLineTransition
                             )
                             .frame(maxWidth: .infinity)
                             .opacity(emphasis.opacity)
@@ -249,14 +253,16 @@ struct KaraokeLyricsView: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 followsPlayback = true
+                                animateLineTransition = false
                                 store.seekHandler?(line.start)
-                                scrollTo(line.id, proxy: proxy, animated: true)
+                                scrollTo(line.id, proxy: proxy, reason: .seek)
                             }
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(line.text)
                             .accessibilityAddTraits(.isButton)
                             .accessibilityHint("Toque para reproduzir a partir desta linha")
-                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.30),
+                            .animation(reduceMotion || !energyBudget.allowsDecorativeMotion ||
+                                       !animateLineTransition ? nil : .easeOut(duration: 0.12),
                                        value: store.activeLineIndex)
                         }
                     }
@@ -272,14 +278,20 @@ struct KaraokeLyricsView: View {
                 )
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 14)
-                        .onChanged { _ in followsPlayback = false }
+                        .onChanged { _ in
+                            if followsPlayback {
+                                followsPlayback = false
+                                lastRequestedLineID = nil
+                                animateLineTransition = false
+                            }
+                        }
                 )
                 .overlay(alignment: .bottomTrailing) {
                     if !followsPlayback, store.activeLineIndex != nil {
                         Button {
                             followsPlayback = true
                             if let active = store.activeLineIndex {
-                                scrollTo(active, proxy: proxy, animated: true)
+                                scrollTo(active, proxy: proxy, reason: .returnToLive)
                             }
                         } label: {
                             Label("Voltar à letra ao vivo", systemImage: "scope")
@@ -297,29 +309,59 @@ struct KaraokeLyricsView: View {
                 }
                 .onChange(of: store.activeLineIndex) { _, new in
                     guard followsPlayback, let new else { return }
-                    scrollTo(new, proxy: proxy, animated: true)
+                    scrollTo(new, proxy: proxy, reason: .automatic)
                 }
-                .onChange(of: store.trackID) { _, _ in followsPlayback = true }
+                .onChange(of: store.trackID) { _, _ in
+                    KaraokePerformanceProbe.shared.timelineSuspended()
+                    followsPlayback = true
+                    lastRequestedLineID = nil
+                    animateLineTransition = false
+                }
                 .task(id: store.trackID) {
                     // Reopen at the current line, even if the active index
                     // was already known before this view was mounted.
                     await Task.yield()
                     guard !Task.isCancelled, let active = store.activeLineIndex else { return }
-                    scrollTo(active, proxy: proxy, animated: false)
+                    scrollTo(active, proxy: proxy, reason: .restoration)
                 }
             }
         }
         .onAppear { store.startTracking() }
-        .onDisappear { store.stopTracking() }
+        .onChange(of: store.isPlaying) { _, playing in
+            if !playing { KaraokePerformanceProbe.shared.timelineSuspended() }
+        }
+        .onChange(of: energyBudget.allowsVisualUpdates) { _, allowed in
+            if !allowed { KaraokePerformanceProbe.shared.timelineSuspended() }
+        }
+        .onDisappear {
+            KaraokePerformanceProbe.shared.timelineSuspended()
+            store.stopTracking()
+        }
     }
 
-    private func scrollTo(_ id: Int, proxy: ScrollViewProxy, animated: Bool) {
-        if animated && !reduceMotion {
-            withAnimation(.smooth(duration: 0.40)) {
+    private func scrollTo(_ id: Int, proxy: ScrollViewProxy,
+                          reason: KaraokeScrollReason) {
+        guard let decision = KaraokeScrollPolicy.decision(
+            lines: store.lines, targetID: id, lastRequestedID: lastRequestedLineID,
+            reason: reason, reduceMotion: reduceMotion,
+            allowsDecorativeMotion: energyBudget.allowsDecorativeMotion) else { return }
+        lastRequestedLineID = id
+        animateLineTransition = reason == .automatic && decision.animated
+        KaraokePerformanceProbe.shared.scrollRequested(
+            animatedDuration: decision.duration,
+            automatic: reason == .automatic)
+        if decision.animated {
+            withAnimation(.smooth(duration: decision.duration)) {
                 proxy.scrollTo(id, anchor: .center)
             }
         } else {
-            proxy.scrollTo(id, anchor: .center)
+            // Seeking, rapid lyrics, Reduce Motion and large jumps should
+            // reach the current line immediately, not queue animations.
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(id, anchor: .center)
+            }
         }
     }
 
@@ -351,6 +393,7 @@ private struct KaraokeLineView: View {
     let typographyPreset: TypographyPreset
     let typographyMapping: CreativeAudioMapping
     let liveUniforms: CreativeLiveUniforms?
+    let allowStatusAnimation: Bool
     private let preparedTypography: TypographyPreparedLine
     private var typographyStyle: TypographyStyle { typographyPreset.style }
 
@@ -368,7 +411,7 @@ private struct KaraokeLineView: View {
          offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
          accent: Color?, maxWordWidth: CGFloat, fontSize: CGFloat,
          typographyPreset: TypographyPreset, typographyMapping: CreativeAudioMapping,
-         liveUniforms: CreativeLiveUniforms?) {
+         liveUniforms: CreativeLiveUniforms?, allowStatusAnimation: Bool) {
         self.line = line
         self.status = status
         self.isPlaying = isPlaying
@@ -381,16 +424,25 @@ private struct KaraokeLineView: View {
         self.typographyPreset = typographyPreset
         self.typographyMapping = typographyMapping
         self.liveUniforms = liveUniforms
+        self.allowStatusAnimation = allowStatusAnimation
         preparedTypography = TypographyPreparedLine(line)
+        KaraokePerformanceProbe.shared.preparedLineConstructed()
     }
 
     /// The Story's single entry point (TypographyLayer.resolve), with this
     /// line's status. Features are sampled at the SOURCE time, as in a Story.
     private func resolve(sourceTime: TimeInterval, features: AudioFeatures?) -> TypographyFrame {
-        TypographyLayer(state: lyricState, preset: typographyPreset,
-                        lyricOffset: offset, prepared: preparedTypography,
-                        experienceMapping: typographyMapping)
+        // Profiling is opt-in. No per-frame logging, I/O or observable state.
+        let probe = KaraokePerformanceProbe.shared
+        let start = probe.enabled ? ProcessInfo.processInfo.systemUptime : 0
+        let frame = TypographyLayer(state: lyricState, preset: typographyPreset,
+                                    lyricOffset: offset, prepared: preparedTypography,
+                                    experienceMapping: typographyMapping)
             .resolve(at: sourceTime + offset, features: features)
+        if probe.enabled {
+            probe.typographyResolved(in: ProcessInfo.processInfo.systemUptime - start)
+        }
+        return frame
     }
 
     var body: some View {
@@ -399,6 +451,8 @@ private struct KaraokeLineView: View {
         } else if status == .active && line.precision == .word {
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
+                let _ = KaraokePerformanceProbe.shared.timelineTick(
+                    expectedInterval: energyBudget.visualInterval)
                 let source = clock.lyricTime                // lido direto do engine, a cada frame
                 layout(frame: resolve(sourceTime: source,
                                       features: liveUniforms?.typographyFeatures(at: source)))
@@ -406,7 +460,8 @@ private struct KaraokeLineView: View {
         } else {
             layout(frame: resolve(sourceTime: -offset, features: nil))
             .scaleEffect(status == .upcoming ? 0.96 : 1.0)
-            .animation(.smooth(duration: 0.3), value: status)
+            .animation(allowStatusAnimation && energyBudget.allowsDecorativeMotion
+                       ? .easeOut(duration: 0.12) : nil, value: status)
         }
     }
 

@@ -8,6 +8,11 @@ on:
       - 'backend/**'
   workflow_dispatch:
 
+# Stop obsolete jobs only for the *same* PR. Never cancel another PR's gates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: macos-15
