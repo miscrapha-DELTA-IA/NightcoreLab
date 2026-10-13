@@ -146,6 +146,8 @@ struct ContentView: View {
     @State private var discoveryTracker = DiscoveryPlaybackTracker()
     @State private var discoveryAnalysisTask: Task<Void, Never>?
     @State private var discoveryLog = DiscoveryEventLog()
+    /// Serialize event persistence and local deletion despite asynchronous Tasks.
+    @State private var discoveryPersistenceTask: Task<Void, Never>?
     @State private var playingTrackID: String?
     @State private var currentTrack: Track?
     @State private var resumeTrack: Track?
@@ -301,6 +303,12 @@ struct ContentView: View {
         .onChange(of: speed) { _, _ in
             discoveryTracker.contextChanged(speed: Double(speed))
             applyPitch()
+        }
+        .onChange(of: energyBudget.allowsNewAnalysis) { _, isAllowed in
+            if !isAllowed {
+                discoveryAnalysisTask?.cancel()
+                discoveryAnalysisTask = nil
+            }
         }
         .onChange(of: keepOriginalPitch) { _, _ in applyPitch() }
         .onChange(of: reverb) { _, value in audio.setReverb(value) }
@@ -1018,7 +1026,12 @@ struct ContentView: View {
                 discoveryEvents.removeAll()
                 acousticVectors.removeAll()
                 suggestionReasons.removeAll()
-                Task { await discoveryLog.clear() }
+                let previous = discoveryPersistenceTask
+                let log = discoveryLog
+                discoveryPersistenceTask = Task {
+                    await previous?.value
+                    await log.clear()
+                }
             }
             .font(DS.Typography.caption)
             .foregroundStyle(DS.Ink.secondary)
@@ -1336,7 +1349,12 @@ struct ContentView: View {
         if discoveryEvents.count > DiscoveryEventLog.eventLimit {
             discoveryEvents.removeFirst(discoveryEvents.count - DiscoveryEventLog.eventLimit)
         }
-        Task { await discoveryLog.append(event) }
+        let previous = discoveryPersistenceTask
+        let log = discoveryLog
+        discoveryPersistenceTask = Task {
+            await previous?.value
+            await log.append(event)
+        }
     }
 
     private func analyzeDiscoveryAudio(track: Track, localURL: URL) {
