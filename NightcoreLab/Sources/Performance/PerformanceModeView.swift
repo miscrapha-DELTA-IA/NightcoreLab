@@ -6,14 +6,20 @@ import UIKit
 private struct PadTouchSurface: UIViewRepresentable {
     let name: String
     let onDown: () -> Void
+    let onUp: () -> Void
 
     final class Coordinator: NSObject {
         var onDown: () -> Void
-        init(_ onDown: @escaping () -> Void) { self.onDown = onDown }
+        var onUp: () -> Void
+        init(_ onDown: @escaping () -> Void, _ onUp: @escaping () -> Void) {
+            self.onDown = onDown
+            self.onUp = onUp
+        }
         @objc func down() { onDown() }
+        @objc func up() { onUp() }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onDown) }
+    func makeCoordinator() -> Coordinator { Coordinator(onDown, onUp) }
 
     func makeUIView(context: Context) -> UIControl {
         let control = UIControl()
@@ -24,11 +30,14 @@ private struct PadTouchSurface: UIViewRepresentable {
         control.accessibilityLabel = "Tocar \(name)"
         control.addTarget(context.coordinator,
                           action: #selector(Coordinator.down), for: .touchDown)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.up),
+                          for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
         return control
     }
 
     func updateUIView(_ uiView: UIControl, context: Context) {
         context.coordinator.onDown = onDown
+        context.coordinator.onUp = onUp
         uiView.accessibilityLabel = "Tocar \(name)"
     }
 }
@@ -43,7 +52,7 @@ struct PerformanceModeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var recorder = PerformanceRecorder()
     @State private var haptics = false
-    @State private var lastHitID: String?
+    @State private var heldPads: Set<String> = []
     @State private var isRenderingAudio = false
     @State private var exportedAudio: URL?
     @State private var renderError: String?
@@ -199,13 +208,14 @@ struct PerformanceModeView: View {
         }
         .onDisappear {
             exportTask?.cancel()
+            heldPads.removeAll()
             recorder.stop()
             audio.stopPerformancePads()
         }
     }
 
     private func pad(_ sample: SampleDescriptor) -> some View {
-        let active = lastHitID == sample.id
+        let active = heldPads.contains(sample.id)
         return ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(active ? accent.opacity(0.22) : .white.opacity(0.06))
@@ -230,7 +240,12 @@ struct PerformanceModeView: View {
         }
         .frame(height: 102)
         .overlay {
-            PadTouchSurface(name: sample.name) { strike(sample) }
+            PadTouchSurface(name: sample.name, onDown: {
+                heldPads.insert(sample.id)
+                strike(sample)
+            }, onUp: {
+                heldPads.remove(sample.id)
+            })
         }
         .accessibilityIdentifier("performance.pad.\(sample.id)")
     }
@@ -240,7 +255,6 @@ struct PerformanceModeView: View {
         guard audio.triggerPad(sample.id, velocity: velocity) else { return }
         recorder.append(sample, velocity: velocity,
                         sourceTime: audio.isPlaying ? audio.playbackTime : nil)
-        lastHitID = sample.id
         exportedAudio = nil
         if haptics {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
