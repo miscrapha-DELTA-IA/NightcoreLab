@@ -31,7 +31,7 @@ final class DiscoveryEngineTests: XCTestCase {
         XCTAssertNil(known.similarity(to: unknown))
     }
 
-    func testBPMOctaveInvarianceAndDeterminism() {
+    func testBPMOctaveInvarianceAndDeterminism() throws {
         let a = DiscoveryFeatureVector(bpm: 87, energy: 0.4, rhythmDensity: 0.5)
         let b = DiscoveryFeatureVector(bpm: 174, energy: 0.4, rhythmDensity: 0.5)
         let different = DiscoveryFeatureVector(bpm: 120, energy: 0.9, rhythmDensity: 0.1)
