@@ -17,7 +17,7 @@ jobs:
   build:
     # "[skip ios]" na mensagem do commit pula o build e economiza minutos de macOS.
     if: ${{ !contains(github.event.head_commit.message, '[skip ios]') }}
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
