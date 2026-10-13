@@ -59,7 +59,7 @@ actor AudioFeatureEngine {
     /// without creating/reconfiguring an AVAudioEngine or changing sound.
     /// Expensive file decoding and envelope processing run at utility QoS.
     /// Caller cancellation and track replacement detach only this consumer.
-    func prepareAudio(at url: URL) async throws {
+    func prepareAudio(at url: URL, budget: EnergyBudget = .systemSnapshot()) async throws {
         analysisTask?.cancel()
         generation &+= 1
         let request = generation
@@ -71,7 +71,7 @@ actor AudioFeatureEngine {
         lastVisualSampleTime = nil
 
         // No automatic analysis during system Low Power Mode.
-        guard !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
+        guard budget.allowsNewAnalysis else { return }
         let work = Task { [intelligence] in
             try await intelligence.analysis(for: url)
         }

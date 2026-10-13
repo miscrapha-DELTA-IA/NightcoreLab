@@ -1333,16 +1333,16 @@ private struct VinylPlaybackArtwork: View {
     let isPlaying: Bool
     let theme: AppTheme
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.energyBudget) private var energyBudget
     @State private var spinDegrees: Double = 0
     @State private var spinStartedAt: Date?
 
     private var shouldSpin: Bool {
-        isPlaying && coverURL != nil && !reduceMotion
+        isPlaying && coverURL != nil && energyBudget.allowsDecorativeMotion
     }
 
     var body: some View {
-        TimelineView(.animation(paused: !shouldSpin)) { context in
+        TimelineView(.animation(minimumInterval: energyBudget.visualInterval, paused: !shouldSpin)) { context in
             AsyncImage(url: coverURL) { phase in
                 ZStack {
                     if let image = phase.image {

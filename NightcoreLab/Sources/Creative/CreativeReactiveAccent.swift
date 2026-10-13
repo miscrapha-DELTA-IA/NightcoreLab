@@ -27,19 +27,17 @@ struct CreativeReactiveAccent: View {
     @AppStorage(CreativePresetCatalog.storageKey)
     private var selectedProgramID = CreativePresetCatalog.defaultID
 
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @Environment(\.energyBudget) private var energyBudget
     @State private var parameters = CreativeParameterFrame.neutral
     @State private var activeRunID = UUID()
 
     private var taskIdentity: String {
-        "\(sourceURL?.path ?? "none")|\(reaction.rawValue)|\(selectedProgramID)|\(theme.rawValue)|\(backgroundStyle.rawValue)|\(typography.rawValue)|\(scenePhase == .active)|\(lowPower)|\(reduceMotion)"
+        "\(sourceURL?.path ?? "none")|\(reaction.rawValue)|\(selectedProgramID)|\(theme.rawValue)|\(backgroundStyle.rawValue)|\(typography.rawValue)|\(energyBudget.allowsNewAnalysis)|\(energyBudget.allowsDecorativeMotion)"
     }
 
     private var canReact: Bool {
         sourceURL != nil && reaction != .off &&
-        scenePhase == .active && !lowPower && !reduceMotion
+        energyBudget.allowsNewAnalysis && energyBudget.allowsDecorativeMotion
     }
 
     var body: some View {
@@ -49,10 +47,6 @@ struct CreativeReactiveAccent: View {
                 lineWidth: 2)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .onReceive(NotificationCenter.default.publisher(
-                for: .NSProcessInfoPowerStateDidChange)) { _ in
-                lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-            }
             .task(id: taskIdentity) {
                 await renderVisibleReactions()
             }
@@ -77,7 +71,7 @@ struct CreativeReactiveAccent: View {
         guard canReact, let sourceURL else { return }
 
         do {
-            try await featureEngine.prepareAudio(at: sourceURL)
+            try await featureEngine.prepareAudio(at: sourceURL, budget: energyBudget)
         } catch {
             // An unavailable file, cancelled analysis or decode failure
             // leaves the original player appearance untouched.

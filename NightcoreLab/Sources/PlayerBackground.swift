@@ -132,8 +132,7 @@ private struct MarqueeCover: View {
     let url: URL
 
     @State private var isAnimating = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.energyBudget) private var energyBudget
 
     var body: some View {
         GeometryReader { geometry in
@@ -145,12 +144,17 @@ private struct MarqueeCover: View {
             .offset(x: isAnimating ? -geometry.size.width : 0)
         }
         .clipped()
-        .onAppear(perform: startLoop)
-        // Animações repeatForever podem parar depois que o app volta do segundo plano.
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { startLoop() }
+        .task(id: energyBudget.allowsDecorativeMotion) {
+            var reset = Transaction()
+            reset.disablesAnimations = true
+            withTransaction(reset) { isAnimating = false }
+            guard energyBudget.allowsDecorativeMotion else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            withAnimation(.linear(duration: 15).repeatForever(autoreverses: false)) {
+                isAnimating = true
+            }
         }
-        .onChange(of: reduceMotion) { _, _ in startLoop() }
     }
 
     private func tile(in size: CGSize) -> some View {
@@ -162,18 +166,4 @@ private struct MarqueeCover: View {
             .clipped()
     }
 
-    /// Zera o offset sem animar e, no ciclo seguinte, liga o loop linear de 15 s.
-    /// Com "Reduzir Movimento" ligado, a capa fica parada.
-    private func startLoop() {
-        var reset = Transaction()
-        reset.disablesAnimations = true
-        withTransaction(reset) { isAnimating = false }
-
-        guard !reduceMotion else { return }
-        DispatchQueue.main.async {
-            withAnimation(.linear(duration: 15).repeatForever(autoreverses: false)) {
-                isAnimating = true
-            }
-        }
-    }
 }
