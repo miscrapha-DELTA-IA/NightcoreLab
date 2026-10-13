@@ -19,10 +19,6 @@ struct MaterialFrame: Equatable, Sendable {
     let audioResponse: MaterialAudioResponse
     let timestamp: TimeInterval
 
-    var marbleUniforms: MarbleUniforms {
-        MarbleUniforms(distortion: parameters.distortion,
-                       beatPulse: parameters.beatPulse,
-                       warpAmount: parameters.warpAmount,
-                       brightnessBoost: parameters.brightnessBoost)
-    }
+    /// The shader binding is the resolved parameter set itself.
+    var marbleUniforms: MarbleUniforms { parameters }
 }

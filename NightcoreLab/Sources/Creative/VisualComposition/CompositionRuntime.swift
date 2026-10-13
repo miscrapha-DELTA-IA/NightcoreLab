@@ -24,14 +24,15 @@ enum CompositionAudioSampler {
 /// (StoryVideoRequest does) instead of constructing one per frame.
 struct CompositionRuntime: Sendable {
     let composition: VisualComposition
+    /// Frozen with the composition. Callers pass the result of the single
+    /// material rule; nil applies that same rule to the composition's program.
     let material: VisualMaterial
-    private let hasAuthoredMaterial: Bool
     private let compiled: CompiledComposition
 
     init(composition: VisualComposition, material: VisualMaterial? = nil) {
         self.composition = composition
-        self.material = material ?? .marble(for: composition.program)
-        self.hasAuthoredMaterial = material != nil
+        self.material = material ??
+            CreativeExperienceResolver.material(experience: nil, recipe: composition.program)
         self.compiled = CompiledComposition(composition)
     }
 
@@ -44,11 +45,9 @@ struct CompositionRuntime: Sendable {
                                                           elapsed: elapsed, features: features) else {
             return nil
         }
-        // Legacy materials already embed reaction gain in beatPulse. Authored
-        // materials receive the same off/subtle gate as the existing program.
-        let reaction = composition.program.preset.audioReaction
-        let gain: Double = reaction == .off ? 0 :
-            (hasAuthoredMaterial && reaction == .subtle ? 0.35 : 1)
+        // Materials are reaction-free; the frozen program's reaction setting
+        // is applied once, through the single profile.
+        let gain = CreativeReactionProfile.gain(composition.program.preset.audioReaction)
         return base.withMaterial(MaterialResolver.resolve(
             material, features: features, rhythm: rhythm,
             timestamp: base.timestamp.sourceTime,
@@ -99,7 +98,7 @@ struct CompositionRuntime: Sendable {
         guard preset.composition == composition else { return nil }
         return CreativeExperienceResolver.resolve(
             preset, elapsed: elapsed, features: features,
-            typography: typography)
+            typography: typography, runtime: self)
     }
 
     /// Freeze a program once at StoryRequestBuilder time so preview and export

@@ -50,26 +50,125 @@ final class VisualMaterialEngineTests: XCTestCase {
         }
     }
 
-    func testMarbleMatchesIndependentLegacyUniformsExactly() {
+    /// Recipes keep the Stage 12.5 look: distortion is bit-exact (program
+    /// route) and the pulse equals the old formula, where the reaction gain was
+    /// baked into the material, now applied once by CreativeReactionProfile.
+    func testMarbleMatchesIndependentStage12UniformsThroughTheProfile() {
         for recipe in CreativePresetCatalog.all {
             for reaction in [CreativePreset.AudioReaction.off, .subtle, .responsive] {
                 let program = program(recipe.id, reaction)
-                let material = VisualMaterial.marble(for: program)
+                let material = CreativeExperienceResolver.material(experience: nil, recipe: program)
+                let oldReaction: Double = reaction == .off ? 0 : (reaction == .subtle ? 0.35 : 1)
+                let oldMaterial = VisualMaterial(
+                    beatPulse: 0.8 * oldReaction * program.preset.visualStyle.intensity)
                 for time in [0.0, 0.13, 2.5, 9.25, 19.9] {
                     let old = CreativeMarbleFrameResolver.resolve(
                         program: program, timeline: timeline(), sourceTime: time)
                     for phase in [0.0, 0.1, 0.5, 0.99] {
                         for beat in 0..<4 {
                             let rhythm = rhythm(phase: phase, barBeat: beat)
-                            let expected = MarbleUniforms(
-                                distortion: old.marbleDistortion,
-                                beatPulse: legacyPulse(material, rhythm))
                             let actual = MaterialResolver.resolve(
                                 material, features: features, rhythm: rhythm,
-                                timestamp: time, parameters: old)
-                            XCTAssertEqual(actual.marbleUniforms, expected)
+                                timestamp: time, parameters: old,
+                                reactionGain: CreativeReactionProfile.gain(reaction))
+                            XCTAssertEqual(actual.parameters.distortion, old.marbleDistortion)
+                            XCTAssertEqual(actual.parameters.beatPulse,
+                                           legacyPulse(oldMaterial, rhythm), accuracy: 1e-12)
+                            XCTAssertEqual(actual.parameters.warpAmount, VisualMaterial.defaultWarpAmount)
+                            XCTAssertEqual(actual.parameters.brightnessBoost,
+                                           VisualMaterial.defaultBrightnessBoost)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// One audio route per frame: an experience with an authored material
+    /// mapping never ALSO receives the program's distortion equations.
+    func testProgramAndMaterialMappingsAreNeverSummed() throws {
+        let bass = AudioFeatures(bass: 0.9, mid: 0.3, treble: 0.1, energy: 0.8, beatDetected: false)
+        let loud = AudioFeatureTimeline(points: [.init(time: 0, features: bass),
+                                                 .init(time: 20, features: bass)], duration: 20)
+        let track = TrackInfo(track: Track(id: "12345678901", title: "Route",
+                                          thumbnailURL: nil, cleanArtist: "Test"),
+                              fileName: nil, coverURL: nil)
+        func story(_ id: String) throws -> StoryVideoRequest {
+            try StoryRequestBuilder.make(
+                mode: .player, track: track, theme: .acid, playerStyle: .turbulent,
+                karaokeBackground: .marble, marblePhase: 1, playbackTime: 2,
+                sourceDuration: 20, speed: 1, lines: [], lyricOffset: 0,
+                typography: .classic, includeAudio: false,
+                reactiveProgram: program(id), creativePresetID: id)
+        }
+        // Neon Pulse = Bass Pulse program (bass → distortion rule) + Neon material mapping.
+        let experience = try story("neon-pulse")
+        let frame = StoryRenderTimeline(request: experience, profile: .balanced).frame(index: 10)
+        let scene = StorySceneView(request: experience, artwork: nil, frame: frame,
+                                   visualTimeline: loud)
+        let composed = try XCTUnwrap(scene.resolvedCompositionFrame)
+        let material = try XCTUnwrap(experience.compositionRuntime).material
+        XCTAssertGreaterThan(composed.programParameters.marbleDistortion, 0,
+                             "The program alone would distort")
+        XCTAssertEqual(CreativeReactionProfile.materialRoute(for: material), .material)
+        let mappingOnly = min(1, max(0, 0.9 * material.audioMapping.bassToDistortion * material.intensity))
+        XCTAssertEqual(scene.materialFrame.parameters.distortion,
+                       material.parameters.distortion + mappingOnly, accuracy: 1e-12)
+        // The recipe itself keeps its program route, without a material mapping.
+        let recipe = try story("bass-pulse")
+        let recipeScene = StorySceneView(request: recipe, artwork: nil, frame: frame,
+                                         visualTimeline: loud)
+        let recipeComposed = try XCTUnwrap(recipeScene.resolvedCompositionFrame)
+        XCTAssertEqual(recipeScene.materialFrame.parameters.distortion,
+                       recipeComposed.programParameters.marbleDistortion)
+        XCTAssertEqual(recipeScene.materialFrame.audioResponse.distortion, 0)
+    }
+
+    private final class FixedClock: PlaybackClock, @unchecked Sendable {
+        var isPlaying = true
+        var lyricTime: TimeInterval = 0
+    }
+
+    /// The live player and the Story take the material from the same rule and
+    /// the gain from the same profile, so the same source time gives the same
+    /// MaterialFrame.
+    func testLiveDriverAndStoryShareMaterialRuleAndReactionGain() throws {
+        let beats = (0..<40).map { index in
+            RhythmAnalysisResult.BeatEvent(time: Double(index) * 0.5,
+                index: index, strength: 1, isDownbeat: index % 4 == 0)
+        }
+        let analysis = RhythmAnalysisResult(onsetEvents: beats.map { $0.time },
+            bpmCandidates: [.init(bpm: 120, confidence: 0.9)], beatGrid: beats,
+            confidence: 0.9, downbeatConfidence: 0.8)
+        let track = TrackInfo(track: Track(id: "12345678901", title: "Live",
+                                          thumbnailURL: nil, cleanArtist: "Test"),
+                              fileName: nil, coverURL: nil)
+        for id in ["original", "bass-pulse", "cyber-night", "liquid-dream", "neon-pulse"] {
+            for reaction in [CreativePreset.AudioReaction.subtle, .responsive] {
+                let effective = program(id, reaction)
+                let request = try StoryRequestBuilder.make(
+                    mode: .player, track: track, theme: .acid, playerStyle: .turbulent,
+                    karaokeBackground: .marble, marblePhase: 1, playbackTime: 2,
+                    sourceDuration: 20, speed: 1, lines: [], lyricOffset: 0,
+                    typography: .classic, includeAudio: false,
+                    reactiveProgram: effective, creativePresetID: id)
+                // What CreativeReactiveAccent builds for the same selection.
+                let clock = FixedClock()
+                let driver = MarblePulseDriver(
+                    material: CreativeExperienceResolver.material(
+                        experience: CreativePresetCatalog.selectedExperience(id: id),
+                        recipe: effective),
+                    rhythm: analysis, clock: clock, timeline: timeline(),
+                    reactionGain: CreativeReactionProfile.gain(reaction))
+                XCTAssertEqual(driver.material, request.compositionRuntime?.material, id)
+                let grid = StoryRenderTimeline(request: request, profile: .balanced)
+                for index in [0, 7, 19] {
+                    let frame = grid.frame(index: index)
+                    let story = try XCTUnwrap(request.resolvedFrame(
+                        frame, audioTimeline: timeline(), rhythm: analysis))
+                    clock.lyricTime = story.timestamp.sourceTime
+                    XCTAssertEqual(driver.frame(parameters: story.programParameters),
+                                   story.materialFrame, "\(id) \(reaction) \(index)")
                 }
             }
         }

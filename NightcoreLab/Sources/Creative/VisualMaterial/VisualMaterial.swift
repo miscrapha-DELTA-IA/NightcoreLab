@@ -69,16 +69,12 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
 
     static let legacyMarble = VisualMaterial()
 
+    /// Reaction-free Marble derived from a recipe: the pulse amount follows
+    /// the program's visual intensity. How much of it shows (Off / Subtle /
+    /// Reactive) is applied once, at resolve time, by CreativeReactionProfile.
     static func marble(for program: CreativeVisualProgram?) -> VisualMaterial {
         guard let program else { return .legacyMarble }
-        let reaction: Double
-        switch program.preset.audioReaction {
-        case .off: return .legacyMarble
-        case .subtle: reaction = 0.35
-        case .responsive: reaction = 1
-        }
-        return VisualMaterial(
-            beatPulse: programPulseScale * reaction * program.preset.visualStyle.intensity)
+        return VisualMaterial(beatPulse: programPulseScale * program.preset.visualStyle.intensity)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -121,22 +117,7 @@ struct VisualMaterial: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// Exactly the Marble shader's reactive uniforms.
-struct MarbleUniforms: Equatable, Sendable {
-    let distortion: Double
-    let beatPulse: Double
-    /// Material tuning bound with the pulse (Stage 12.5; former shader constants).
-    let warpAmount: Double
-    let brightnessBoost: Double
-
-    init(distortion: Double, beatPulse: Double,
-         warpAmount: Double = VisualMaterial.defaultWarpAmount,
-         brightnessBoost: Double = VisualMaterial.defaultBrightnessBoost) {
-        self.distortion = distortion
-        self.beatPulse = beatPulse
-        self.warpAmount = warpAmount
-        self.brightnessBoost = brightnessBoost
-    }
-
-    static let neutral = MarbleUniforms(distortion: 0, beatPulse: 0)
-}
+/// The Marble shader's uniforms ARE a resolved VisualParameterSet: one
+/// contract for authored material parameters, resolved frames and shader
+/// bindings (no separately maintained struct). Source-compatible name.
+typealias MarbleUniforms = VisualParameterSet

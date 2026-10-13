@@ -42,47 +42,28 @@ struct StorySceneView: View {
         self.artwork = artwork
         self.frame = frame
         self.visualTimeline = visualTimeline
-        let material = request.compositionRuntime?.material ?? .marble(for: request.reactiveProgram)
-        self.marbleMaterial = material
-        // One deterministic query for both the scrub preview and the MP4 encoder.
-        let layer = request.typographyLayer(atLyricTime: frame.lyricTime)
-        let composed = Self.composition(
-            request: request, frame: frame, visualTimeline: visualTimeline,
-            supplied: resolvedCompositionFrame, typography: layer, visualRhythm: visualRhythm)
-        self.resolvedCompositionFrame = composed
-        self.materialFrame = composed?.materialFrame ?? MaterialResolver.resolve(
-            material,
-            features: CompositionAudioSampler.sample(visualTimeline, at: frame.sourceTime),
-            rhythm: visualRhythm.flatMap { RhythmFrame.at(frame.sourceTime, in: $0) },
-            timestamp: frame.sourceTime,
-            parameters: CreativeMarbleFrameResolver.resolve(
-                program: request.reactiveProgram, timeline: visualTimeline,
-                sourceTime: frame.sourceTime))
-        if request.compositionRuntime != nil,
-           let typography = composed?.typographyFrame {
-            self.typographyFrame = typography
-        } else {
-            self.typographyFrame = layer?.resolve(at: frame.lyricTime, features: nil)
-        }
-    }
-
-    /// Null/offline feature sources produce exactly the original shader.
-    private static func composition(
-        request: StoryVideoRequest, frame: StoryRenderFrame,
-        visualTimeline: AudioFeatureTimeline?,
-        supplied: ResolvedCompositionFrame?,
-        typography: TypographyLayer?,
-        visualRhythm: RhythmAnalysisResult?
-    ) -> ResolvedCompositionFrame? {
-        guard let runtime = request.compositionRuntime else { return nil }
-        if let supplied, supplied.materialFrame != nil,
+        // ONE resolution path (no legacy branch): the request's runtime.
+        let runtime = request.renderRuntime
+        self.marbleMaterial = runtime?.material ?? .legacyMarble
+        let composed: ResolvedCompositionFrame?
+        if let supplied = resolvedCompositionFrame, supplied.materialFrame != nil,
+           let runtime,
            ResolvedFrameRendererAdapter.matches(
-                supplied, composition: runtime.composition,
-                elapsed: frame.elapsed) {
-            return supplied
+                supplied, composition: runtime.composition, elapsed: frame.elapsed) {
+            // The preview's frame from request.resolvedFrame (same inputs).
+            composed = supplied
+        } else {
+            composed = request.resolvedFrame(frame, audioTimeline: visualTimeline,
+                                             rhythm: visualRhythm, runtime: runtime)
         }
-        return runtime.frame(at: frame.elapsed, audioTimeline: visualTimeline,
-                             typography: typography, rhythmAnalysis: visualRhythm)
+        self.resolvedCompositionFrame = composed
+        // Without a composition timestamp (invalid timeline) the Marble is
+        // neutral: no audio, no pulse.
+        self.materialFrame = composed?.materialFrame ??
+            MaterialResolver.resolve(.legacyMarble, timestamp: frame.sourceTime)
+        self.typographyFrame = composed?.typographyFrame ??
+            request.typographyLayer(atLyricTime: frame.lyricTime)?
+                .resolve(at: frame.lyricTime, features: nil)
     }
 
     var reactiveDistortion: Double { materialFrame.parameters.distortion }

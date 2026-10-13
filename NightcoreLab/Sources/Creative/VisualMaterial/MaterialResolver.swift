@@ -16,6 +16,11 @@ enum MaterialResolver {
         let rhythm = validTime ? rhythm : nil
         let mapping = material.audioMapping
         let amount = material.intensity * gain
+        // One audio route per frame (CreativeReactionProfile): program rules
+        // for recipes, the authored mapping for experience materials.
+        let route = CreativeReactionProfile.materialRoute(for: material)
+        let programDistortion = route == .program && validTime
+            ? materialBound(parameters.marbleDistortion, 0...1) : 0
         let bass = materialBound((features?.bass ?? 0) * mapping.bassToDistortion * amount, 0...1)
         let energy = materialBound((features?.energy ?? 0) * mapping.energyToBrightness * amount, 0...0.3)
         let pulse = beatPulse(material, rhythm: rhythm) * gain
@@ -26,8 +31,7 @@ enum MaterialResolver {
                                    * rhythm.pulse(decay: material.pulseDecay), 0...0.3)
         } else { accent = 0 }
         let resolved = VisualParameterSet(
-            distortion: material.parameters.distortion +
-                (validTime ? materialBound(parameters.marbleDistortion, 0...1) : 0) + bass,
+            distortion: material.parameters.distortion + programDistortion + bass,
             beatPulse: pulse, pulseDecay: material.pulseDecay,
             offbeatScale: material.offbeatScale, warpAmount: material.warpAmount,
             brightnessBoost: material.brightnessBoost + energy + accent)

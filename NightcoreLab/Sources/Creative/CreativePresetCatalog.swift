@@ -269,6 +269,13 @@ extension CreativePresetCatalog {
         experiencePresets.first(where: { $0.id == id })
     }
 
+    /// The material for any selectable id, through the single material rule
+    /// (CreativeExperienceResolver.material). Unknown ids → Original's Marble.
+    static func material(selection id: String) -> VisualMaterial {
+        CreativeExperienceResolver.material(experience: selectedExperience(id: id),
+                                            recipe: recipe(for: id))
+    }
+
     /// The program behind any selectable id: the experience's own program,
     /// otherwise the recipe (unknown ids fall back to Original as before).
     static func recipe(for id: String) -> CreativeVisualProgram {

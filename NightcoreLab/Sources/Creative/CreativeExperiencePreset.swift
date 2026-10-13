@@ -25,7 +25,8 @@ struct CreativeExperiencePreset: Codable, Equatable, Sendable, Identifiable {
     var author: String { package.author }
     /// Optional additive field: old schema-1 experiences retain their derived Marble.
     let material: VisualMaterial?
-    var visualMaterial: VisualMaterial { material ?? .marble(for: composition.program) }
+    /// Resolved by the single material rule (CreativeExperienceResolver.material).
+    var visualMaterial: VisualMaterial { CreativeExperienceResolver.material(experience: self) }
 
     init(package: CreativePresetPackage,
          description: String = "",
