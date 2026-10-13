@@ -269,9 +269,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .sheet(item: $storyDraft) { draft in
             StoryDraftPreview(
                 draft: draft,
-                onExport: { artwork, visualTimeline, visualRhythm in
+                onExport: { profile, artwork, visualTimeline, visualRhythm in
                     storyDraft = nil
-                    exportApprovedDraft(draft, artwork: artwork,
+                    exportApprovedDraft(draft, selectedProfile: profile,
+                                        artwork: artwork,
                                         visualTimeline: visualTimeline,
                                         visualRhythm: visualRhythm)
                 },
@@ -279,7 +280,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             )
         }
         .sheet(item: $storyPreview) { payload in
-            StoryVideoPreview(url: payload.url)
+            StoryVideoPreview(url: payload.url, package: payload.package)
         }
         .overlay(alignment: .bottom) {
             if isBuildingShare && storyTask != nil {
@@ -449,7 +450,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
     }
 
-    private func exportApprovedDraft(_ draft: StoryVideoDraft, artwork: UIImage?,
+    private func exportApprovedDraft(_ draft: StoryVideoDraft,
+                                     selectedProfile: ExportProfile,
+                                     artwork: UIImage?,
                                      visualTimeline: AudioFeatureTimeline?,
                                      visualRhythm: RhythmAnalysisResult?) {
         guard !isBuildingShare else { return }
@@ -461,15 +464,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 storyTask = nil
             }
             do {
-                let url = try await StoryVideoExporter.export(
-                    draft.request, audioSource: draft.audioSource,
-                    artwork: artwork, profile: draft.profile,
-                    visualTimeline: visualTimeline,
-                    visualRhythm: visualRhythm,
+                let package = try await SharePackageBuilder.build(
+                    request: draft.request, audioSource: draft.audioSource,
+                    artwork: artwork, selectedProfile: selectedProfile,
+                    visualTimeline: visualTimeline, visualRhythm: visualRhythm,
                     progress: { storyProgress = $0 }
                 )
                 try Task.checkCancellation()
-                storyPreview = StoryVideoPayload(url: url)
+                storyPreview = StoryVideoPayload(package: package)
             } catch is CancellationError {
                 // User cancellation does not interrupt normal playback.
             } catch {

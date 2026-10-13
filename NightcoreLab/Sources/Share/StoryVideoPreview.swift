@@ -5,6 +5,13 @@ import SwiftUI
 struct StoryVideoPayload: Identifiable {
     let id = UUID()
     let url: URL
+    let package: SharePackage?
+
+    init(url: URL) { self.url = url; self.package = nil }
+    init(package: SharePackage) {
+        self.url = package.videoURL
+        self.package = package
+    }
 }
 
 enum StoryPhotoError: LocalizedError {
@@ -29,6 +36,7 @@ enum StoryPhotoLibrary {
 
 struct StoryVideoPreview: View {
     let url: URL
+    var package: SharePackage? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
     @State private var isSaving = false
@@ -42,7 +50,9 @@ struct StoryVideoPreview: View {
             VStack(spacing: 12) {
                 if let player {
                     VideoPlayer(player: player)
-                        .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                        .aspectRatio(package.map {
+                            CGFloat($0.metadata.width) / CGFloat($0.metadata.height)
+                        } ?? 9.0 / 16.0, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                 } else {
                     ProgressView()
@@ -77,6 +87,30 @@ struct StoryVideoPreview: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+
+                if let package {
+                    HStack(spacing: 10) {
+                        ShareLink(item: package.thumbnailURL) {
+                            Label("Thumbnail", systemImage: "photo")
+                                .frame(maxWidth: .infinity)
+                        }
+                        ShareLink(item: package.metadataURL) {
+                            Label("Metadados", systemImage: "doc.text")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+
+                    ShareLink(items: package.files) {
+                        Label("Compartilhar pacote · 3 arquivos",
+                              systemImage: "square.stack.3d.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    Text("Para salvar em Arquivos, abra Compartilhar pacote e escolha Salvar em Arquivos.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
 
                 Text("YouTube Shorts: salve em Fotos, abra YouTube, toque em +, envie um vídeo e selecione o Story.")
                     .font(.caption)
