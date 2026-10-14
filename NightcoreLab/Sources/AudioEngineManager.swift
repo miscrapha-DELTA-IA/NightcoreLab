@@ -111,6 +111,21 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    /// Frozen at the end of recording; never observed by the audio callback.
+    @ObservationIgnored private(set) var capturedPadPerformance: PerformanceTimeline?
+    @ObservationIgnored let livePadPulseSource = LivePadPulseSource()
+
+    func clearCapturedPadPerformance() {
+        capturedPadPerformance = nil
+    }
+
+    func capturePadPerformance(_ timeline: PerformanceTimeline) {
+        guard timeline.isValid, timeline.kitID == padRuntime.kit.id else { return }
+        let anchored = timeline.events.filter { $0.sourceTime != nil }
+        capturedPadPerformance = anchored.isEmpty ? nil :
+            PerformanceTimeline(kitID: timeline.kitID, events: anchored,
+                                sourceClip: timeline.sourceClip)
+    }
 
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
@@ -191,6 +206,8 @@ final class AudioEngineManager {
 
         engine.stop()
         padRuntime.clearSourceClip()
+        clearCapturedPadPerformance()
+        livePadPulseSource.reset()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
         (padRuntime.nodes + padRuntime.releaseNodes).forEach {
             engine.disconnectNodeOutput($0)
@@ -350,6 +367,10 @@ final class AudioEngineManager {
                 nodeScheduleMS: nodeTiming.scheduleMS,
                 nodePlayMS: nodeTiming.playMS,
                 wasCold: wasCold, succeeded: played))
+        }
+        if played {
+            livePadPulseSource.record(at: recordedPadSourceTime(),
+                                      velocity: velocity)
         }
         return played
     }
@@ -560,11 +581,14 @@ final class AudioEngineManager {
     /// Standalone offline graph. Does not seek, pause or replace the live player.
     nonisolated static func exportStorySegment(source: StoryAudioSource,
                                                startTime: TimeInterval,
-                                               duration: TimeInterval) async throws -> URL {
+                                               duration: TimeInterval,
+                                               padPerformance: PerformanceTimeline? = nil)
+        async throws -> URL {
         let renderTask = Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: source.url, settings: source.settings,
                                    format: .m4a, progress: { _ in },
-                                   startTime: startTime, maxDuration: duration)
+                                   startTime: startTime, maxDuration: duration,
+                                   performance: padPerformance)
         }
         // Detached tasks do not inherit cancellation automatically.
         // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.

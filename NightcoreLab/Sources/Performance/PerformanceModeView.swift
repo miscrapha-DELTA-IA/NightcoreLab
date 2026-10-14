@@ -157,6 +157,8 @@ struct PerformanceModeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var recorder = PerformanceRecorder()
+    @State private var grooveMode: PadGrooveMode = .human
+    @State private var recordedRhythm: RhythmAnalysisResult?
     @State private var haptics = false
     @State private var heldPads: Set<String> = []
     @State private var recordedSourceRevision: Int?
@@ -246,10 +248,14 @@ struct PerformanceModeView: View {
                         }
                         HStack(spacing: 12) {
                             Button {
-                                if recorder.isRecording { recorder.stop() }
-                                else {
+                                if recorder.isRecording {
+                                    recorder.stop()
+                                    audio.capturePadPerformance(
+                                        recorder.timeline(sourceClip: recordedClip))
+                                } else {
                                     recordedSourceRevision = audio.playbackSourceRevision
                                     recordedClip = sourceClip
+                                    audio.clearCapturedPadPerformance()
                                     recorder.start()
                                     exportedAudio = nil
                                 }
@@ -276,7 +282,13 @@ struct PerformanceModeView: View {
                                 .accessibilityIdentifier("performance.shareEvents")
                             }
                         }
-                        Text("A captura guarda ações e tempos em memória. Você pode compartilhar os eventos em JSON e, com música carregada, renderizar um M4A com os pads. Exportação de Story com pads é etapa posterior.")
+                        Picker("Groove", selection: $grooveMode) {
+                            Text("Tempo humano").tag(PadGrooveMode.human)
+                            Text("Magnetismo sutil").tag(PadGrooveMode.magnet)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("performance.grooveMode")
+                        Text("Capture em tempo humano, ou aproxime eventos em até 45 ms de uma grade rítmica confiável. A sessão gravada acompanha o preview e o Story da música.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -362,10 +374,27 @@ struct PerformanceModeView: View {
             recordedClip = nil
             confirmSharingRights = false
             if recorder.isRecording { recorder.stop() }
+            audio.clearCapturedPadPerformance()
+            recordedRhythm = nil
             exportedAudio = nil
         }
         .onAppear {
             audio.beginPerformanceMode()
+        }
+        .task(id: audio.playbackSourceRevision) {
+            recordedRhythm = nil
+            guard let url = audio.visualAnalysisURL, url.isFileURL else { return }
+            let revision = audio.playbackSourceRevision
+            let descriptor = await Task.detached(priority: .utility) {
+                try? AudioAssetDescriptor.read(at: url)
+            }.value
+            guard !Task.isCancelled, revision == audio.playbackSourceRevision,
+                  let descriptor else { return }
+            let result = await MusicAnalysisCache().load(for: descriptor)
+            guard !Task.isCancelled, revision == audio.playbackSourceRevision else { return }
+            if result?.capabilities[.rhythm] == .available {
+                recordedRhythm = result?.rhythmAnalysis
+            }
         }
         .onDisappear {
             audio.padLatencyProbe.cancel()
@@ -374,7 +403,13 @@ struct PerformanceModeView: View {
             clipTask?.cancel()
             exportTask?.cancel()
             heldPads.removeAll()
-            recorder.stop()
+            if recorder.isRecording {
+                recorder.stop()
+                if recordedSourceRevision == audio.playbackSourceRevision {
+                    audio.capturePadPerformance(
+                        recorder.timeline(sourceClip: recordedClip))
+                }
+            }
             audio.endPerformanceMode()
         }
     }
@@ -522,7 +557,8 @@ struct PerformanceModeView: View {
         // never in the sampler's scheduling path.
         if recorder.isRecording {
             recorder.append(sample, velocity: performedVelocity,
-                            sourceTime: audio.recordedPadSourceTime())
+                            sourceTime: audio.recordedPadSourceTime(),
+                            groove: grooveMode, rhythm: recordedRhythm)
         }
         exportedAudio = nil
         return true

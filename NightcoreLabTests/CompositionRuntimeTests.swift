@@ -244,4 +244,96 @@ final class CompositionRuntimeTests: XCTestCase {
         XCTAssertEqual(rendered.width, profile.width)
         XCTAssertEqual(rendered.height, profile.height)
     }
+
+    func testPadSessionCodableAndSourceTimePreserveLegacyComposition() throws {
+        let legacy = try request()
+        let original = try XCTUnwrap(legacy.visualComposition)
+        let hit = PadEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000091")!,
+            padId: "closed-hat", timestamp: 0.8, velocity: 0.85,
+            duration: 0.12, sourceTime: 2.05, chokeGroup: "hat")
+        let performance = PerformanceTimeline(
+            kitID: PadKit.starter.id, events: [hit])
+        let selected = try original.timeline.withPadPerformance(performance)
+        let altered = try VisualComposition(
+            id: original.id, name: original.name, program: original.program,
+            layers: original.layers, timeline: selected,
+            deterministicSeed: original.deterministicSeed)
+        let roundTrip = try JSONDecoder().decode(
+            VisualComposition.self, from: JSONEncoder().encode(altered))
+        XCTAssertEqual(roundTrip.timeline.padPerformance, performance)
+        XCTAssertEqual(roundTrip, altered)
+        XCTAssertNil(try JSONDecoder().decode(
+            VisualComposition.self, from: JSONEncoder().encode(original))
+            .timeline.padPerformance)
+
+        // Old v1 pad JSON lacked chokeGroup; decoding must remain lossless.
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(hit)) as? [String: Any])
+        json.removeValue(forKey: "chokeGroup")
+        let legacyPad = try JSONDecoder().decode(PadEvent.self,
+            from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(legacyPad.chokeGroup)
+        XCTAssertEqual(legacyPad.sourceTime, hit.sourceTime)
+    }
+
+    func testQuantizeIsOptionalBoundedAndNeverChangesHumanTimestamps() {
+        let beat = RhythmAnalysisResult(
+            onsetEvents: [],
+            bpmCandidates: [.init(bpm: 120, confidence: 0.85)],
+            beatGrid: [
+                .init(time: 1, index: 0, strength: 1),
+                .init(time: 1.5, index: 1, strength: 0.7)
+            ], confidence: 0.9)
+        XCTAssertEqual(PadGrooveQuantizer.sourceTime(
+            1.032, mode: .human, rhythm: beat), 1.032)
+        XCTAssertEqual(PadGrooveQuantizer.sourceTime(
+            1.032, mode: .magnet, rhythm: beat), 1.0)
+        XCTAssertEqual(PadGrooveQuantizer.sourceTime(
+            1.09, mode: .magnet, rhythm: beat), 1.09)
+        XCTAssertEqual(PadGrooveQuantizer.sourceTime(
+            1.032, mode: .magnet, rhythm: nil), 1.032)
+    }
+
+    func testPadAccentIdenticalAtRepeatedOutOfOrderPreviewAndExportFrames() throws {
+        var request = try self.request(sourceStart: 1.5, reaction: .off)
+        let original = try XCTUnwrap(request.visualComposition)
+        let performance = PerformanceTimeline(
+            kitID: PadKit.starter.id, events: [
+                PadEvent(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                         padId: "kick", timestamp: 0.5, velocity: 1,
+                         duration: 0.46, sourceTime: 2.0),
+                PadEvent(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+                         padId: "open-hat", timestamp: 0.52, velocity: 0.8,
+                         duration: 0.54, sourceTime: 2.02, chokeGroup: "hat")
+            ])
+        let timeline = try original.timeline.withPadPerformance(performance)
+        let comp = try VisualComposition(
+            id: original.id, name: original.name, program: original.program,
+            layers: original.layers, timeline: timeline,
+            deterministicSeed: original.deterministicSeed)
+        let runtime = CompositionRuntime(composition: comp)
+        request.compositionRuntime = runtime
+        let grid = StoryRenderTimeline(request: request, profile: .balanced)
+        for index in [11, 10, 13, 11, 15, 10] {
+            let encoded = grid.frame(index: index)
+            let preview = grid.frame(at: encoded.elapsed)
+            XCTAssertEqual(encoded, preview)
+            let liveFrame = try XCTUnwrap(request.resolvedFrame(
+                preview, audioTimeline: nil, rhythm: nil))
+            let exportFrame = try XCTUnwrap(request.resolvedFrame(
+                encoded, audioTimeline: nil, rhythm: nil))
+            XCTAssertEqual(liveFrame, exportFrame)
+            XCTAssertEqual(liveFrame.materialFrame?.parameters.beatPulse,
+                           exportFrame.materialFrame?.parameters.beatPulse)
+            if encoded.sourceTime < 2.2 {
+                XCTAssertGreaterThan(liveFrame.materialFrame?.parameters.beatPulse ?? 0, 0)
+            } else {
+                XCTAssertEqual(liveFrame.materialFrame?.parameters.beatPulse ?? -1, 0)
+            }
+            XCTAssertEqual(runtime.frame(at: preview.elapsed, features: nil),
+                           runtime.frame(at: encoded.elapsed, features: nil))
+        }
+    }
+
 }

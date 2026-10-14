@@ -359,6 +359,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 theme: appTheme,
                 backgroundStyle: playerBackgroundStyle,
                 featureEngine: visualEngine,
+                padPulseSource: audio.livePadPulseSource,
                 onParameters: { next in liveUniforms.update(next) },
                 onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) },
                 onFeatureTimeline: { timeline in liveUniforms.setFeatureTimeline(timeline) }
@@ -413,6 +414,12 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         guard isTrackLoaded, !isBuildingShare else { return }
         let matchedLyrics = lyricsStore.trackID == track.id &&
             lyricsStore.status == .ready ? lyricsStore.lines : []
+        // Story the PERFORMANCE rather than the empty moments after recording
+        // ends. A 150 ms source-time lead lets the first hit visibly arrive;
+        // legacy Stories without pads retain the current playback position.
+        let padSession = audio.capturedPadPerformance
+        let firstHit = padSession?.events.compactMap(\.sourceTime).min()
+        let storyStart = firstHit.map { max(0, $0 - 0.15) } ?? audio.playbackTime
         do {
             let capturedAt = Date()
             let frame = try StoryRequestBuilder.make(
@@ -420,7 +427,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 playerStyle: playerBackgroundStyle, karaokeBackground: backgroundStyle,
                 marblePhase: Float(max(0, capturedAt.timeIntervalSince(marbleStartedAt)) *
                                    (showsKaraoke ? 0.8 : 0.6)),
-                playbackTime: audio.playbackTime, sourceDuration: audio.duration,
+                playbackTime: storyStart, sourceDuration: audio.duration,
                 speed: audio.speed, lines: matchedLyrics,
                 lyricOffset: lyricsStore.userOffset, typography: storyTypography,
                 typographyStyle: karaokeTypography,
@@ -433,7 +440,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         typography: karaokeTypography,
                         background: playerBackgroundStyle, reaction: reactionMode),
                 reactiveSourceURL: audio.visualAnalysisURL,
-                creativePresetID: creativePresetID
+                creativePresetID: creativePresetID,
+                padPerformance: padSession
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,

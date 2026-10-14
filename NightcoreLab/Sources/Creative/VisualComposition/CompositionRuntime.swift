@@ -28,12 +28,22 @@ struct CompositionRuntime: Sendable {
     /// material rule; nil applies that same rule to the composition's program.
     let material: VisualMaterial
     private let compiled: CompiledComposition
+    /// Frozen per-session sort. No repeated event filtering/sorting per frame.
+    private let padEvents: [PadEvent]
 
     init(composition: VisualComposition, material: VisualMaterial? = nil) {
         self.composition = composition
         self.material = material ??
             CreativeExperienceResolver.material(experience: nil, recipe: composition.program)
         self.compiled = CompiledComposition(composition)
+        self.padEvents = (composition.timeline.padPerformance?.events ?? [])
+            .filter { $0.sourceTime != nil }
+            .sorted {
+                if $0.sourceTime != $1.sourceTime {
+                    return ($0.sourceTime ?? 0) < ($1.sourceTime ?? 0)
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
     }
 
     /// An already frozen feature sample. The caller must supply one measured
@@ -48,11 +58,17 @@ struct CompositionRuntime: Sendable {
         // Materials are reaction-free; the frozen program's reaction setting
         // is applied once, through the single profile.
         let gain = CreativeReactionProfile.gain(composition.program.preset.audioReaction)
-        return base.withMaterial(MaterialResolver.resolve(
+        let materialFrame = MaterialResolver.resolve(
             material, features: features, rhythm: rhythm,
             timestamp: base.timestamp.sourceTime,
             parameters: base.programParameters, reactionGain: gain,
-            seed: composition.deterministicSeed))
+            seed: composition.deterministicSeed)
+        let padPulse = PadVisualPulseEnvelope.pulse(
+            at: base.timestamp.sourceTime, sortedEvents: padEvents)
+        return base.withMaterial(padPulse > 0
+            ? materialFrame.replacingBeatPulse(
+                max(materialFrame.parameters.beatPulse, padPulse))
+            : materialFrame)
     }
 
     /// Frozen AudioFeatures path used by CreativeExperienceResolver and
@@ -108,10 +124,12 @@ struct CompositionRuntime: Sendable {
     static func freeze(program: CreativeVisualProgram?,
                        sourceStart: TimeInterval, speed: Double,
                        duration: TimeInterval,
-                       deterministicSeed: UInt64 = 0) -> VisualComposition? {
+                       deterministicSeed: UInt64 = 0,
+                       padPerformance: PerformanceTimeline? = nil) -> VisualComposition? {
         guard let program,
               let timeline = try? CompositionTimeline(
-                sourceStart: sourceStart, playbackSpeed: speed, duration: duration) else {
+                sourceStart: sourceStart, playbackSpeed: speed, duration: duration,
+                padPerformance: padPerformance) else {
             return nil
         }
         return try? CreativeSnapshotAdapter.wrap(program, timeline: timeline,

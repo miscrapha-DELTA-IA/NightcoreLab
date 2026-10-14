@@ -197,4 +197,64 @@ final class ShareExportPipelineTests: XCTestCase {
         XCTAssertEqual(size.height, CGFloat(encoding.height))
         XCTAssertEqual(metadata.thumbnailElapsed, 0)
     }
+
+    func testPadAudioScheduleMatchesVideoSourceGridAndSilentLegacy() throws {
+        let clip = try request(duration: 120)
+        let start = clip.playbackTime
+        let speed = clip.speed
+        let event = PadEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000071")!,
+            padId: "kick", timestamp: 12.0, velocity: 0.9,
+            duration: 0.46, sourceTime: start + 0.2, chokeGroup: nil)
+        let session = PerformanceTimeline(
+            kitID: PadKit.starter.id, events: [event])
+        let hits = try PerformancePadMixdown.schedule(
+            session, kit: .starter, startTime: start,
+            speed: speed, sampleRate: 48_000)
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits[0].startFrame, 9_600)
+        XCTAssertEqual(hits[0].sample.id, "kick")
+        let empty = try PerformancePadMixdown.schedule(
+            PerformanceTimeline(kitID: PadKit.starter.id, events: []),
+            kit: .starter, startTime: start, speed: speed, sampleRate: 48_000)
+        XCTAssertTrue(empty.isEmpty)
+        XCTAssertNil(clip.renderRuntime?.composition.timeline.padPerformance)
+    }
+
+    @MainActor
+    func testFrozenPadVisualsMatchScrubPreviewAndVideoScene() throws {
+        var clip = try request(duration: 120)
+        let composition = try XCTUnwrap(clip.visualComposition)
+        let event = PadEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000081")!,
+            padId: "snare", timestamp: 0.2, velocity: 1,
+            duration: 0.28, sourceTime: clip.playbackTime + 0.1)
+        let padTimeline = PerformanceTimeline(
+            kitID: PadKit.starter.id, events: [event])
+        let frozen = try VisualComposition(
+            id: composition.id, name: composition.name,
+            program: composition.program, layers: composition.layers,
+            timeline: composition.timeline.withPadPerformance(padTimeline),
+            deterministicSeed: composition.deterministicSeed)
+        clip.compositionRuntime = CompositionRuntime(composition: frozen)
+        let profile = StoryEncodingProfile.economical
+        let grid = StoryRenderTimeline(request: clip, profile: profile)
+        let frame = grid.frame(index: 2)
+        let scrub = grid.frame(at: frame.elapsed)
+        XCTAssertEqual(frame, scrub)
+        let resolved = try XCTUnwrap(clip.resolvedFrame(
+            scrub, audioTimeline: nil, rhythm: nil))
+        let preview = StorySceneView(
+            request: clip, artwork: nil, frame: scrub,
+            resolvedCompositionFrame: resolved)
+        let exported = StorySceneView(request: clip, artwork: nil, frame: frame)
+        XCTAssertEqual(preview.resolvedCompositionFrame, exported.resolvedCompositionFrame)
+        XCTAssertEqual(preview.materialFrame, exported.materialFrame)
+        XCTAssertGreaterThan(preview.beatPulse, 0)
+        let render = try StoryFrameRenderer.render(
+            request: clip, artwork: nil, frame: frame, profile: profile)
+        XCTAssertEqual(render.width, profile.width)
+        XCTAssertEqual(render.height, profile.height)
+    }
+
 }

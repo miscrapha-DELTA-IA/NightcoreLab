@@ -22,7 +22,8 @@ struct CreativePresetPackageSnapshot: Equatable, Sendable {
         }
         let timeline = try CompositionTimeline(
             sourceStart: state.visualState.playbackTime,
-            playbackSpeed: playbackSpeed, duration: duration)
+            playbackSpeed: playbackSpeed, duration: duration,
+            padPerformance: package.composition.timeline.padPerformance)
         let source = package.composition
         let frozen = try VisualComposition(
             id: source.id, name: source.name,
