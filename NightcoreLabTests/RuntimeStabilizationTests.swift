@@ -6,6 +6,142 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    private func karaokeKey() -> KeyAnalysisResult {
+        KeyAnalysisResult(hypotheses: [.init(tonic: .c, scale: .major, confidence: 0.9)],
+                          provenance: .init(method: "fixture", fingerprint: .init(algorithmVersion: 1),
+                                            analyzedThrough: 60, confidence: 0.9))
+    }
+
+    private func karaokeLines(_ count: Int) -> [TimedLyricLine] {
+        (0..<count).map { i in
+            let start = Double(i * 2)
+            return TimedLyricLine(id: i, start: start, end: start + 1,
+                                 words: [.init(id: 0, text: "Canto", start: start, end: start + 1,
+                                               spaceAfter: false)], precision: .word)
+        }
+    }
+
+    func testExp8ScoreComboThrough4xAndSilentVerseBreak() {
+        var engine = KaraokeScoringEngine()
+        engine.key = karaokeKey()
+        engine.start(lines: karaokeLines(10), at: 0)
+        let voice = KaraokeVoiceFrame(rms: 0.15, frequency: 261.625565, confidence: 1)
+        var multipliers = [1]
+        var priorScore = 0
+        for step in 1...380 {
+            let time = Double(step) / 20
+            let singing = time <= 17 && time.truncatingRemainder(dividingBy: 2) <= 1 &&
+                time.truncatingRemainder(dividingBy: 2) > 0
+            engine.advance(to: time, voice: singing ? voice : .silence, playing: true)
+            XCTAssertGreaterThanOrEqual(engine.snapshot.totalScore, priorScore)
+            priorScore = engine.snapshot.totalScore
+            if step == 100 || step == 220 || step == 340 { multipliers.append(engine.snapshot.multiplier) }
+        }
+        XCTAssertEqual(multipliers, [1, 2, 3, 4])
+        XCTAssertEqual(engine.snapshot.bestCombo, 9)
+        XCTAssertEqual(engine.snapshot.streakCombo, 0)
+        XCTAssertEqual(engine.snapshot.multiplier, 1)
+        XCTAssertEqual(engine.snapshot.lastVerseRating, .almost)
+        XCTAssertEqual(engine.snapshot.judgedVerses, 10)
+        XCTAssertGreaterThan(engine.snapshot.totalScore, 1_500)
+        engine.finish()
+        XCTAssertTrue(engine.snapshot.isFinished)
+        let final = engine.snapshot
+        engine.advance(to: 19.1, voice: voice, playing: true)
+        engine.finish()
+        XCTAssertEqual(engine.snapshot, final)
+    }
+
+    func testExp8OctaveInvarianceToleranceAndTransposition() throws {
+        let key = karaokeKey()
+        let c = 261.625565
+        let score = try XCTUnwrap(KaraokeScoringEngine.harmonicAccuracy(frequency: c, key: key))
+        for octave in [-2.0, -1, 0, 1, 2] {
+            XCTAssertEqual(try XCTUnwrap(KaraokeScoringEngine.harmonicAccuracy(
+                frequency: c * pow(2, octave), key: key)), score, accuracy: 1e-6)
+        }
+        XCTAssertEqual(KaraokeScoringEngine.harmonicAccuracy(frequency: c * pow(2, 0.2 / 12), key: key), 1)
+        XCTAssertLessThan(try XCTUnwrap(KaraokeScoringEngine.harmonicAccuracy(
+            frequency: c * pow(2, 1.0 / 12), key: key)), 0.2)
+        XCTAssertEqual(KaraokeScoringEngine.harmonicAccuracy(
+            frequency: c * pow(2, 1.0 / 12), key: key, pitchShift: 100), 1)
+        XCTAssertNil(KaraokeScoringEngine.harmonicAccuracy(frequency: c, key: nil))
+        XCTAssertNil(KaraokeScoringEngine.harmonicAccuracy(frequency: .nan, key: key))
+    }
+
+    func testExp8NoPointsInInstrumentalGapsPauseOrInvalidVoice() {
+        let lines = EnhancedLRCParser.parse("[00:01.00]<00:01.00>Canto<00:02.00>\n[00:04.00]\n[00:06.00]Fim").lines
+        var engine = KaraokeScoringEngine()
+        engine.start(lines: lines, at: 0)
+        let voice = KaraokeVoiceFrame(rms: 0.1, frequency: 220, confidence: 1)
+        for step in 1...20 { engine.advance(to: Double(step) / 20, voice: voice, playing: true) }
+        XCTAssertEqual(engine.snapshot.totalScore, 0)
+        for step in 21...40 { engine.advance(to: Double(step) / 20, voice: voice, playing: true) }
+        let score = engine.snapshot.totalScore
+        XCTAssertGreaterThan(score, 0)
+        for step in 41...119 { engine.advance(to: Double(step) / 20, voice: voice, playing: true) }
+        XCTAssertEqual(engine.snapshot.totalScore, score)
+        engine.advance(to: 6.1, voice: voice, playing: false)
+        XCTAssertEqual(engine.snapshot.totalScore, score)
+        engine.advance(to: 6.2, voice: .init(rms: .infinity, frequency: 220, confidence: 1), playing: true)
+        XCTAssertEqual(engine.snapshot.totalScore, score)
+    }
+
+    func testExp8MicrophonePitchDetectorRejectsSilenceAndTracksOctaves() throws {
+        for hz in [110.0, 220, 440] {
+            let samples = (0..<1_024).map { Float(0.15 * sin(2 * Double.pi * hz * Double($0) / 8_000)) }
+            let frame = KaraokeVoiceAnalyzer.analyze(samples, sampleRate: 8_000)
+            XCTAssertTrue(frame.isVoiced)
+            XCTAssertEqual(try XCTUnwrap(frame.frequency), hz, accuracy: 2)
+        }
+        XCTAssertFalse(KaraokeVoiceAnalyzer.analyze([Float](repeating: 0, count: 1_024), sampleRate: 8_000).isVoiced)
+        XCTAssertFalse(KaraokeVoiceAnalyzer.analyze([Float](repeating: 0.5, count: 1_024), sampleRate: 8_000).isVoiced)
+        XCTAssertFalse(KaraokeVoiceAnalyzer.analyze([.nan], sampleRate: .nan).isVoiced)
+    }
+
+    @MainActor
+    func testExp8HUDLifecycleSimulationAndScrollIsolation() {
+        let store = LyricsStore()
+        let session = store.scoring
+        let lines = karaokeLines(3)
+        let scroll = KaraokeScrollPolicy.decision(lines: lines, targetID: 1, lastRequestedID: 0,
+                                                  reason: .automatic, reduceMotion: false,
+                                                  allowsDecorativeMotion: true)
+        XCTAssertFalse(session.isHUDVisible)
+        session.present(true)
+        session.setReference(key: karaokeKey(), melody: nil)
+        session.start(mode: .simulation, lines: lines, at: 0)
+        session.inject(.init(rms: 0.1, frequency: 261.625565, confidence: 1))
+        XCTAssertTrue(session.isHUDVisible)
+        for step in 1...20 { session.advance(time: Double(step) / 20, playing: true, lines: lines) }
+        XCTAssertGreaterThan(session.snapshot.totalScore, 0)
+        XCTAssertEqual(session.snapshot.judgedVerses, 1)
+        XCTAssertTrue(session.judgmentVisible)
+        XCTAssertTrue(session.snapshot.hasHarmonicReference)
+        XCTAssertNil(store.activeLineIndex)
+        XCTAssertEqual(KaraokeScrollPolicy.decision(lines: lines, targetID: 1, lastRequestedID: 0,
+                                                   reason: .automatic, reduceMotion: false,
+                                                   allowsDecorativeMotion: true), scroll)
+        session.finish()
+        XCTAssertTrue(session.snapshot.isFinished)
+        XCTAssertTrue(KaraokeScoreShareComposer.text(session.snapshot, simulation: true).contains("SIMULAÇÃO"))
+        session.present(false)
+        XCTAssertFalse(session.isHUDVisible)
+        XCTAssertEqual(session.snapshot.totalScore, 0)
+        session.present(true)
+        session.start(mode: .simulation, lines: lines, at: 0)
+        for step in 1...20 { session.advance(time: Double(step) / 20, playing: true, lines: lines) }
+        // Rewinding explicitly starts a fresh run, never accumulates farmed points.
+        session.advance(time: 0, playing: true, lines: lines)
+        session.advance(time: 0, playing: true, lines: lines)
+        XCTAssertEqual(session.snapshot.totalScore, 0)
+        session.resetForTrack()
+        XCTAssertFalse(session.isHUDVisible)
+        session.start(mode: .simulation, lines: lines, at: 0)
+        XCTAssertFalse(session.snapshot.hasHarmonicReference)
+    }
+
+
 
     func testExp11FourVocalMacrosAndRouteSafety() throws {
         for preset in VocalFXPreset.allCases {
