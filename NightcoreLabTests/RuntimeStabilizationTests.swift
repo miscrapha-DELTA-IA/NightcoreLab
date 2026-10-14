@@ -997,3 +997,24 @@ private enum LegacyCompositionResolver {
         return last.value
     }
 }
+
+final class Stage24FlowClockTests: XCTestCase {
+    func testShaderClockAlwaysAdvancesWithoutKickSpeedBraking() {
+        var flow = MonotonicFlowClock()
+        var previous = flow.phase
+        for index in 0..<2_000 {
+            let simulatedBeat = Double(index % 17) / 16
+            _ = simulatedBeat // Beat can fade, but cannot change clock speed.
+            let now = flow.advance(elapsed: 1.0 / 120.0, speed: 0.6)
+            XCTAssertGreaterThan(now, previous)
+            XCTAssertEqual(now - previous, 0.6 / 120.0, accuracy: 1e-9)
+            previous = now
+        }
+        let paused = flow.advance(elapsed: -2, speed: 0.6)
+        XCTAssertEqual(paused, previous)
+        let resumed = flow.advance(elapsed: 10, speed: 0.6)
+        XCTAssertGreaterThan(resumed, paused)
+        XCTAssertLessThanOrEqual(resumed - paused, 0.06 + 1e-9,
+                                 "Foreground jump is bounded without resetting phase")
+    }
+}
