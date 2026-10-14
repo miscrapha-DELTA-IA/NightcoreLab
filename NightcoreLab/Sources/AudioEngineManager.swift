@@ -111,6 +111,15 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    @ObservationIgnored private var padHitMicroVariation = PadHitMicroVariation()
+
+    /// Runs on a direct pad touch, without AVAudioSession calls, PCM work or
+    /// SwiftUI state changes. The returned velocity must also be recorded.
+    func expressivePadVelocity(_ padID: String, velocity: Float,
+                               touchEventUptime: TimeInterval) -> Float {
+        padHitMicroVariation.velocity(
+            for: padID, requested: velocity, at: touchEventUptime)
+    }
 
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }

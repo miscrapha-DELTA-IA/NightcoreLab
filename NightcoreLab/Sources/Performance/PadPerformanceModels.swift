@@ -186,6 +186,8 @@ struct PadVoiceAllocator {
     }
 
     private(set) var leases: [Lease]
+    /// Pick each next free voice circularly instead of hammering voice zero.
+    private var nextVoiceIndex = 0
 
     init(capacity: Int = 12) {
         leases = Array(repeating: Lease(), count: max(1, capacity))
@@ -199,11 +201,14 @@ struct PadVoiceAllocator {
             return leases[$0].chokeGroup == chokeGroup &&
                 leases[$0].id != nil && leases[$0].expires > uptime
         }
-        let index = leases.indices.first(where: {
-            leases[$0].id == nil || leases[$0].expires <= uptime
-        }) ?? chokes.first ?? leases.indices.min(by: {
+        let available = (0..<leases.count).first { offset in
+            let index = (nextVoiceIndex + offset) % leases.count
+            return leases[index].id == nil || leases[index].expires <= uptime
+        }.map { (nextVoiceIndex + $0) % leases.count }
+        let index = available ?? chokes.first ?? leases.indices.min(by: {
             leases[$0].began < leases[$1].began
         })!
+        nextVoiceIndex = (index + 1) % leases.count
         let stolen = leases[index].id != nil && leases[index].expires > uptime
         let interruptedIndices = chokes.filter { $0 != index } + (stolen ? [index] : [])
         let interrupted = interruptedIndices.map {
@@ -219,5 +224,6 @@ struct PadVoiceAllocator {
 
     mutating func reset() {
         leases = Array(repeating: Lease(), count: leases.count)
+        nextVoiceIndex = 0
     }
 }

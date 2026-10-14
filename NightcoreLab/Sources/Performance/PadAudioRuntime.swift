@@ -62,6 +62,29 @@ enum PadSampleSynthesizer {
     }
 }
 
+/// Exploration: deterministic, tiny gain accents for fast repeated taps.
+/// Applied BEFORE both audio dispatch and event capture so recorded velocity
+/// matches the sound; deliberately no pitch modulation without offline parity.
+struct PadHitMicroVariation {
+    private var lastHit: [String: (time: TimeInterval, step: Int)] = [:]
+    private static let gains: [Float] = [1.0, 0.974, 1.016, 0.986]
+
+    mutating func velocity(for padID: String, requested: Float,
+                           at uptime: TimeInterval) -> Float {
+        guard !padID.isEmpty, requested.isFinite, requested > 0,
+              uptime.isFinite, uptime >= 0 else { return requested }
+        let last = lastHit[padID]
+        let step: Int
+        if let last, uptime >= last.time, uptime - last.time <= 0.17 {
+            step = (last.step + 1) % Self.gains.count
+        } else {
+            step = 0
+        }
+        lastHit[padID] = (uptime, step)
+        return min(1, max(0.05, requested * Self.gains[step]))
+    }
+}
+
 /// Fixed polyphony inside AudioEngineManager's ONE live AVAudioEngine.
 /// Voices and tiny emergency release buffers are allocated/attached at setup.
 /// A normal retrigger obtains another free voice so earlier tails overlap.
@@ -74,7 +97,7 @@ final class PadAudioRuntime {
 
     let kit: PadKit
     let nodes: [AVAudioPlayerNode]
-    /// Emergency release-only nodes: never consume the 12 musical voices.
+    /// Emergency release-only nodes: never consume the 16 musical voices.
     /// Their PCM buffers are allocated once before any touch events.
     let releaseNodes: [AVAudioPlayerNode]
     private let releaseBuffers: [AVAudioPCMBuffer]
@@ -87,7 +110,7 @@ final class PadAudioRuntime {
     private(set) var sourceClip: PerformanceSourceClip?
     private var allocator: PadVoiceAllocator
 
-    init(kit: PadKit = .starter, polyphony: Int = 12) {
+    init(kit: PadKit = .starter, polyphony: Int = 16) {
         self.kit = kit
         let capacity = max(1, polyphony)
         nodes = (0..<capacity).map { _ in AVAudioPlayerNode() }

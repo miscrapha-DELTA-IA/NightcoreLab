@@ -117,4 +117,43 @@ final class AudioQualityTests: XCTestCase {
         let (_, audio) = try samples(render(url))
         XCTAssertGreaterThan(audio.map { abs($0) }.max() ?? 0, 0.01)
     }
+
+    /// Exploration-only smoke: no engine startup, files, UI, or export.
+    func testExplorationVoiceOverlapChokeAndFastHitVariation() {
+        var pool = PadVoiceAllocator(capacity: 16)
+        var unique = Set<Int>()
+        for i in 0..<16 {
+            let allocation = pool.allocate(
+                id: "kick", chokeGroup: nil, duration: 1,
+                at: Double(i) * 0.012)!
+            XCTAssertFalse(allocation.stoleVoice)
+            unique.insert(allocation.voiceIndex)
+        }
+        XCTAssertEqual(unique.count, 16, "Fast kick retriggers must overlap")
+        let overflow = pool.allocate(
+            id: "kick", chokeGroup: nil, duration: 1, at: 0.20)!
+        XCTAssertTrue(overflow.stoleVoice)
+
+        var hats = PadVoiceAllocator(capacity: 4)
+        let kick = hats.allocate(
+            id: "kick", chokeGroup: nil, duration: 1, at: 0)!
+        let opened = hats.allocate(
+            id: "open-hat", chokeGroup: "hat", duration: 0.54, at: 0.01)!
+        let closed = hats.allocate(
+            id: "closed-hat", chokeGroup: "hat", duration: 0.12, at: 0.04)!
+        XCTAssertTrue(closed.chokeIndices.contains(opened.voiceIndex))
+        XCTAssertEqual(hats.leases[kick.voiceIndex].id, "kick")
+
+        var dynamics = PadHitMicroVariation()
+        let a = dynamics.velocity(for: "kick", requested: 0.75, at: 1)
+        let b = dynamics.velocity(for: "kick", requested: 0.75, at: 1.06)
+        let c = dynamics.velocity(for: "kick", requested: 0.75, at: 1.12)
+        let reset = dynamics.velocity(for: "kick", requested: 0.75, at: 2)
+        XCTAssertEqual(a, 0.75)
+        XCTAssertNotEqual(a, b)
+        XCTAssertNotEqual(b, c)
+        XCTAssertEqual(reset, a)
+        XCTAssertTrue([a, b, c].allSatisfy { (0.7...0.8).contains($0) })
+    }
+
 }

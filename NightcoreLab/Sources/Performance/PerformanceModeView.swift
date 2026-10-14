@@ -516,12 +516,14 @@ struct PerformanceModeView: View {
                         touchEventUptime: TimeInterval) -> Bool {
         let performedVelocity = min(1, max(0.05,
             velocity / 0.85 * sample.defaultVelocity))
-        guard audio.triggerPad(sample.id, velocity: performedVelocity,
+        let expressiveVelocity = audio.expressivePadVelocity(
+            sample.id, velocity: performedVelocity, touchEventUptime: touchEventUptime)
+        guard audio.triggerPad(sample.id, velocity: expressiveVelocity,
                                touchEventUptime: touchEventUptime) else { return false }
         // Output-latency compensation is evaluated only for a recorded hit,
         // never in the sampler's scheduling path.
         if recorder.isRecording {
-            recorder.append(sample, velocity: performedVelocity,
+            recorder.append(sample, velocity: expressiveVelocity,
                             sourceTime: audio.recordedPadSourceTime())
         }
         exportedAudio = nil
