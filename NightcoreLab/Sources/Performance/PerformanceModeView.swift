@@ -49,6 +49,7 @@ private final class PadTouchControl: UIControl {
     private var state = PadTouchState()
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
         for touch in touches where state.begin(ObjectIdentifier(touch)) {
             onStrike?(touch, self)
         }
@@ -56,11 +57,13 @@ private final class PadTouchControl: UIControl {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
         for touch in touches { _ = state.end(ObjectIdentifier(touch)) }
         onPressedChanged?(state.isPressed)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
         for touch in touches { _ = state.end(ObjectIdentifier(touch)) }
         onPressedChanged?(state.isPressed)
     }
@@ -93,6 +96,11 @@ private struct PadTouchSurface: UIViewRepresentable {
             self.onPressedChanged = onPressedChanged
             self.haptics = haptics
             if haptics { generator.prepare() }
+        }
+
+        func updateHaptics(_ enabled: Bool) {
+            if enabled && !haptics { generator.prepare() }
+            haptics = enabled
         }
 
         func begin(_ touch: UITouch, in view: UIView) {
@@ -135,7 +143,7 @@ private struct PadTouchSurface: UIViewRepresentable {
     func updateUIView(_ view: PadTouchControl, context: Context) {
         context.coordinator.onDown = onDown
         context.coordinator.onPressedChanged = onPressedChanged
-        context.coordinator.haptics = haptics
+        context.coordinator.updateHaptics(haptics)
         view.accessibilityLabel = "Tocar \(name)"
     }
 }
