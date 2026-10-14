@@ -122,6 +122,7 @@ struct TurbulentMarbleView: View {
     /// frames keep their existing frozen, time-deterministic path.
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
+    var creatorControls: CreatorControls = .neutral
 
     @State private var start = Date()
     @State private var motion = MarbleMotionState()
@@ -179,8 +180,10 @@ struct TurbulentMarbleView: View {
             resolved = MaterialResolver.resolve(material, timestamp: 0, parameters: parameters)
                 .replacingBeatPulse(materialBound(beatPulse, 0...1))
         }
-        guard live, liveMeter != nil else { return resolved }
-        return MarbleLiveResponse.apply(resolved, levels: levels, mode: reactionMode)
+        let liveOutput = live && liveMeter != nil
+            ? MarbleLiveResponse.apply(resolved, levels: levels, mode: reactionMode)
+            : resolved
+        return MarbleCreatorResponse.apply(liveOutput, controls: creatorControls)
     }
 
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
@@ -336,5 +339,32 @@ private final class MarbleMotionState {
         }
         lastDate = date
         return Float(phase)
+    }
+}
+
+
+/// Real Creator sliders are projected into the same GPU uniforms consumed by
+/// the visible background. Identity sliders preserve existing pixels.
+enum MarbleCreatorResponse {
+    static func apply(_ frame: MaterialFrame, controls: CreatorControls) -> MaterialFrame {
+        guard controls.isValid, !controls.isNeutral else { return frame }
+        let mapped = ControlMapping.resolve(controls)
+        let p = frame.parameters
+        let updated = VisualParameterSet(
+            distortion: p.distortion * mapped.intensity + mapped.distortion,
+            beatPulse: p.beatPulse * mapped.beatSensitivity,
+            pulseDecay: p.pulseDecay, offbeatScale: p.offbeatScale,
+            warpAmount: p.warpAmount * mapped.intensity + mapped.movement,
+            brightnessBoost: p.brightnessBoost * mapped.intensity + mapped.brightness,
+            stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
+            speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
+            scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
+            voidThreshold: p.voidThreshold, combStretch: p.combStretch,
+            bilateralSymmetry: p.bilateralSymmetry, halftoneGrating: p.halftoneGrating)
+        return MaterialFrame(materialID: frame.materialID, type: frame.type,
+                             parameters: updated, intensity: frame.intensity,
+                             audioResponse: frame.audioResponse, timestamp: frame.timestamp,
+                             seed: frame.seed, controls: frame.controls,
+                             signals: frame.signals, viewport: frame.viewport)
     }
 }
