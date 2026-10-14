@@ -395,7 +395,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                     TurbulentMarbleView(
                         theme: MarbleTheme(appTheme: appTheme),
                         speed: 0.6,
-                        maxFPS: 30,
+                        maxFPS: 60,
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
@@ -589,6 +589,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
         .environment(\.colorScheme, .dark)
         .onAppear {
+            creativePresetID = CreativePresetCatalog.liveSelection(creativePresetID)
             lyricsStore.attach(clock: clock)
             updateKaraokePresentation(showsKaraoke)
             lyricsStore.scoringPitchShift = { [weak audio] in Double(audio?.pitch ?? 0) }
