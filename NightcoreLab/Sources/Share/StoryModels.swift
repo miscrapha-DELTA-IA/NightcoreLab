@@ -48,6 +48,9 @@ struct StoryVideoRequest: Sendable {
     /// Frozen once per editor selection; shared by preview and export.
     var layoutPolicy: CompositionLayoutPolicy? = nil
     var creatorParameters: CreatorParameterSet = .neutral
+    /// Frozen source-time pad take, including the optional magnetic grid.
+    /// Copy-on-write immutable value used by preview and offline exporter.
+    var padPerformance: PerformanceTimeline? = nil
 
     /// The active line's typography layer at a lyric time. The ONE builder
     /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).
@@ -81,10 +84,14 @@ struct StoryVideoRequest: Sendable {
                        audioTimeline: AudioFeatureTimeline?,
                        rhythm: RhythmAnalysisResult?,
                        runtime: CompositionRuntime? = nil) -> ResolvedCompositionFrame? {
-        (runtime ?? renderRuntime)?.frame(
+        guard let base = (runtime ?? renderRuntime)?.frame(
             at: frame.elapsed, audioTimeline: audioTimeline,
             typography: typographyLayer(atLyricTime: frame.lyricTime),
-            rhythmAnalysis: rhythm)
+            rhythmAnalysis: rhythm) else { return nil }
+        guard let material = base.materialFrame else { return base }
+        let accent = PadVisualAccentResolver.at(
+            sourceTime: frame.sourceTime, timeline: padPerformance)
+        return base.withMaterial(PadVisualAccentResolver.apply(material, accent: accent))
     }
 
     /// Source-compatible view of the frozen composition.
@@ -133,7 +140,8 @@ enum StoryRequestBuilder {
                      includeAudio: Bool,
                      reactiveProgram: CreativeVisualProgram? = nil,
                      reactiveSourceURL: URL? = nil,
-                     creativePresetID: String = CreativePresetCatalog.defaultID) throws -> StoryVideoRequest {
+                     creativePresetID: String = CreativePresetCatalog.defaultID,
+                     padPerformance: PerformanceTimeline? = nil) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
         let safeSpeed = max(Double(speed), 0.1)
         let start = min(max(playbackTime, 0), sourceDuration)
@@ -156,6 +164,10 @@ enum StoryRequestBuilder {
             reactiveProgram: reactiveProgram,
             reactiveSourceURL: reactiveSourceURL
         )
+        // A sound/visual pad take is frozen with this request. No capture
+        // or cache read is performed during preview and export frame loops.
+        request.padPerformance = padPerformance?.isValid == true
+            ? padPerformance : nil
         // One immutable source of truth for preview and the StoryFrameRenderer
         // scene. Do not rebuild from a potentially changed preset during export.
         // Always freeze a composition (ported from Stage 10A): with audio
