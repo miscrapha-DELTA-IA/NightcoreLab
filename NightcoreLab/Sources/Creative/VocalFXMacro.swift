@@ -61,8 +61,15 @@ enum VocalMonitorSafety {
                        latency: TimeInterval) -> Bool {
         guard latency.isFinite, latency >= 0, latency <= 0.040,
               !outputs.isEmpty else { return false }
-        return outputs.allSatisfy {
-            switch $0.portType {
+        return allows(portTypes: outputs.map(\.portType), latency: latency)
+    }
+
+    static func allows(portTypes: [AVAudioSession.Port],
+                       latency: TimeInterval) -> Bool {
+        guard latency.isFinite, latency >= 0, latency <= 0.040,
+              !portTypes.isEmpty else { return false }
+        return portTypes.allSatisfy {
+            switch $0 {
             case .headphones, .headsetMic, .usbAudio:
                 return true
             default:
