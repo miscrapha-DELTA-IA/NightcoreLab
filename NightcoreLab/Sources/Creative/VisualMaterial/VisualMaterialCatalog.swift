@@ -66,29 +66,29 @@ enum VisualMaterialCatalog {
         audioMapping: .init(energyToBrightness: 0.035, beatToPulse: 0.45))
     static let voidGloss = VisualMaterial(
         id: "void-gloss", name: "Void Gloss",
-        parameters: .init(beatPulse: 0.42, voidThreshold: 0.64,
-                          stripingFrequency: 22, stripingMix: 0.28),
+        parameters: .init(beatPulse: 0.42, stripingFrequency: 22,
+                          stripingMix: 0.28, voidThreshold: 0.64),
         audioMapping: .init(energyToBrightness: 0.04, beatToPulse: 0.45))
     static let terrazzoMagma = VisualMaterial(
         id: "terrazzo-magma", name: "Terrazzo Magma",
-        parameters: .init(beatPulse: 0.4, speckleIntensity: 0.78,
-                          embossStrength: 0.58, stripingFrequency: 10,
-                          stripingMix: 0.18),
+        parameters: .init(beatPulse: 0.4, stripingFrequency: 10,
+                          stripingMix: 0.18, speckleIntensity: 0.78,
+                          embossStrength: 0.58),
         audioMapping: .init(energyToBrightness: 0.04, beatToPulse: 0.45))
     static let airbrushMirage = VisualMaterial(
         id: "airbrush-mirage", name: "Airbrush Mirage",
-        parameters: .init(beatPulse: 0.28, diffusionSoftness: 0.84,
-                          scanlineDensity: 96, embossStrength: 0.12),
+        parameters: .init(beatPulse: 0.28, embossStrength: 0.12,
+                          scanlineDensity: 96, diffusionSoftness: 0.84),
         audioMapping: .init(energyToBrightness: 0.035, beatToPulse: 0.45))
     static let grooveEbru = VisualMaterial(
         id: "groove-ebru", name: "Groove Ebru",
-        parameters: .init(beatPulse: 0.35, combStretch: 5.2,
-                          stripingFrequency: 38, stripingMix: 0.35),
+        parameters: .init(beatPulse: 0.35, stripingFrequency: 38,
+                          stripingMix: 0.35, combStretch: 5.2),
         audioMapping: .init(energyToBrightness: 0.04, beatToPulse: 0.45))
     static let cymaticRorschach = VisualMaterial(
         id: "cymatic-rorschach", name: "Cymatic Rorschach",
-        parameters: .init(beatPulse: 0.28, bilateralSymmetry: 1,
-                          halftoneGrating: 76, diffusionSoftness: 0.22),
+        parameters: .init(beatPulse: 0.28, diffusionSoftness: 0.22,
+                          bilateralSymmetry: 1, halftoneGrating: 76),
         audioMapping: .init(energyToBrightness: 0.03, beatToPulse: 0.45))
 
     /// "liquid-dream" (a Marble recipe) was removed: the Liquid Dream
