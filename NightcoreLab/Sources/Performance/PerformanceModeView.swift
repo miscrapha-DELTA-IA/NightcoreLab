@@ -156,7 +156,7 @@ struct PerformanceModeView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var recorder = PerformanceRecorder()
+    private var recorder: PerformanceRecorder { audio.performanceRecorder }
     @State private var grooveStrength: Double = 0
     @State private var padRhythm: RhythmAnalysisResult?
     @State private var padRhythmTask: Task<Void, Never>?
@@ -249,11 +249,11 @@ struct PerformanceModeView: View {
                         }
                         HStack(spacing: 12) {
                             Button {
-                                if recorder.isRecording { recorder.stop() }
+                                if recorder.isRecording { audio.stopPadTake() }
                                 else {
                                     recordedSourceRevision = audio.playbackSourceRevision
                                     recordedClip = sourceClip
-                                    recorder.start()
+                                    audio.beginPadTake()
                                     exportedAudio = nil
                                 }
                             } label: {
@@ -265,6 +265,16 @@ struct PerformanceModeView: View {
                                         accent.opacity(0.20), in: RoundedRectangle(cornerRadius: 12))
                             }
                             .accessibilityIdentifier("performance.record")
+                            if !recorder.isRecording && !recorder.events.isEmpty {
+                                Button {
+                                    recordedSourceRevision = audio.playbackSourceRevision
+                                    audio.beginPadTake(overdub: true)
+                                    exportedAudio = nil
+                                } label: {
+                                    Label("Overdub", systemImage: "plus.circle.fill")
+                                }
+                                .accessibilityIdentifier("performance.overdub")
+                            }
 
                             if !recorder.events.isEmpty && !recorder.isRecording,
                                let payload = recorder.shareJSON(
@@ -280,6 +290,15 @@ struct PerformanceModeView: View {
                                 }
                                 .accessibilityIdentifier("performance.shareEvents")
                             }
+                        }
+                        if !recorder.takeEventIDs.isEmpty && !recorder.isRecording {
+                            Button(role: .destructive) {
+                                audio.clearLastPadTake()
+                                exportedAudio = nil
+                            } label: {
+                                Label("Limpar último take", systemImage: "arrow.uturn.backward")
+                            }
+                            .accessibilityIdentifier("performance.clearLastTake")
                         }
                         HStack {
                             Text("Groove assistido")
@@ -380,7 +399,7 @@ struct PerformanceModeView: View {
             sourceClip = nil
             recordedClip = nil
             confirmSharingRights = false
-            if recorder.isRecording { recorder.stop() }
+            if recorder.isRecording { audio.stopPadTake() }
             exportedAudio = nil
             prepareMusicalGrid()
         }
@@ -397,7 +416,7 @@ struct PerformanceModeView: View {
             padRhythmTask?.cancel()
             padRhythm = nil
             heldPads.removeAll()
-            recorder.stop()
+            audio.stopPadTake()
             audio.endPerformanceMode()
         }
     }
