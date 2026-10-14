@@ -284,7 +284,7 @@ private struct CreatorStudioPanel: View {
                         for: descriptor,
                         requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints)
                     if !Task.isCancelled, audio.playbackSourceRevision == revision {
-                        harmonicKey = expression?.key
+                        harmonicKey = expression.key
                     }
                 }
             }
@@ -678,7 +678,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 sourceRevision: descriptor.sourceRevision)
             guard !Task.isCancelled, track.id == expectedTrack else { return }
             lyricsStore.scoring.setReference(
-                key: expression?.key, melody: expression?.melodicFeatures)
+                key: expression.key, melody: expression.melodicFeatures)
             suggestedSongProfile = saved ?? SongCreativeProfileResolver.suggest(
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision,
