@@ -118,8 +118,13 @@ struct TurbulentMarbleView: View {
     var pulseDriver: MarblePulseDriver? = nil
     /// Frozen composition output shared by Story preview and export.
     var materialFrame: MaterialFrame? = nil
+    /// Connected to AudioEngineManager's ONE live output tap; source/Story
+    /// frames keep their existing frozen, time-deterministic path.
+    var liveMeter: AudioVisualLiveMeter? = nil
+    var reactionMode: CreativePreset.AudioReaction = .off
 
     @State private var start = Date()
+    @State private var motion = MarbleMotionState()
     @Environment(\.energyBudget) private var energyBudget
 
 
@@ -136,12 +141,19 @@ struct TurbulentMarbleView: View {
                     // Pausing the TimelineView freezes its date; never replace
                     // the accumulated phase with zero on Notification Center
                     // transitions, or the procedural flow visibly restarts.
-                    let elapsed = context.date.timeIntervalSince(startedAt ?? start)
-                    marbleFrame(time: Float(elapsed * speed), resolved: resolvedFrame(live: true))
+                    let levels = liveMeter?.snapshot() ?? .silence
+                    let gain = MarbleLiveResponse.gain(reactionMode)
+                    let now = motion.advance(
+                        date: context.date, start: startedAt ?? start,
+                        baseSpeed: speed, bass: levels.bass * gain)
+                    marbleFrame(
+                        time: now,
+                        resolved: resolvedFrame(live: true, levels: levels))
                 }
             }
         }
-        .id(theme)
+        // Material and theme may change without destroying the accumulated
+        // liquid phase (or restarting at t=0 during foreground transitions).
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.6), value: theme)
         .ignoresSafeArea(edges: extendIntoSafeArea ? .all : [])
@@ -152,16 +164,23 @@ struct TurbulentMarbleView: View {
     /// The ONE MaterialFrame handed to the shader for this render frame
     /// (resolved once; previously uniforms and material were assembled by two
     /// parallel functions, calling the live driver twice).
-    private func resolvedFrame(live: Bool) -> MaterialFrame {
+    private func resolvedFrame(live: Bool,
+                               levels: LiveAudioLevels = .silence) -> MaterialFrame {
         if let materialFrame { return materialFrame }
         let parameters = CreativeParameterFrame(
             playerGlow: 0, marbleDistortion: reactiveDistortion,
             lyricKinetics: 0, particleEmission: 0)
-        if live, let pulseDriver { return pulseDriver.frame(parameters: parameters) }
-        // Still images and non-reactive callers: the same resolver (and audio
-        // route); an explicit pulse from the older API is carried over.
-        return MaterialResolver.resolve(material, timestamp: 0, parameters: parameters)
-            .replacingBeatPulse(materialBound(beatPulse, 0...1))
+        let resolved: MaterialFrame
+        if live, let pulseDriver {
+            resolved = pulseDriver.frame(parameters: parameters)
+        } else {
+            // Still images and non-reactive callers: same resolver. MaterialFrame
+            // must preserve authored texture uniforms when replacing a pulse.
+            resolved = MaterialResolver.resolve(material, timestamp: 0, parameters: parameters)
+                .replacingBeatPulse(materialBound(beatPulse, 0...1))
+        }
+        guard live, liveMeter != nil else { return resolved }
+        return MarbleLiveResponse.apply(resolved, levels: levels, mode: reactionMode)
     }
 
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
@@ -255,5 +274,67 @@ private extension Color {
         self.init(red: Double((value >> 16) & 0xFF) / 255,
                   green: Double((value >> 8) & 0xFF) / 255,
                   blue: Double(value & 0xFF) / 255)
+    }
+}
+
+
+/// Pure visible-output transform. Audio is sampled from the live PCM mixer;
+/// these coefficients are deliberately conservative (no flash/strobe).
+enum MarbleLiveResponse {
+    static func gain(_ mode: CreativePreset.AudioReaction) -> Double {
+        switch mode {
+        case .off: return 0
+        case .subtle: return 0.25
+        case .responsive: return 0.55
+        }
+    }
+
+    static func apply(_ frame: MaterialFrame, levels: LiveAudioLevels,
+                      mode: CreativePreset.AudioReaction) -> MaterialFrame {
+        let gain = gain(mode)
+        guard gain > 0 else { return frame }
+        let low = materialBound(levels.bass, 0...1)
+        let loud = materialBound(levels.rms, 0...1)
+        let beat = materialBound(levels.onset, 0...1)
+        let p = frame.parameters
+        let adjusted = VisualParameterSet(
+            distortion: p.distortion + gain * low * 0.22,
+            beatPulse: max(p.beatPulse, gain * (beat * 0.58 + low * 0.32)),
+            pulseDecay: p.pulseDecay, offbeatScale: p.offbeatScale,
+            warpAmount: p.warpAmount,
+            brightnessBoost: p.brightnessBoost + gain * (loud * 0.10 + beat * 0.045),
+            stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
+            speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
+            scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
+            voidThreshold: p.voidThreshold, combStretch: p.combStretch,
+            bilateralSymmetry: p.bilateralSymmetry, halftoneGrating: p.halftoneGrating)
+        return MaterialFrame(materialID: frame.materialID, type: frame.type,
+                             parameters: adjusted, intensity: frame.intensity,
+                             audioResponse: frame.audioResponse, timestamp: frame.timestamp,
+                             seed: frame.seed, controls: frame.controls,
+                             signals: frame.signals, viewport: frame.viewport)
+    }
+}
+
+/// Reference state is stable for the lifetime of the ON-SCREEN shader; it
+/// does not notify SwiftUI on each frame. TimelineView is the sole scheduler.
+@MainActor
+private final class MarbleMotionState {
+    private var phase: Double = 0
+    private var lastDate: Date?
+    private var smoothedBass = 0.0
+    func advance(date: Date, start: Date, baseSpeed: Double,
+                 bass: Double) -> Float {
+        if let lastDate {
+            // Paused/inactive periods do not integrate a jump on foreground.
+            let dt = min(0.1, max(0, date.timeIntervalSince(lastDate)))
+            let target = materialBound(bass, 0...1)
+            smoothedBass += (target - smoothedBass) * min(1, dt * 11)
+            phase += dt * baseSpeed * (1 + 0.38 * smoothedBass)
+        } else {
+            phase = max(0, date.timeIntervalSince(start)) * baseSpeed
+        }
+        lastDate = date
+        return Float(phase)
     }
 }
