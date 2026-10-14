@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 /// UIKit touch-down events avoid a SwiftUI button's release-to-trigger delay.
 /// Distinct UIControls allow independent touches on different pads.
@@ -72,6 +73,9 @@ struct PerformanceModeView: View {
     @State private var confirmSharingRights = false
     @State private var latencyResult: PadLatencySummary?
     @State private var latencyCaptureActive = false
+    @State private var latencyScenario: PadCaptureScenario = .warm
+    @State private var activeLatencyContext: PadLatencyCaptureContext?
+    @State private var latencySessions: [PadLatencyEvidenceSession] = []
 
     private let grid = [GridItem(.flexible(), spacing: 12),
                         GridItem(.flexible(), spacing: 12),
@@ -249,6 +253,7 @@ struct PerformanceModeView: View {
         .onDisappear {
             audio.padLatencyProbe.cancel()
             latencyCaptureActive = false
+            activeLatencyContext = nil
             clipTask?.cancel()
             exportTask?.cancel()
             heldPads.removeAll()
@@ -408,18 +413,72 @@ struct PerformanceModeView: View {
                 .font(.caption.weight(.bold)).tracking(1.5)
             Text("Mede toque → envio ao motor de áudio, não o instante audível do alto-falante.")
                 .font(.caption2).foregroundStyle(.secondary)
+            Picker("Cenário", selection: $latencyScenario) {
+                ForEach(PadCaptureScenario.allCases) { scenario in
+                    Text(scenario.rawValue).tag(scenario)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(latencyCaptureActive)
+            .accessibilityIdentifier("performance.latencyScenario")
+
             Button(latencyCaptureActive ? "Encerrar medição" : "Iniciar medição") {
                 if latencyCaptureActive {
-                    latencyResult = audio.padLatencyProbe.finish()
+                    let result = audio.padLatencyProbe.finish()
+                    latencyResult = result
+                    if let context = activeLatencyContext {
+                        let session = PadLatencyEvidenceSession(context: context, summary: result)
+                        latencySessions = Array((latencySessions + [session]).suffix(6))
+                    }
+                    activeLatencyContext = nil
                     latencyCaptureActive = false
                 } else {
                     latencyResult = nil
+                    // Capture only stable route categories. Device names can
+                    // contain personally identifying text, so omit them.
+                    let kinds = AVAudioSession.sharedInstance().currentRoute.outputs
+                        .map { $0.portType.rawValue }
+                    activeLatencyContext = PadLatencyCaptureContext(
+                        scenario: latencyScenario,
+                        outputRouteType: kinds.isEmpty ? "unknown" : kinds.joined(separator: ","),
+                        engineRunningAtStart: audio.isAudioEngineRunning,
+                        musicPlayingAtStart: audio.isPlaying,
+                        hapticsEnabled: haptics)
                     audio.padLatencyProbe.start()
                     latencyCaptureActive = true
                 }
             }
             .font(.subheadline.weight(.semibold))
             .accessibilityIdentifier("performance.latencyCapture")
+            if latencyCaptureActive {
+                Text("Capturando \(latencyScenario.rawValue.lowercased()). Execute 40–60 toques; inclua rolls e multitouch.")
+                    .font(.caption2).foregroundStyle(accent)
+            }
+            if !latencySessions.isEmpty {
+                HStack(spacing: 14) {
+                    ShareLink(item: PadLatencyEvidenceReport.render(latencySessions),
+                              subject: Text("NightcoreLab Latency Evidence")) {
+                        Label("Compartilhar relatório", systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityIdentifier("performance.latencyShare")
+                    Button {
+                        UIPasteboard.general.string = PadLatencyEvidenceReport.render(latencySessions)
+                    } label: {
+                        Label("Copiar", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityIdentifier("performance.latencyCopy")
+                }
+                .font(.caption.weight(.semibold))
+                Text("\(latencySessions.count) sessão(ões) coletada(s). Os valores não incluem a saída acústica.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Button("Limpar resultados") {
+                    latencySessions.removeAll()
+                    latencyResult = nil
+                }
+                .font(.caption2)
+                .disabled(latencyCaptureActive)
+                .accessibilityIdentifier("performance.latencyClear")
+            }
             if let result = latencyResult {
                 Group {
                     Text("Disparos: \(result.accepted) • não aceitos: \(result.failed)")
