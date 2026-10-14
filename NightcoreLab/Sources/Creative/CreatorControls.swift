@@ -156,7 +156,14 @@ enum ControlMapping {
                 warpAmount: base.warpAmount * parameters.intensity + parameters.movement,
                 brightnessBoost: base.brightnessBoost * parameters.intensity +
                     parameters.brightness +
-                    (parameters.energyResponse - 1) * material.audioResponse.brightness)
+                    (parameters.energyResponse - 1) * material.audioResponse.brightness,
+                stripingFrequency: base.stripingFrequency, stripingMix: base.stripingMix,
+                speckleIntensity: base.speckleIntensity, embossStrength: base.embossStrength,
+                scanlineDensity: base.scanlineDensity,
+                diffusionSoftness: base.diffusionSoftness,
+                voidThreshold: base.voidThreshold, combStretch: base.combStretch,
+                bilateralSymmetry: base.bilateralSymmetry,
+                halftoneGrating: base.halftoneGrating)
             let signal = material.signals
             let signals = MaterialReactiveSignals(
                 energy: materialBound(signal.energy * parameters.energyResponse *

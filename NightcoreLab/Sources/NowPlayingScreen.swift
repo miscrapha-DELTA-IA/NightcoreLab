@@ -65,6 +65,92 @@ struct TrackInfo: Equatable {
     }
 }
 
+
+/// View-navigation state used directly by the centered Criar button.
+/// Opening Studio never mutates theme, preset, transport, or audio effects.
+struct CreatorStudioRoute: Equatable {
+    var isPresented = false
+    mutating func toggle() { isPresented.toggle() }
+}
+
+/// Actual editable Creator surface, backed by the existing experience and
+/// package store rather than a new preset catalogue.
+private struct CreatorStudioPanel: View {
+    let store: CreativePresetPackageStore
+    @Binding var selectedPresetID: String
+    @Binding var reactionMode: CreativePreset.AudioReaction
+    @Binding var controls: CreatorControls
+    let suggestedPresetID: String?
+
+    @State private var experiences: [CreativeExperiencePreset] =
+        CreativePresetCatalog.selectableExperiences
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Experiências visuais. Seu tema e a música continuam inalterados.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let suggestedPresetID,
+                       CreativePresetCatalog.selectedExperience(id: suggestedPresetID) != nil {
+                        Button("Aplicar sugestão: \(suggestedPresetID)") {
+                            selectedPresetID = suggestedPresetID
+                        }
+                        .accessibilityIdentifier("creator.suggested")
+                    }
+                    ForEach(experiences) { experience in
+                        Button {
+                            selectedPresetID = experience.id
+                        } label: {
+                            HStack {
+                                Text(experience.name)
+                                Spacer()
+                                if experience.id == selectedPresetID {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("creator.preset.\(experience.id)")
+                    }
+                    Divider()
+                    Picker("Ritmo visual", selection: $reactionMode) {
+                        Text("Desligado").tag(CreativePreset.AudioReaction.off)
+                        Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                        Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Controles do material").font(.headline)
+                    ForEach([CreatorControl.materialIntensity, .distortion, .brightness,
+                             .movement, .beatSensitivity, .energyResponse]) { control in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(control.label).font(.caption)
+                            Slider(value: Binding(
+                                get: { controls.value(for: control) },
+                                set: { controls.set($0, for: control) }), in: 0...1)
+                            .accessibilityIdentifier("creator.control.\(control.rawValue)")
+                        }
+                    }
+                    Button("Restaurar controles") { controls = .neutral }
+                        .font(.caption.weight(.semibold))
+                }
+                .padding(20)
+            }
+            .navigationTitle("Criar · Studio")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Concluído") { dismiss() }
+                }
+            }
+            .task {
+                experiences = await CreativePresetCatalog.availableExperiences(from: store)
+            }
+        }
+        .accessibilityIdentifier("creator.studio")
+    }
+}
+
 // MARK: - Tela
 
 struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsContent: View>: View {
@@ -98,6 +184,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
     @State private var liveUniforms = CreativeLiveUniforms()
+    @State private var creatorRoute = CreatorStudioRoute()
+    @State private var creatorControls = CreatorControls()
     @State private var suggestedSongProfile: SongCreativeProfile?
     @State private var activeSongProfile: SongCreativeProfile?
     @State private var songProfileStore = CreativePresetPackageStore()
@@ -120,6 +208,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
+    private var selectedVisualMaterial: VisualMaterial {
+        CreativePresetCatalog.material(selection: creativePresetID)
+    }
+    private var effectivePlayerBackgroundStyle: PlayerBackgroundStyle {
+        selectedVisualMaterial.parameters.usesProceduralTexture
+            ? .turbulent : playerBackgroundStyle
+    }
     private var motion: Animation {
         reduceMotion ? .easeInOut(duration: 0.25) : .spring(duration: 0.65, bounce: 0.15)
     }
@@ -137,7 +232,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         reactiveDistortion: distortion,
                         pulseDriver: pulse,
-                        material: CreativePresetCatalog.material(selection: creativePresetID)
+                        material: selectedVisualMaterial,
+                        liveMeter: audio.liveVisualMeter,
+                        reactionMode: isPlaying ? reactionMode : .off,
+                        creatorControls: creatorControls
                     )
                 }
                 .transition(.opacity)
@@ -153,9 +251,11 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
-                        material: CreativePresetCatalog.material(selection: creativePresetID),
-
-                        pulseDriver: pulse
+                        material: selectedVisualMaterial,
+                        pulseDriver: pulse,
+                        liveMeter: audio.liveVisualMeter,
+                        reactionMode: isPlaying ? reactionMode : .off,
+                        creatorControls: creatorControls
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -242,7 +342,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .overlay(alignment: .top) {
             if isTrackLoaded {
                 Button {
-                    applySuggestedSongProfile()
+                    creatorRoute.toggle()
                 } label: {
                     Label("Criar", systemImage: "wand.and.stars")
                         .font(.caption.weight(.semibold))
@@ -251,14 +351,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         .background(.regularMaterial, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("songCreativeProfile.apply")
-                .contextMenu {
-                    ForEach(CreativePresetCatalog.selectableExperiences) { experience in
-                        Button(experience.name) {
-                            applySuggestedSongProfile(experienceID: experience.id)
-                        }
-                    }
-                }
+                .accessibilityIdentifier("creator.openStudio")
                 .padding(.top, 18)
             }
         }
@@ -288,6 +381,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 .padding(.top, 16)
                 .padding(.trailing, 16)
             }
+        }
+        .sheet(isPresented: $creatorRoute.isPresented) {
+            CreatorStudioPanel(
+                store: songProfileStore,
+                selectedPresetID: $creativePresetID,
+                reactionMode: $reactionMode,
+                controls: $creatorControls,
+                suggestedPresetID: suggestedSongProfile?.visualPresetID)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(item: $shareResult) { payload in
             ShareExportService(image: payload.image)
@@ -374,11 +477,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision,
                 analysis: analysis, expression: expression)
-            // A previous explicit choice belongs to this exact source and can
-            // be restored automatically. Do not override a newer user tap.
-            if saved != nil && activeSongProfile == nil {
-                applySuggestedSongProfile()
-            }
+            // Saved profiles are suggestions, not silent overrides of a
+            // currently selected palette or the independent AppTheme.
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
     }
@@ -408,7 +508,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         // Existing AppStorage keys are the source of truth for visual and
         // typography consumers, including frozen Story requests.
         creativePresetID = profile.visualPresetID
-        appTheme = CreativePresetCatalog.recipe(for: profile.visualPresetID).preset.theme
+        // Do not overwrite AppTheme with the source recipe theme.
         karaokeTypography = profile.typographyPreset.style
         storyTypography = profile.typographyPreset.font
         reactionMode = profile.reactionProfile
@@ -443,12 +543,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .background {
             if !showsKaraoke {
                 LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
-                    PlayerBackgroundView(style: playerBackgroundStyle,
-                                         imageURL: track.coverURL,
-                                         theme: appTheme,
-                                         frozenTime: frozenShareMarblePhase,
-                                         reactiveDistortion: distortion,
-                                         pulseDriver: pulse, material: CreativePresetCatalog.material(selection: creativePresetID))
+                    PlayerBackgroundView(
+                        style: effectivePlayerBackgroundStyle,
+                        imageURL: track.coverURL, theme: appTheme,
+                        frozenTime: frozenShareMarblePhase,
+                        reactiveDistortion: distortion,
+                        pulseDriver: pulse, material: selectedVisualMaterial,
+                        liveMeter: audio.liveVisualMeter,
+                        reactionMode: isPlaying ? reactionMode : .off,
+                        creatorControls: creatorControls)
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -462,7 +565,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 sourceURL: audio.visualAnalysisURL,
                 clock: clock,
                 theme: appTheme,
-                backgroundStyle: playerBackgroundStyle,
+                backgroundStyle: effectivePlayerBackgroundStyle,
                 featureEngine: visualEngine,
                 onParameters: { next in liveUniforms.update(next) },
                 onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) },
@@ -745,6 +848,9 @@ private struct BackgroundLayer: View {
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
+    var liveMeter: AudioVisualLiveMeter? = nil
+    var reactionMode: CreativePreset.AudioReaction = .off
+    var creatorControls: CreatorControls = .neutral
 
     @Environment(\.energyBudget) private var energyBudget
 
@@ -759,7 +865,10 @@ private struct BackgroundLayer: View {
                                     reactiveDistortion: reactiveDistortion,
                                     material: material,
 
-                                    pulseDriver: pulseDriver)
+                                    pulseDriver: pulseDriver,
+                                    liveMeter: liveMeter,
+                                    reactionMode: reactionMode,
+                                    creatorControls: creatorControls)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)

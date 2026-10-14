@@ -111,6 +111,10 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    /// Read by the visible Player at visual FPS; published nowhere on the
+    /// render/audio thread. Uses the existing main mixer output, not a second graph.
+    @ObservationIgnored let liveVisualMeter = AudioVisualLiveMeter()
+    @ObservationIgnored private var liveMeterTapInstalled = false
 
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
@@ -123,8 +127,8 @@ final class AudioEngineManager {
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
-    /// Read-only source for opt-in utility-priority visual analysis.
-    /// No audio node or tap is installed.
+    /// Read-only source for offline visual evidence. Live RMS/bass are
+    /// independently obtained from the existing mixer through liveVisualMeter.
     var visualAnalysisURL: URL? { sourceURL }
     @ObservationIgnored private var needsScheduling = true
     @ObservationIgnored private var scheduleGeneration = 0
@@ -189,6 +193,7 @@ final class AudioEngineManager {
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
+        removeVisualMeterTap()
         engine.stop()
         padRuntime.clearSourceClip()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
@@ -368,6 +373,7 @@ final class AudioEngineManager {
         defer { transportSignposter.endInterval("Audio resume", interval) }
         do {
             if !engine.isRunning { try engine.start() }
+            installVisualMeterTap()
             if performanceModePresented { padRuntime.primeVoices() }
             if needsScheduling {
                 // Preserve the existing replay-from-start behavior at EOF.
@@ -618,6 +624,24 @@ final class AudioEngineManager {
         lastKnownTime = 0
         scheduledStartTime = 0
         lyricsClock.didSeek(to: 0)
+    }
+
+    /// One output tap, shared by all background instances. Main actor controls
+    /// installation; the CoreAudio callback never captures the engine or UI.
+    private func installVisualMeterTap() {
+        guard !liveMeterTapInstalled else { return }
+        let meter = liveVisualMeter
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) {
+            buffer, _ in meter.consume(buffer)
+        }
+        liveMeterTapInstalled = true
+    }
+
+    private func removeVisualMeterTap() {
+        guard liveMeterTapInstalled else { return }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        liveMeterTapInstalled = false
+        liveVisualMeter.reset()
     }
 
     // MARK: - Now Playing (Tela de Bloqueio / Control Center)

@@ -8,6 +8,168 @@ import XCTest
 final class RuntimeStabilizationTests: XCTestCase {
 
     @MainActor
+    func testStage18C3VisibleMaterialBindingsAndCreatorNavigation() throws {
+        let expected: [(String, [String])] = [
+            ("neon-pulse", ["#040406", "#FF0088", "#00FF9D", "#00E5FF", "#F8FAFC"]),
+            ("agate-zebra", ["#FFFFFF", "#050507", "#6C7A9C", "#F28C28", "#FFFFFF"]),
+            ("void-gloss", ["#000000", "#00D2E6", "#00E5A3", "#F4DCE0", "#FF1A1A"]),
+            ("terrazzo-magma", ["#0B0D11", "#E87A1E", "#D91414", "#D8DEC8", "#081E4A"]),
+            ("airbrush-mirage", ["#121214", "#FF3B30", "#8E7CFF", "#FFB340", "#EBF2D5"]),
+            ("groove-ebru", ["#008B94", "#F5A623", "#EE4035", "#F8B195", "#26292C"]),
+            ("cymatic-rorschach", ["#050714", "#6699CC", "#F5F9FF", "#6699CC", "#050714"])
+        ]
+        let cyber = PlayerBackgroundView(style: .turbulent, imageURL: nil,
+                                         theme: .cyber,
+                                         material: CreativePresetCatalog.material(selection: "cyber-night"))
+            .renderedSurface
+        XCTAssertFalse(cyber.textured)
+        for (id, hex) in expected {
+            let card = PlayerBackgroundView(style: .blurred, imageURL: nil,
+                                            theme: .cyber,
+                                            material: CreativePresetCatalog.material(selection: id))
+            let actual = card.renderedSurface
+            XCTAssertEqual(actual.materialID, id)
+            XCTAssertEqual(actual.paletteHex, hex)
+            XCTAssertTrue(actual.textured)
+            XCTAssertEqual(card.effectiveStyle, .turbulent)
+            XCTAssertNotEqual(actual.parameters, cyber.parameters)
+            XCTAssertNotEqual(actual.paletteHex, cyber.paletteHex)
+            let shader = MarbleSurfaceBinding.resolve(material: card.resolvedMaterial)
+            XCTAssertEqual(shader, actual) // identical data bound by TurbulentMarbleView
+        }
+        var route = CreatorStudioRoute()
+        let selectedPreset = "void-gloss"
+        let theme: AppTheme = .ultraviolet
+        route.toggle()
+        XCTAssertTrue(route.isPresented)
+        XCTAssertEqual(selectedPreset, "void-gloss")
+        XCTAssertEqual(theme, .ultraviolet)
+        route.toggle()
+        XCTAssertFalse(route.isPresented)
+    }
+
+    @MainActor
+    func testStage18C3LivePCMMeterChangesOnScreenShaderWithModeGain() throws {
+        let meter = AudioVisualLiveMeter()
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 1024))
+        buffer.frameLength = 1024
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        for i in 0..<1024 {
+            channel[i] = 0.45 * sin(Float(i) * 2 * .pi * 120 / 48_000)
+        }
+        meter.consume(buffer)
+        let level = meter.snapshot()
+        XCTAssertGreaterThan(level.rms, 0)
+        XCTAssertGreaterThan(level.bass, 0)
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse,
+                                            timestamp: 2)
+        let off = MarbleLiveResponse.apply(base, levels: level, mode: .off)
+        let subtle = MarbleLiveResponse.apply(base, levels: level, mode: .subtle)
+        let reactive = MarbleLiveResponse.apply(base, levels: level, mode: .responsive)
+        XCTAssertEqual(off, base)
+        XCTAssertGreaterThan(subtle.parameters.distortion, off.parameters.distortion)
+        XCTAssertGreaterThan(reactive.parameters.distortion, subtle.parameters.distortion)
+        XCTAssertGreaterThan(reactive.parameters.brightnessBoost,
+                             subtle.parameters.brightnessBoost)
+        XCTAssertEqual(reactive.parameters.stripingFrequency,
+                       base.parameters.stripingFrequency)
+        var controls = CreatorControls()
+        controls.set(0.9, for: .brightness)
+        let edited = MarbleCreatorResponse.apply(reactive, controls: controls)
+        XCTAssertGreaterThan(edited.parameters.brightnessBoost,
+                             reactive.parameters.brightnessBoost)
+        XCTAssertEqual(edited.parameters.stripingMix, reactive.parameters.stripingMix)
+        meter.reset()
+        XCTAssertEqual(meter.snapshot(), .silence)
+    }
+
+
+
+    func testExp7CuratedMaterialsHaveUniquePalettesAndTextureTopology() throws {
+        let ids = ["neon-pulse", "agate-zebra", "void-gloss", "terrazzo-magma",
+                   "airbrush-mirage", "groove-ebru", "cymatic-rorschach"]
+        let selected = ids.compactMap(CreativePresetCatalog.selectedExperience(id:))
+        XCTAssertEqual(selected.count, ids.count)
+        let materials = ids.map(CreativePresetCatalog.material(selection:))
+        XCTAssertEqual(materials.map(\.id), ids)
+        XCTAssertTrue(materials.allSatisfy { $0.parameters.usesProceduralTexture })
+        XCTAssertEqual(VisualMaterialCatalog.curatedPalettes.count, 7)
+        let palettes = ids.compactMap { VisualMaterialCatalog.curatedPalettes[$0]?.hex }
+        XCTAssertEqual(palettes.count, ids.count)
+        XCTAssertEqual(Set(palettes).count, ids.count)
+        XCTAssertTrue(palettes.allSatisfy {
+            $0.count == 5 && $0.allSatisfy {
+                $0.count == 7 && $0.first == "#" &&
+                $0.dropFirst().allSatisfy { $0.isHexDigit }
+            }
+        })
+        XCTAssertEqual(VisualMaterialCatalog.curatedPalettes["neon-pulse"]?.hex,
+                       ["#040406", "#FF0088", "#00FF9D", "#00E5FF", "#F8FAFC"])
+        XCTAssertEqual(VisualMaterialCatalog.curatedPalettes["void-gloss"]?.hex,
+                       ["#000000", "#00D2E6", "#00E5A3", "#F4DCE0", "#FF1A1A"])
+        let fingerprints: [VisualParameterSet] = materials.map(\.parameters)
+        XCTAssertEqual(Set(fingerprints.map {
+            "\($0.stripingFrequency),\($0.stripingMix),\($0.speckleIntensity)," +
+            "\($0.embossStrength),\($0.scanlineDensity),\($0.diffusionSoftness)," +
+            "\($0.voidThreshold),\($0.combStretch),\($0.bilateralSymmetry)," +
+            "\($0.halftoneGrating)"
+        }).count, 7)
+        XCTAssertGreaterThan(materials[0].parameters.stripingFrequency, 0)
+        XCTAssertGreaterThan(materials[2].parameters.voidThreshold, 0.5)
+        XCTAssertGreaterThan(materials[3].parameters.speckleIntensity, 0.5)
+        XCTAssertGreaterThan(materials[4].parameters.scanlineDensity, 0)
+        XCTAssertGreaterThan(materials[5].parameters.combStretch, 0)
+        XCTAssertEqual(materials[6].parameters.bilateralSymmetry, 1)
+
+        let cyber = CreativePresetCatalog.material(selection: "cyber-night")
+        XCTAssertFalse(cyber.parameters.usesProceduralTexture)
+        XCTAssertNotEqual(materials[0].parameters, cyber.parameters)
+        XCTAssertNil(VisualMaterialCatalog.curatedPalettes[cyber.id])
+        for material in materials {
+            XCTAssertEqual(try JSONDecoder().decode(
+                VisualMaterial.self, from: JSONEncoder().encode(material)), material)
+            let frame = MaterialResolver.resolve(material, timestamp: 12,
+                                                 reactionGain: 0)
+            XCTAssertEqual(frame.parameters.stripingMix, material.parameters.stripingMix)
+            XCTAssertEqual(frame.parameters.voidThreshold, material.parameters.voidThreshold)
+            XCTAssertEqual(frame.parameters.scanlineDensity, material.parameters.scanlineDensity)
+            XCTAssertEqual(frame.parameters.halftoneGrating, material.parameters.halftoneGrating)
+            XCTAssertEqual(frame.parameters.beatPulse, 0)
+        }
+    }
+
+    func testExp7VisualParameterSetCodableLegacyAndClamping() throws {
+        let wild = VisualParameterSet(
+            stripingFrequency: 999, stripingMix: 7,
+            speckleIntensity: .nan, embossStrength: .infinity,
+            scanlineDensity: 999, diffusionSoftness: -1,
+            voidThreshold: 4, combStretch: 40,
+            bilateralSymmetry: 9, halftoneGrating: 300)
+        XCTAssertEqual(wild.stripingFrequency, 80)
+        XCTAssertEqual(wild.stripingMix, 1)
+        XCTAssertEqual(wild.speckleIntensity, 0)
+        XCTAssertEqual(wild.embossStrength, 0)
+        XCTAssertEqual(wild.scanlineDensity, 160)
+        XCTAssertEqual(wild.diffusionSoftness, 0)
+        XCTAssertEqual(wild.voidThreshold, 1)
+        XCTAssertEqual(wild.combStretch, 8)
+        XCTAssertEqual(wild.bilateralSymmetry, 1)
+        XCTAssertEqual(wild.halftoneGrating, 120)
+        XCTAssertEqual(try JSONDecoder().decode(
+            VisualParameterSet.self, from: JSONEncoder().encode(wild)), wild)
+        let legacy = Data(#"{"distortion":0.2,"beatPulse":0.6,"pulseDecay":6,"offbeatScale":0.7,"warpAmount":0.18,"brightnessBoost":0.1}"#.utf8)
+        let restored = try JSONDecoder().decode(VisualParameterSet.self, from: legacy)
+        XCTAssertEqual(restored, VisualParameterSet(distortion: 0.2, beatPulse: 0.6))
+        XCTAssertFalse(restored.usesProceduralTexture)
+        XCTAssertFalse(VisualParameterSet.neutral.usesProceduralTexture)
+    }
+
+
+
+    @MainActor
     func testExp5MusicalGridAndOptionalQuantizeAreDeterministic() throws {
         let beats = (0..<12).map {
             RhythmAnalysisResult.BeatEvent(time: Double($0) * 0.5,

@@ -58,7 +58,13 @@ struct MaterialFrame: Equatable, Sendable {
             parameters: VisualParameterSet(
                 distortion: p.distortion, beatPulse: pulse, pulseDecay: p.pulseDecay,
                 offbeatScale: p.offbeatScale, warpAmount: p.warpAmount,
-                brightnessBoost: p.brightnessBoost),
+                brightnessBoost: p.brightnessBoost,
+                stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
+                speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
+                scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
+                voidThreshold: p.voidThreshold, combStretch: p.combStretch,
+                bilateralSymmetry: p.bilateralSymmetry,
+                halftoneGrating: p.halftoneGrating),
             intensity: intensity, audioResponse: audioResponse, timestamp: timestamp,
             seed: seed, controls: controls, signals: signals,
             viewport: viewport)
