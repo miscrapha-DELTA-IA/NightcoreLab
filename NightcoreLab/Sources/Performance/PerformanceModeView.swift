@@ -83,8 +83,11 @@ struct PerformanceModeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+            // Instrument-grade touch surfaces must NOT be descendants of a
+            // scrolling container: UIScrollView may defer UIControl touchDown
+            // while deciding whether the gesture intends to scroll.
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("LIVE PERFORMANCE")
                             .font(.caption.weight(.heavy)).tracking(3)
@@ -110,7 +113,7 @@ struct PerformanceModeView: View {
                     .padding(12)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
 
-                    LazyVGrid(columns: grid, spacing: 12) {
+                    LazyVGrid(columns: grid, spacing: 8) {
                         ForEach(audio.performanceKit.samples) { sample in
                             pad(sample)
                         }
@@ -118,8 +121,17 @@ struct PerformanceModeView: View {
                             pad(sourceClip.descriptor)
                         }
                     }
+                    .accessibilityIdentifier("performance.fixedPadDeck")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
 
-                    sourceClipPicker
+                // Settings, samples, recording and diagnostics may scroll.
+                // Pad touch surfaces above are siblings, NOT scroll children.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        sourceClipPicker
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -220,8 +232,9 @@ struct PerformanceModeView: View {
                     Text("Os sons são sínteses originais do app — nenhum sample comercial.")
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.50))
+                    }
+                    .padding(20)
                 }
-                .padding(20)
             }
             .background(Color(red: 0.045, green: 0.055, blue: 0.075))
             .navigationTitle("Performance")
@@ -250,6 +263,9 @@ struct PerformanceModeView: View {
             if recorder.isRecording { recorder.stop() }
             exportedAudio = nil
         }
+        .onAppear {
+            audio.beginPerformanceMode()
+        }
         .onDisappear {
             audio.padLatencyProbe.cancel()
             latencyCaptureActive = false
@@ -258,7 +274,7 @@ struct PerformanceModeView: View {
             exportTask?.cancel()
             heldPads.removeAll()
             recorder.stop()
-            audio.stopPerformancePads()
+            audio.endPerformanceMode()
         }
     }
 
@@ -382,7 +398,7 @@ struct PerformanceModeView: View {
             }
             .allowsHitTesting(false)
         }
-        .frame(height: 102)
+        .frame(height: 90)
         .overlay {
             PadTouchSurface(name: sample.name, onDown: { touchTimestamp in
                 strike(sample, touchEventUptime: touchTimestamp)
