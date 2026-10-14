@@ -8,6 +8,25 @@ final class PlayerBackgroundStyleTests: XCTestCase {
         XCTAssertEqual(PlayerBackgroundStyle.turbulent.symbolName, "waveform.path")
     }
 
+    @MainActor
+    func testActualPlayerBackgroundRoutesAllCuratedTexturesToMetal() {
+        for id in ["neon-pulse", "agate-zebra", "void-gloss",
+                   "terrazzo-magma", "airbrush-mirage",
+                   "groove-ebru", "cymatic-rorschach"] {
+            let card = PlayerBackgroundView(
+                style: .blurred, imageURL: nil, theme: .cyber,
+                material: CreativePresetCatalog.material(selection: id))
+            XCTAssertEqual(card.effectiveStyle, .turbulent, id)
+            XCTAssertTrue(card.renderedSurface.textured, id)
+            XCTAssertEqual(card.renderedSurface.materialID, id)
+            XCTAssertEqual(card.renderedSurface.paletteHex?.count, 5)
+        }
+        let cyber = PlayerBackgroundView(
+            style: .turbulent, imageURL: nil, theme: .cyber,
+            material: CreativePresetCatalog.material(selection: "cyber-night"))
+        XCTAssertFalse(cyber.renderedSurface.textured)
+    }
+
     func testCarouselIncludesFluidModeAndLoops() {
         XCTAssertEqual(PlayerBackgroundStyle.marquee.next, .turbulent)
         XCTAssertEqual(PlayerBackgroundStyle.turbulent.next, .blurred)
