@@ -133,8 +133,10 @@ struct TurbulentMarbleView: View {
                     minimumInterval: 1.0 / max(min(maxFPS, energyBudget.maxVisualFPS), 1.0),
                     paused: isPaused || !energyBudget.allowsDecorativeMotion
                 )) { context in
-                    let elapsed = isPaused || !energyBudget.allowsDecorativeMotion ? 0 :
-                        context.date.timeIntervalSince(startedAt ?? start)
+                    // Pausing the TimelineView freezes its date; never replace
+                    // the accumulated phase with zero on Notification Center
+                    // transitions, or the procedural flow visibly restarts.
+                    let elapsed = context.date.timeIntervalSince(startedAt ?? start)
                     marbleFrame(time: Float(elapsed * speed), resolved: resolvedFrame(live: true))
                 }
             }
