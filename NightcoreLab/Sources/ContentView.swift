@@ -317,7 +317,10 @@ struct ContentView: View {
             }
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
         }
-        .task { downloader.warmUp() }
+        .task {
+            selectedCreativePresetID = CreativePresetCatalog.liveSelection(selectedCreativePresetID)
+            downloader.warmUp()
+        }
     }
 
     private var playerPresentations: some View {
