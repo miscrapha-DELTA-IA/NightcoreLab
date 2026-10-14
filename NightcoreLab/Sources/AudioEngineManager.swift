@@ -205,7 +205,12 @@ final class AudioEngineManager {
         padRuntime.connect(to: engine, mixer: performanceMixer)
         engine.prepare()
         if performanceModePresented {
-            if (try? engine.start()) != nil { padRuntime.primeVoices() }
+            do {
+                try engine.start()
+                padRuntime.primeVoices()
+            } catch {
+                // The next pad attempt can retry if an interruption stopped it.
+            }
         }
         needsScheduling = true
         scheduledStartTime = 0
