@@ -72,11 +72,11 @@ struct PlayerBackgroundView: View {
         ZStack {
             if effectiveStyle == .turbulent {
                 // O modo fluido do cartão usa o mesmo shader Metal do fundo
-                // principal; 30 fps e scrim escuro preservam os controles.
+                // principal; frame pacing follows EnergyBudget and thermal limits.
                 TurbulentMarbleView(
                     theme: MarbleTheme(appTheme: theme),
                     speed: 0.6,
-                    maxFPS: 30,
+                    maxFPS: 60,
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
                     reactiveDistortion: reactiveDistortion,
