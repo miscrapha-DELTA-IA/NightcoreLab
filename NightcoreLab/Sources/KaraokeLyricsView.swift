@@ -213,7 +213,8 @@ struct KaraokeLyricsView: View {
             let activeLineID = entryAnchored ? store.activeLineIndex :
                 KaraokeEntryAnchor.activeLineID(
                     in: store.lines, sourceTime: clock.lyricTime,
-                    userOffset: store.userOffset)
+                    userOffset: store.userOffset,
+                    visualLead: clock.isPlaying ? KaraokeScrollPolicy.visualLead : 0)
             let fittedTheme: KaraokeTheme = {
                 var adjusted = theme
                 adjusted.font = typography.font(
@@ -396,7 +397,8 @@ struct KaraokeLyricsView: View {
         if decision.animated {
             // A spring begins only on a new active verse ID. TimelineView
             // word ticks do not issue or reset this transaction.
-            withAnimation(.spring(response: decision.duration, dampingFraction: 0.86)) {
+            withAnimation(.spring(response: min(0.48, decision.duration),
+                                  dampingFraction: 0.86)) {
                 animateLineTransition = true
                 proxy.scrollTo(id, anchor: .center)
             }

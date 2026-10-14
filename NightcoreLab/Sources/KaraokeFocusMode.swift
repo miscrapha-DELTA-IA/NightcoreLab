@@ -66,6 +66,10 @@ struct KaraokeScrollDecision: Equatable {
 /// Source-LRC spacing is used only to bound how long a visual animation may
 /// outlive the next verse. EnginePlaybackClock remains the sole playback clock.
 enum KaraokeScrollPolicy {
+    /// A presentation-only head start. The source clock, word fill and seek
+    /// timestamps remain untouched. Display-link publishes only on ID change.
+    static let visualLead: TimeInterval = 0.14
+
     static func decision(lines: [TimedLyricLine], targetID: Int,
                          lastRequestedID: Int?, reason: KaraokeScrollReason,
                          reduceMotion: Bool, allowsDecorativeMotion: Bool) -> KaraokeScrollDecision? {
