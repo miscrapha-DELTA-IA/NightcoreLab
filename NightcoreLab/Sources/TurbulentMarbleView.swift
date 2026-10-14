@@ -341,18 +341,18 @@ enum MarbleLiveResponse {
 /// does not notify SwiftUI on each frame. TimelineView is the sole scheduler.
 @MainActor
 private final class MarbleMotionState {
-    private var phase: Double = 0
+    private var flow = MonotonicFlowClock()
     private var lastDate: Date?
     func advance(date: Date, start: Date, baseSpeed: Double) -> Float {
         if let lastDate {
-            // Beat release never slows or reverses the animation clock.
-            let dt = min(0.1, max(0, date.timeIntervalSince(lastDate)))
-            phase += dt * max(0, baseSpeed)
+            // Beat release NEVER brakes shader time.
+            flow.advance(elapsed: date.timeIntervalSince(lastDate), speed: baseSpeed)
         } else {
-            phase = max(0, date.timeIntervalSince(start)) * max(0, baseSpeed)
+            flow.advance(elapsed: date.timeIntervalSince(start),
+                         speed: baseSpeed, clampBackgroundJump: false)
         }
         lastDate = date
-        return Float(phase)
+        return Float(flow.phase)
     }
 }
 
