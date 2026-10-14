@@ -27,6 +27,8 @@ enum LyricsStatus: Equatable, Sendable { case idle, searching, ready, unavailabl
 @Observable
 final class LyricsStore {
 
+    @ObservationIgnored let scoring = KaraokeScoringSession()
+
     private(set) var trackID: String?
     private(set) var lines: [TimedLyricLine] = []
     private(set) var hasWordSync = false
@@ -41,6 +43,8 @@ final class LyricsStore {
     /// O Player define: toque numa linha -> seek.
     @ObservationIgnored var seekHandler: (@MainActor (TimeInterval) -> Void)?
 
+    @ObservationIgnored var scoringPitchShift: (() -> Double)?
+
     @ObservationIgnored private var clock: PlaybackClock?
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -53,6 +57,7 @@ final class LyricsStore {
     func beginLoading(trackID: String) {
         loadTask?.cancel()
         if trackID != self.trackID {
+            scoring.resetForTrack()
             self.trackID = trackID
             lines = []
             activeLineIndex = nil
@@ -64,6 +69,7 @@ final class LyricsStore {
 
     func markUnavailable(trackID: String) {
         guard self.trackID == trackID else { return }
+        scoring.stop()
         status = .unavailable
         lines = []
         activeLineIndex = nil
@@ -79,6 +85,7 @@ final class LyricsStore {
             return
         }
         loadTask?.cancel()
+        scoring.stop()
         self.trackID = trackID
         self.needsReview = needsReview
         status = .searching
@@ -101,6 +108,7 @@ final class LyricsStore {
 
     func clear() {
         loadTask?.cancel()
+        scoring.resetForTrack()
         trackID = nil; lines = []; activeLineIndex = nil; hasWordSync = false
         status = .idle; needsReview = false; isPlaying = false
     }
@@ -128,6 +136,7 @@ final class LyricsStore {
         if playing != isPlaying { isPlaying = playing }
 
         let t = clock.lyricTime + userOffset
+        scoring.advance(time: t, playing: playing, lines: lines, pitchShift: scoringPitchShift?() ?? 0)
         let idx = lines.activeIndex(at: t)
         if idx != activeLineIndex {
             KaraokePerformanceProbe.shared.activeLineChanged()

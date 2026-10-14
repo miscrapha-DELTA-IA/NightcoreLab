@@ -182,6 +182,7 @@ final class AudioEngineManager {
               (1...2).contains(file.processingFormat.channelCount) else {
             throw AudioEngineError.unsupportedAudio
         }
+        endKaraokeMicrophone()
         stopPlayback()
         audioFile = file
         sourceURL = url
@@ -216,6 +217,86 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+    }
+
+    // MARK: Opt-in karaoke microphone (the existing live engine only)
+
+    private(set) var karaokeMicrophoneActive = false
+    @ObservationIgnored private var karaokeCapture: KaraokeMicrophoneCapture?
+    @ObservationIgnored private var karaokeMicGeneration = 0
+    @ObservationIgnored var karaokeCompletion: (() -> Void)?
+
+    func beginKaraokeMicrophone() async -> Bool {
+        guard !karaokeMicrophoneActive else { return true }
+        karaokeMicGeneration &+= 1
+        let generation = karaokeMicGeneration
+        let allowed = await AVAudioApplication.requestRecordPermission()
+        guard allowed, generation == karaokeMicGeneration, !Task.isCancelled else { return false }
+        let resume = isPlaying
+        pause()
+        suspendGraphForKaraoke()
+        let capture = KaraokeMicrophoneCapture()
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
+            try session.setActive(true)
+            let input = engine.inputNode
+            let format = input.outputFormat(forBus: 0)
+            guard format.channelCount > 0, format.sampleRate > 0 else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            let clock = lyricsClock
+            input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
+                // No DSP, Task creation or observable publication on this callback.
+                guard clock.isPlaying else { return }
+                capture.capture(buffer, sourceTime: clock.lyricTime)
+            }
+            karaokeCapture = capture
+            karaokeMicrophoneActive = true
+            cancelIdleStop()
+            try engine.start()
+            lyricsClock.refreshOutputLatency()
+            if resume { play() }
+            return true
+        } catch {
+            capture.stop()
+            endKaraokeMicrophone()
+            configureSession()
+            if resume { play() }
+            return false
+        }
+    }
+
+    private func suspendGraphForKaraoke() {
+        scheduleGeneration += 1
+        player.stop()
+        padRuntime.stopAll()
+        engine.stop()
+        needsScheduling = true
+        scheduledStartTime = lastKnownTime
+        lyricsClock.didPause(at: lastKnownTime)
+    }
+
+    func karaokeVoiceFrame() -> KaraokeVoiceFrame {
+        karaokeCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
+    }
+
+    func endKaraokeMicrophone() {
+        karaokeMicGeneration &+= 1 // also cancels an outstanding permission request
+        karaokeCompletion = nil
+        guard karaokeMicrophoneActive else { return }
+        let resume = isPlaying
+        if resume { pause() }
+        suspendGraphForKaraoke()
+        engine.inputNode.removeTap(onBus: 0)
+        karaokeCapture?.stop(); karaokeCapture = nil
+        karaokeMicrophoneActive = false
+        configureSession()
+        lyricsClock.refreshOutputLatency()
+        if resume { play() }
+        else if performanceModePresented { try? engine.start() }
+        else { scheduleIdleStop() }
     }
 
     // MARK: Performance pads
@@ -403,14 +484,14 @@ final class AudioEngineManager {
 
     private func scheduleIdleStop() {
         cancelIdleStop()
-        guard !performanceModePresented else { return }
+        guard !performanceModePresented, !karaokeMicrophoneActive else { return }
         let generation = idleStopGeneration
         let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
                   generation == self.idleStopGeneration,
-                  !self.isPlaying, !self.performanceModePresented else { return }
+                  !self.isPlaying, !self.performanceModePresented, !self.karaokeMicrophoneActive else { return }
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
@@ -596,6 +677,7 @@ final class AudioEngineManager {
     private func playbackFinished(generation: Int) {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
         guard generation == scheduleGeneration else { return }
+        karaokeCompletion?()
         player.stop()
         // Pads are an independent performance surface: ending the song must
         // not choke a cymbal or 808 that the user is still hearing.
@@ -606,6 +688,7 @@ final class AudioEngineManager {
         lyricsClock.didSeek(to: 0)
         setupNowPlaying()
         scheduleIdleStop()
+        endKaraokeMicrophone()
         playbackCompletionCount += 1
     }
 
@@ -782,6 +865,7 @@ final class AudioEngineManager {
                     let wasPlaying = self.isPlaying
                     let source = self.sourceURL
                     self.pause()
+                    self.endKaraokeMicrophone()
                     // Pause invalidates any previous request. Capture *after*
                     // it so a later user pause or replacement cancels resumption.
                     self.interruptedSourceURL = wasPlaying ? source : nil
@@ -821,6 +905,7 @@ final class AudioEngineManager {
                 if removed {
                     self.interruptedSourceURL = nil
                     self.pause()
+                    self.endKaraokeMicrophone()
                 }
             }
         }
