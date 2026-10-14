@@ -63,3 +63,49 @@ final class MarbleThemeIntegrationTests: XCTestCase {
         }
     }
 }
+
+/// Stage 24: one proven selector, with all other authored recipes archived.
+final class Stage24LiveExperienceTests: XCTestCase {
+    func testOnlyCyberNightThroughAtmosphericSmokeAreSelectable() {
+        let ids = CreativePresetCatalog.selectableExperiences.map(\.id)
+        XCTAssertEqual(ids, CreativePresetCatalog.liveExperienceIDs)
+        XCTAssertEqual(ids.first, "cyber-night")
+        XCTAssertEqual(ids.last, "atmospheric-smoke")
+        XCTAssertEqual(ids.count, 7)
+        for id in ["agate-zebra", "void-gloss", "terrazzo-magma",
+                   "airbrush-mirage", "groove-ebru", "cymatic-rorschach"] {
+            XCTAssertFalse(ids.contains(id))
+            // Old shared presets and frozen export formats must still decode.
+            XCTAssertNotNil(CreativePresetCatalog.selectedExperience(id: id))
+            XCTAssertEqual(CreativePresetCatalog.liveSelection(id), "cyber-night")
+        }
+        XCTAssertEqual(CreativePresetCatalog.liveSelection("original"), "original")
+    }
+
+    @MainActor
+    func testEveryLiveExperienceFollowsLightningBoltPalette() {
+        for experience in CreativePresetCatalog.selectableExperiences {
+            let material = experience.visualMaterial
+            for theme in AppTheme.allCases {
+                let next = theme.next
+                let before = MarbleTheme(appTheme: theme).palette
+                let after = MarbleTheme(appTheme: next).palette
+                XCTAssertFalse(before.body == after.body && before.glow == after.glow,
+                               "\(experience.id): \(theme) did not update its accent")
+                let first = TurbulentMarbleView.shaderPalette(
+                    materialID: material.id, theme: MarbleTheme(appTheme: theme),
+                    authored: VisualMaterialCatalog.curatedPalettes[material.id]?.hex)
+                let second = TurbulentMarbleView.shaderPalette(
+                    materialID: material.id, theme: MarbleTheme(appTheme: next),
+                    authored: VisualMaterialCatalog.curatedPalettes[material.id]?.hex)
+                if material.id == "neon-pulse" {
+                    XCTAssertEqual(first?.count, 5)
+                    XCTAssertNotEqual(first?[1], second?[1])
+                    XCTAssertNotEqual(first?[2], second?[2])
+                } else {
+                    XCTAssertNil(first, "Only Neon Pulse may use fixed textured stops in live UI")
+                }
+            }
+        }
+    }
+}
