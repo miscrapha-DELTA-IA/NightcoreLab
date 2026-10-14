@@ -76,7 +76,7 @@ jobs:
     # Manual dispatch can force the entire delivery gate on any branch.
     # Release/final PRs and pushes to main also retain the original pipeline.
     if: >-
-      ${{ (github.event_name == 'workflow_dispatch' || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/'))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
+      ${{ (github.event_name == 'workflow_dispatch' || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
     runs-on: macos-latest
     timeout-minutes: 30
 
