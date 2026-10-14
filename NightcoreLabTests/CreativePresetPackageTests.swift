@@ -425,7 +425,8 @@ final class CreativePresetPackageTests: XCTestCase {
             assetID: profile.assetID, sourceRevision: "changed-revision")
         XCTAssertNil(stale)
         // Song-specific JSON must not leak into the package listing.
-        XCTAssertTrue(await reopened.userPackages().isEmpty)
+        let packages = await reopened.userPackages()
+        XCTAssertTrue(packages.isEmpty)
     }
 
 }
