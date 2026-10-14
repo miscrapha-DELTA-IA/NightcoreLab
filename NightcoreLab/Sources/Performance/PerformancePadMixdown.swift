@@ -10,6 +10,8 @@ enum PerformancePadMixdown {
         let sample: SampleDescriptor
         let startFrame: Int64
         var endFrame: Int64
+        /// Bounded outgoing voice release; preserves the original cut instant.
+        var releaseFrames: Int64
         let velocity: Float
         let voice: Int
     }
@@ -50,9 +52,17 @@ enum PerformancePadMixdown {
             guard let selection = allocator.allocate(
                 id: sample.id, chokeGroup: sample.chokeGroup,
                 duration: sample.duration, at: startSeconds) else { continue }
-            for voice in selection.chokeIndices + [selection.voiceIndex] {
-                if let previous = latestByVoice[voice] {
-                    hits[previous].endFrame = min(hits[previous].endFrame, startFrame)
+            for interrupted in selection.interrupted {
+                if let previous = latestByVoice[interrupted.voiceIndex] {
+                    let cutFrame = min(hits[previous].endFrame, startFrame)
+                    // Mirror the 8ms outgoing release lane of PadAudioRuntime,
+                    // even though the offline mix can overlap without nodes.
+                    let originalEnd = hits[previous].startFrame +
+                        Int64((hits[previous].sample.duration * sampleRate).rounded())
+                    let releaseLength = Int64((PadAudioRuntime.releaseSeconds * sampleRate).rounded())
+                    hits[previous].endFrame = cutFrame
+                    hits[previous].releaseFrames = max(0,
+                        min(releaseLength, originalEnd - cutFrame))
                 }
             }
             latestByVoice[selection.voiceIndex] = hits.count
@@ -62,6 +72,7 @@ enum PerformancePadMixdown {
             hits.append(ScheduledHit(
                 sample: sample, startFrame: startFrame,
                 endFrame: startFrame + Int64((sample.duration * sampleRate).rounded()),
+                releaseFrames: 0,
                 velocity: event.velocity, voice: selection.voiceIndex))
         }
         return hits
@@ -113,11 +124,11 @@ enum PerformancePadMixdown {
             let length = Int(min(4096, totalFrames - frame))
             for i in 0..<length { left[i] = 0; right[i] = 0 }
             for hit in hits where hit.startFrame < frame + Int64(length) &&
-                                  hit.endFrame > frame {
+                                  hit.endFrame + hit.releaseFrames > frame {
                 guard let source = sourceBuffers[hit.sample.id],
                       let channel = source.floatChannelData?[0] else { continue }
                 let lower = max(frame, hit.startFrame)
-                let upper = min(frame + Int64(length), hit.endFrame)
+                let upper = min(frame + Int64(length), hit.endFrame + hit.releaseFrames)
                 let ratio = PadSampleSynthesizer.sampleRate / sampleRate
                 let gain = hit.sample.gain * hit.velocity
                 for time in lower..<upper {
@@ -127,7 +138,14 @@ enum PerformancePadMixdown {
                     let weight = Float(input - Double(index))
                     let v0 = channel[index]
                     let v1 = channel[min(index + 1, Int(source.frameLength) - 1)]
-                    let value = gain * (v0 + (v1 - v0) * weight)
+                    let releaseGain: Float
+                    if hit.releaseFrames > 0 && time >= hit.endFrame {
+                        let t = Float(time - hit.endFrame) / Float(hit.releaseFrames)
+                        releaseGain = max(0, 1 - t) * max(0, 1 - t)
+                    } else {
+                        releaseGain = 1
+                    }
+                    let value = gain * releaseGain * (v0 + (v1 - v0) * weight)
                     let destination = Int(time - frame)
                     left[destination] += value
                     right[destination] += value
