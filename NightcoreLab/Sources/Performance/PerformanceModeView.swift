@@ -28,9 +28,16 @@ enum PadExpressiveness {
         } else {
             return min(1, max(0.05, base))
         }
-        let levels: [Float] = [1, 0.982, 1.014, 0.994]
-        let gain = 0.60 + 0.40 * normalized
-        return min(1, max(0.05, base * gain * levels[abs(hitIndex % levels.count)]))
+        // Fixed four-step gain alternation; no per-touch Array allocation.
+        let accent: Float
+        switch hitIndex % 4 {
+        case 1: accent = 0.982
+        case 2: accent = 1.014
+        case 3: accent = 0.994
+        default: accent = 1
+        }
+        let gain: Float = 0.60 + 0.40 * normalized
+        return min(1, max(0.05, base * gain * accent))
     }
 }
 
@@ -128,9 +135,6 @@ private struct PadTouchSurface: UIViewRepresentable {
     func updateUIView(_ view: PadTouchControl, context: Context) {
         context.coordinator.onDown = onDown
         context.coordinator.onPressedChanged = onPressedChanged
-        if !context.coordinator.haptics && haptics {
-            // Prep happens on a view update, never on the audio hot path.
-        }
         context.coordinator.haptics = haptics
         view.accessibilityLabel = "Tocar \(name)"
     }
