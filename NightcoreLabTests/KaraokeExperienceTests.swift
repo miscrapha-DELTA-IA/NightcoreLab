@@ -4,6 +4,40 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    @MainActor
+    func testPassiveKaraokeScoresTrackEnergyWithoutMicrophoneOrHarmonicClaims() {
+        let session = KaraokeScoringSession()
+        let lines = [TimedLyricLine(id: 0, start: 0, end: 2,
+            words: [.init(id: 0, text: "Ritmo", start: 0, end: 2, spaceAfter: false)], precision: .word)]
+        session.setKaraokePresented(true, lines: lines, at: 0, trackEnergy: { 0.12 })
+        XCTAssertNil(session.microphoneFrame)
+        for step in 1...42 {
+            session.advance(time: Double(step) / 20, playing: true, lines: lines)
+        }
+        XCTAssertEqual(session.mode, .passive)
+        XCTAssertGreaterThan(session.snapshot.totalScore, 0)
+        XCTAssertGreaterThan(session.snapshot.bestCombo, 0)
+        XCTAssertFalse(session.snapshot.hasHarmonicReference)
+        session.setKaraokePresented(false, lines: lines, at: 2.1, trackEnergy: { 0 })
+        XCTAssertFalse(session.isHUDVisible)
+    }
+
+    func testVocalFXLivesInsideLegendaSheetInsteadOfPlayerOverlay() throws {
+        // Architecture regression: inspect the real composed surfaces, including
+        // the sheet handoff. This also catches reintroducing the old overlay.
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let sources = root.appendingPathComponent("NightcoreLab/Sources")
+        let player = try String(contentsOf: sources.appendingPathComponent("NowPlayingScreen.swift"))
+        let lyrics = try String(contentsOf: sources.appendingPathComponent("LyricsView.swift"))
+        let panel = try String(contentsOf: sources.appendingPathComponent("LyricsControlCenter.swift"))
+        XCTAssertFalse(player.contains("if vocalMacroBarVisible"))
+        let button = try XCTUnwrap(player.components(separatedBy: "private var micButton: some View {").last)
+        XCTAssertFalse(button.contains("beginVocalCapture"))
+        XCTAssertTrue(lyrics.contains(".sheet(isPresented: $showLyricsControlCenter"))
+        XCTAssertTrue(lyrics.contains("audio: audio"))
+        XCTAssertTrue(panel.contains("lyrics.controls.vocalFX"))
+    }
+
     func testSpotlightIsDefaultAndCodable() throws {
         let style = KaraokeFocusMode.spotlight
         XCTAssertEqual(KaraokeFocusMode.allCases, [.spotlight, .classic])

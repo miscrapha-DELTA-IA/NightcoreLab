@@ -348,7 +348,7 @@ extension CreativePresetCatalog {
         let authored = user.filter { !reserved.contains($0.id) }.compactMap {
             try? CreativeExperiencePreset(package: $0)
         }
-        return originals + experiencePresets + authored
+        return originals + selectableExperiences + authored
     }
 }
 
@@ -356,9 +356,25 @@ extension CreativePresetCatalog {
 // MARK: - Stage 12.5: one selection for recipes and complete experiences
 
 extension CreativePresetCatalog {
-    /// Complete experiences offered next to the four recipes. They share the
-    /// existing `creativePresetID` preference: there is no second preset system.
-    static var selectableExperiences: [CreativeExperiencePreset] { experiencePresets }
+    /// The seven iPhone-validated experiences are the ONLY built-in choices.
+    /// Retain archived models for decoding previously exported presets and
+    /// preserving Stage 13/EXP-7 material test and export contracts.
+    static let liveExperienceIDs: [String] = [
+        "cyber-night", "liquid-dream", "neon-pulse", "chrome-night",
+        "organic-pulse", "cyber-marble", "atmospheric-smoke"
+    ]
+    static var selectableExperiences: [CreativeExperiencePreset] {
+        liveExperienceIDs.compactMap { id in experiencePresets.first { $0.id == id } }
+    }
+    static func isLiveExperience(_ id: String) -> Bool {
+        liveExperienceIDs.contains(id)
+    }
+    /// Only migrate now-hidden curated entries. Saved user-created packages
+    /// stay in storage and legacy lookups remain backwards compatible.
+    static func liveSelection(_ id: String) -> String {
+        experiencePresets.contains(where: { $0.id == id }) && !isLiveExperience(id)
+            ? liveExperienceIDs[0] : id
+    }
 
     /// The curated experience behind a selection id; nil for recipes and
     /// unknown ids (which keep resolving to Original through program(for:)).

@@ -326,7 +326,7 @@ struct KaraokeLyricsView: View {
                 }
             }
         }
-        .overlay(alignment: .top) {
+        .safeAreaInset(edge: .top, spacing: 8) {
             KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill)
         }
         .onAppear { store.startTracking() }

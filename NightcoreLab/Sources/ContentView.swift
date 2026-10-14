@@ -317,7 +317,10 @@ struct ContentView: View {
             }
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
         }
-        .task { downloader.warmUp() }
+        .task {
+            selectedCreativePresetID = CreativePresetCatalog.liveSelection(selectedCreativePresetID)
+            downloader.warmUp()
+        }
     }
 
     private var playerPresentations: some View {
@@ -358,7 +361,7 @@ struct ContentView: View {
                 Text("Nightcore Lab")
                     .font(DS.Typography.display)
                     .foregroundStyle(DS.Ink.primary)
-                Text(currentTheme.displayName.uppercased())
+                Text("v24 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -873,7 +876,7 @@ struct ContentView: View {
             }
             Picker("Ritmo visual", selection: $creativeReactionMode) {
                 Text("Desligado").tag(CreativePreset.AudioReaction.off)
-                Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                Text("Fluido").tag(CreativePreset.AudioReaction.subtle)
                 Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
             }
             .pickerStyle(.segmented)
@@ -899,8 +902,10 @@ struct ContentView: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("creative.presetPicker")
                 .onChange(of: selectedCreativePresetID) { _, id in
+                    let liveID = CreativePresetCatalog.liveSelection(id)
+                    if id != liveID { selectedCreativePresetID = liveID; return }
                     karaokeTypographyStyle = CreativePresetCatalog.typographyStyle(
-                        afterSelecting: id, current: karaokeTypographyStyle)
+                        afterSelecting: liveID, current: karaokeTypographyStyle)
                 }
             }
             if let experience = CreativePresetCatalog.selectedExperience(id: selectedCreativePresetID) {

@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import DownloadKit
 import Foundation
+import UIKit
 
 /// Main-actor coordinator; DownloadKit owns URLSession tasks and its serial transfer queue.
 @MainActor
@@ -28,6 +29,7 @@ final class AudioDownloadManager: ObservableObject {
 
     private let transfers: DownloadKit.DownloadManager
     private var cache = TrackAudioCache()
+    private var memoryWarningObserver: NSObjectProtocol?
     private var tracks: [UUID: Track] = [:]
     private var tasks: [UUID: URLSessionDownloadTask] = [:]
     private var attempts: [String: Int] = [:]
@@ -52,11 +54,28 @@ final class AudioDownloadManager: ObservableObject {
         // Foreground selection + one background prefetch at a time.
         transfers.setMaxConcurrentDownloads(2)
         cachedIDs = Set(cache.entries.keys)
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleMemoryPressure()
+                }
+            }
         serialize {
             await withCheckedContinuation { continuation in
                 self.transfers.attachOutstandingDownloadTasks { _ in continuation.resume() }
             }
         }
+    }
+
+    /// Called outside CoreAudio callbacks. No changes to the current source,
+    /// active downloads, pad voice pool or uncommitted transfer files.
+    func handleMemoryPressure() {
+        var protected = Set(tracks.values.map(\.id))
+        if let playingID { protected.insert(playingID) }
+        if let selectedID { protected.insert(selectedID) }
+        cache.evictUnprotected(protecting: protected)
+        cachedIDs = Set(cache.entries.keys)
     }
 
     func cachedTrack(_ track: Track) -> Track {

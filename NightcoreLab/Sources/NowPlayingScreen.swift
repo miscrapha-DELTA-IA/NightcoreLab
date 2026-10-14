@@ -65,6 +65,238 @@ struct TrackInfo: Equatable {
     }
 }
 
+
+
+private struct VocalFXMacroBar: View {
+    @Binding var settings: VocalFXSetting
+    let monitoringSafe: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("VOCAL FX", systemImage: "mic.fill")
+                    .font(.caption.bold())
+                Spacer()
+                Text(monitoringSafe ? "Retorno nos fones" : "Retorno mudo · captura ativa")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(VocalFXPreset.allCases) { preset in
+                        Button {
+                            settings.preset = preset
+                        } label: {
+                            Text(preset.rawValue)
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(settings.preset == preset
+                                    ? Color.pink.opacity(0.36) : Color.white.opacity(0.1),
+                                    in: Capsule())
+                        }
+                        .accessibilityIdentifier("vocalFX.preset.\(preset.id)")
+                    }
+                }
+            }
+            HStack(spacing: 12) {
+                Text("Intensidade").font(.caption2).frame(width: 70, alignment: .leading)
+                Slider(value: Binding(
+                    get: { Double(settings.intensity) },
+                    set: { settings.intensity = Float($0) }),
+                    in: 0...1)
+                .accessibilityIdentifier("vocalFX.intensity")
+                Text("\(Int(settings.intensity * 100))%")
+                    .font(.caption.monospacedDigit()).frame(width: 36)
+            }
+        }
+        .foregroundStyle(.white).padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityIdentifier("vocalFX.macroBar")
+    }
+}
+
+/// View-navigation state used directly by the centered Criar button.
+/// Opening Studio never mutates theme, preset, transport, or audio effects.
+struct CreatorStudioRoute: Equatable {
+    var isPresented = false
+    mutating func toggle() { isPresented.toggle() }
+}
+
+/// Actual editable Creator surface, backed by the existing experience and
+/// package store rather than a new preset catalogue.
+private struct CreatorStudioPanel: View {
+    let store: CreativePresetPackageStore
+    let audio: AudioEngineManager
+    @Binding var selectedPresetID: String
+    @Binding var reactionMode: CreativePreset.AudioReaction
+    @Binding var controls: CreatorControls
+    let suggestedPresetID: String?
+
+    @State private var showPadDeck = false
+    @State private var rhythm: RhythmAnalysisResult?
+    @State private var harmonicKey: KeyAnalysisResult?
+    @State private var loopMessage: String?
+    @State private var experiences: [CreativeExperiencePreset] =
+        CreativePresetCatalog.selectableExperiences
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Experiências visuais. Seu tema e a música continuam inalterados.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let suggestedPresetID,
+                       CreativePresetCatalog.isLiveExperience(suggestedPresetID) {
+                        Button("Aplicar sugestão: \(suggestedPresetID)") {
+                            selectedPresetID = suggestedPresetID
+                        }
+                        .accessibilityIdentifier("creator.suggested")
+                    }
+                    ForEach(experiences) { experience in
+                        Button {
+                            selectedPresetID = experience.id
+                        } label: {
+                            HStack {
+                                Text(experience.name)
+                                Spacer()
+                                if experience.id == selectedPresetID {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("creator.preset.\(experience.id)")
+                    }
+                    Divider()
+                    Text("Performance Pads").font(.headline)
+                    HStack(spacing: 10) {
+                        Button { showPadDeck = true } label: {
+                            Label("Abrir pads", systemImage: "square.grid.3x3.fill")
+                        }
+                        .accessibilityIdentifier("creator.openPads")
+                        Button {
+                            audio.beginPadTake(overdub: true)
+                            showPadDeck = true
+                        } label: {
+                            Label("Overdub", systemImage: "plus.circle.fill")
+                        }
+                        .disabled(audio.performanceRecorder.events.isEmpty ||
+                                  audio.performanceRecorder.isRecording)
+                        .accessibilityIdentifier("creator.overdub")
+                    }
+                    if !audio.performanceRecorder.takeEventIDs.isEmpty {
+                        Button(role: .destructive) {
+                            audio.clearLastPadTake()
+                        } label: {
+                            Label("Limpar último take", systemImage: "arrow.uturn.backward")
+                        }
+                        .accessibilityIdentifier("creator.clearLastTake")
+                    }
+                    Divider()
+                    Text("Quick Loops · 1 toque").font(.headline)
+                    LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], spacing: 8) {
+                        ForEach(CreatorLoopSlot.allCases) { slot in
+                            Button {
+                                guard audio.toggleCreatorLoop(slot, rhythm: rhythm,
+                                                              key: harmonicKey) else {
+                                    loopMessage = "Aguarde a análise de BPM/beat-grid desta música."
+                                    return
+                                }
+                                loopMessage = nil
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: audio.activeCreatorLoops.contains(slot)
+                                          ? "stop.circle.fill" : "play.circle")
+                                    Text(slot.rawValue).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .font(.caption.weight(.semibold)).padding(10)
+                                .background(audio.activeCreatorLoops.contains(slot)
+                                    ? Color.pink.opacity(0.25) : Color.white.opacity(0.09),
+                                    in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            .accessibilityIdentifier("creator.loop.\(slot.id)")
+                        }
+                    }
+                    if let loopMessage {
+                        Text(loopMessage).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if !audio.activeCreatorLoops.isEmpty {
+                        Button("Parar todos os loops") {
+                            audio.stopAllCreatorLoops()
+                        }
+                        .accessibilityIdentifier("creator.stopAllLoops")
+                    }
+                    Divider()
+                    Text("Vocal FX · 1 knob").font(.headline)
+                    VocalFXMacroBar(settings: Binding(
+                        get: { controls.vocalFX },
+                        set: { controls.vocalFX = $0 }),
+                        monitoringSafe: audio.vocalMonitoringEnabled)
+                    Divider()
+                    Picker("Ritmo visual", selection: $reactionMode) {
+                        Text("Desligado").tag(CreativePreset.AudioReaction.off)
+                        Text("Fluido").tag(CreativePreset.AudioReaction.subtle)
+                        Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Controles do material").font(.headline)
+                    ForEach([CreatorControl.materialIntensity, .distortion, .brightness,
+                             .movement, .beatSensitivity, .energyResponse]) { control in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(control.label).font(.caption)
+                            Slider(value: Binding(
+                                get: { controls.value(for: control) },
+                                set: { controls.set($0, for: control) }), in: 0...1)
+                            .accessibilityIdentifier("creator.control.\(control.rawValue)")
+                        }
+                    }
+                    Button("Restaurar controles") { controls = .neutral }
+                        .font(.caption.weight(.semibold))
+                }
+                .padding(20)
+            }
+            .navigationTitle("Criar · Studio")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Concluído") { dismiss() }
+                }
+            }
+            .task {
+                experiences = CreativePresetCatalog.selectableExperiences
+            }
+            .task(id: audio.playbackSourceRevision) {
+                rhythm = nil
+                harmonicKey = nil
+                guard let url = audio.visualAnalysisURL, url.isFileURL else { return }
+                let revision = audio.playbackSourceRevision
+                let analysis = try? await MusicIntelligenceEngine.shared.analysis(for: url)
+                guard !Task.isCancelled, audio.playbackSourceRevision == revision else { return }
+                if analysis?.capabilities[.rhythm] == .available {
+                    rhythm = analysis?.rhythmAnalysis
+                }
+                let descriptor = await Task.detached(priority: .utility) {
+                    try? AudioAssetDescriptor.read(at: url)
+                }.value
+                if let descriptor {
+                    let expression = await ExpressionCache().load(
+                        for: descriptor,
+                        requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints.merging(
+                    [.melody: ExpressionFingerprint(algorithmVersion: 1)]) { current, _ in current })
+                    if !Task.isCancelled, audio.playbackSourceRevision == revision {
+                        harmonicKey = expression.key
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("creator.studio")
+        .sheet(isPresented: $showPadDeck) {
+            PerformanceModeView(audio: audio, accent: .pink)
+        }
+    }
+}
+
 // MARK: - Tela
 
 struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsContent: View>: View {
@@ -90,15 +322,17 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var marbleStartedAt = Date()
     @State private var visualEngine = AudioFeatureEngine()
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
     @State private var liveUniforms = CreativeLiveUniforms()
+    @State private var creatorRoute = CreatorStudioRoute()
+    @State private var creatorControls = CreatorControls()
     @State private var suggestedSongProfile: SongCreativeProfile?
     @State private var activeSongProfile: SongCreativeProfile?
     @State private var songProfileStore = CreativePresetPackageStore()
@@ -121,6 +355,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
+    private var selectedVisualMaterial: VisualMaterial {
+        CreativePresetCatalog.material(selection: creativePresetID)
+    }
+    private var effectivePlayerBackgroundStyle: PlayerBackgroundStyle {
+        selectedVisualMaterial.parameters.usesProceduralTexture
+            ? .turbulent : playerBackgroundStyle
+    }
     private var motion: Animation {
         reduceMotion ? .easeInOut(duration: 0.25) : .spring(duration: 0.65, bounce: 0.15)
     }
@@ -138,7 +379,11 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         frozenTime: frozenShareMarblePhase,
                         reactiveDistortion: distortion,
                         pulseDriver: pulse,
-                        material: CreativePresetCatalog.material(selection: creativePresetID)
+                        material: selectedVisualMaterial,
+                        liveMeter: audio.liveVisualMeter,
+                        reactionMode: isPlaying ? reactionMode : .off,
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter
                     )
                 }
                 .transition(.opacity)
@@ -150,13 +395,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                     TurbulentMarbleView(
                         theme: MarbleTheme(appTheme: appTheme),
                         speed: 0.6,
-                        maxFPS: 30,
+                        maxFPS: 60,
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
-                        material: CreativePresetCatalog.material(selection: creativePresetID),
-
-                        pulseDriver: pulse
+                        material: selectedVisualMaterial,
+                        pulseDriver: pulse,
+                        liveMeter: audio.liveVisualMeter,
+                        reactionMode: isPlaying ? reactionMode : .off,
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -243,7 +491,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .overlay(alignment: .top) {
             if isTrackLoaded {
                 Button {
-                    applySuggestedSongProfile()
+                    creatorRoute.toggle()
                 } label: {
                     Label("Criar", systemImage: "wand.and.stars")
                         .font(.caption.weight(.semibold))
@@ -252,14 +500,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         .background(.regularMaterial, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("songCreativeProfile.apply")
-                .contextMenu {
-                    ForEach(CreativePresetCatalog.selectableExperiences) { experience in
-                        Button(experience.name) {
-                            applySuggestedSongProfile(experienceID: experience.id)
-                        }
-                    }
-                }
+                .accessibilityIdentifier("creator.openStudio")
                 .padding(.top, 18)
             }
         }
@@ -282,10 +523,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                             shareVideo(mode: mode, includeAudio: includeAudio)
                         }
                     )
-                    if showsKaraoke {
-                        KaraokeScoringControls(store: lyricsStore, audio: audio,
-                                               clock: clock, accent: appTheme.accent)
-                    }
                     if canShowKaraoke {
                         micButton
                     }
@@ -293,6 +530,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 .padding(.top, 16)
                 .padding(.trailing, 16)
             }
+        }
+        .sheet(isPresented: $creatorRoute.isPresented) {
+            CreatorStudioPanel(
+                store: songProfileStore, audio: audio,
+                selectedPresetID: $creativePresetID,
+                reactionMode: $reactionMode,
+                controls: $creatorControls,
+                suggestedPresetID: suggestedSongProfile?.visualPresetID)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(item: $shareResult) { payload in
             ShareExportService(image: payload.image)
@@ -342,24 +589,48 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
         .environment(\.colorScheme, .dark)
         .onAppear {
+            creativePresetID = CreativePresetCatalog.liveSelection(creativePresetID)
             lyricsStore.attach(clock: clock)
-            lyricsStore.scoring.present(showsKaraoke)
+            updateKaraokePresentation(showsKaraoke)
             lyricsStore.scoringPitchShift = { [weak audio] in Double(audio?.pitch ?? 0) }
+            if let data = UserDefaults.standard.data(
+                forKey: "NightcoreLab.liveCreatorControls.v1"),
+               let controls = try? JSONDecoder().decode(CreatorControls.self, from: data) {
+                creatorControls = controls
+            }
+            audio.applyVocalFX(creatorControls.vocalFX)
         }
-        .onChange(of: showsKaraoke) { _, presented in
-            lyricsStore.scoring.present(presented)
-            if !presented { audio.endKaraokeMicrophone() }
+        .onChange(of: audio.vocalSetting) { _, value in creatorControls.vocalFX = value }
+        .onChange(of: creatorControls.vocalFX) { _, value in
+            audio.applyVocalFX(value)
+            if let data = try? JSONEncoder().encode(creatorControls) {
+                UserDefaults.standard.set(data, forKey: "NightcoreLab.liveCreatorControls.v1")
+            }
+        }
+        .onChange(of: lyricsStore.lines) { _, _ in
+            if showsKaraoke && lyricsStore.scoring.mode != .microphone {
+                lyricsStore.scoring.stop()
+                updateKaraokePresentation(true)
+            }
+        }
+        .onChange(of: showsKaraoke) { _, shown in
+            updateKaraokePresentation(shown)
+            if !shown {
+                audio.endVocalCapture()
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
-                audio.endKaraokeMicrophone()
+                audio.endVocalCapture()
+                audio.stopAllCreatorLoops()
                 lyricsStore.scoring.stop()
             }
         }
         .onDisappear {
-            audio.endKaraokeMicrophone()
+            audio.endVocalCapture()
             lyricsStore.scoring.present(false)
         }
+
 
         .task(id: track.id) {
             // Cache-only handoff, off the touch/audio thread. No FFT is run
@@ -368,6 +639,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             activeSongProfile = nil
             suggestedSongProfile = nil
             lyricsStore.scoring.resetForTrack()
+            updateKaraokePresentation(showsKaraoke)
             guard let url = audio.visualAnalysisURL, url.isFileURL else {
                 suggestedSongProfile = SongCreativeProfileResolver.suggest(
                     assetID: expectedTrack, sourceRevision: "not-analyzed",
@@ -395,16 +667,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision)
             guard !Task.isCancelled, track.id == expectedTrack else { return }
-            lyricsStore.scoring.setReference(key: expression.key, melody: expression.melodicFeatures)
+            lyricsStore.scoring.setReference(
+                key: expression.key, melody: expression.melodicFeatures)
             suggestedSongProfile = saved ?? SongCreativeProfileResolver.suggest(
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision,
                 analysis: analysis, expression: expression)
-            // A previous explicit choice belongs to this exact source and can
-            // be restored automatically. Do not override a newer user tap.
-            if saved != nil && activeSongProfile == nil {
-                applySuggestedSongProfile()
-            }
+            // Saved profiles are suggestions, not silent overrides of a
+            // currently selected palette or the independent AppTheme.
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
     }
@@ -426,6 +696,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 typographyPreset: selected.typographyPreset,
                 padMapping: base.padMapping,
                 vocalAndAudioFXMacro: base.vocalAndAudioFXMacro,
+                vocalFX: base.vocalFX,
                 reactionProfile: base.reactionProfile)
         } else {
             profile = base
@@ -434,11 +705,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         // Existing AppStorage keys are the source of truth for visual and
         // typography consumers, including frozen Story requests.
         creativePresetID = profile.visualPresetID
-        appTheme = CreativePresetCatalog.recipe(for: profile.visualPresetID).preset.theme
+        // Do not overwrite AppTheme with the source recipe theme.
         karaokeTypography = profile.typographyPreset.style
         storyTypography = profile.typographyPreset.font
         reactionMode = profile.reactionProfile
         audio.setReverb(Float(profile.vocalAndAudioFXMacro * 35))
+        creatorControls.vocalFX = profile.vocalFX
+        audio.applyVocalFX(profile.vocalFX)
         activeSongProfile = profile
         try? CreatorPresetStore.save(
             SongCreativeProfileResolver.creatorPreset(for: profile))
@@ -469,12 +742,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .background {
             if !showsKaraoke {
                 LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
-                    PlayerBackgroundView(style: playerBackgroundStyle,
-                                         imageURL: track.coverURL,
-                                         theme: appTheme,
-                                         frozenTime: frozenShareMarblePhase,
-                                         reactiveDistortion: distortion,
-                                         pulseDriver: pulse, material: CreativePresetCatalog.material(selection: creativePresetID))
+                    PlayerBackgroundView(
+                        style: effectivePlayerBackgroundStyle,
+                        imageURL: track.coverURL, theme: appTheme,
+                        frozenTime: frozenShareMarblePhase,
+                        reactiveDistortion: distortion,
+                        pulseDriver: pulse, material: selectedVisualMaterial,
+                        liveMeter: audio.liveVisualMeter,
+                        reactionMode: isPlaying ? reactionMode : .off,
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter)
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -488,7 +765,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 sourceURL: audio.visualAnalysisURL,
                 clock: clock,
                 theme: appTheme,
-                backgroundStyle: playerBackgroundStyle,
+                backgroundStyle: effectivePlayerBackgroundStyle,
                 featureEngine: visualEngine,
                 onParameters: { next in liveUniforms.update(next) },
                 onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) },
@@ -564,7 +841,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         typography: karaokeTypography,
                         background: playerBackgroundStyle, reaction: reactionMode),
                 reactiveSourceURL: audio.visualAnalysisURL,
-                creativePresetID: creativePresetID
+                creativePresetID: creativePresetID,
+                padPerformance: audio.frozenPadPerformance()
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,
@@ -614,22 +892,27 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
     }
 
+    private func updateKaraokePresentation(_ shown: Bool) {
+        lyricsStore.scoring.setKaraokePresented(shown, lines: lyricsStore.lines,
+            at: clock.lyricTime + lyricsStore.userOffset,
+            trackEnergy: { [weak audio] in audio?.liveVisualMeter.snapshot().rms ?? 0 })
+    }
+
     private var micButton: some View {
         Button {
             withAnimation(motion) { isKaraokeMode.toggle() }
         } label: {
-            Image(systemName: showsKaraoke ? "mic.fill" : "mic")
+            Image(systemName: showsKaraoke ? "text.quote" : "music.mic")
                 .font(.system(size: 18, weight: .semibold))
-                .symbolEffect(.bounce, value: showsKaraoke)
                 .frame(width: 44, height: 44)
-                .background(showsKaraoke
-                            ? MarbleTheme(appTheme: appTheme).palette.body.opacity(0.28)
-                            : Color.white.opacity(0.10), in: Circle())
+                .background(.ultraThinMaterial, in: Circle())
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(showsKaraoke ? "Sair do modo karaokê" : "Entrar no modo karaokê")
+        .accessibilityIdentifier("karaoke.presentationToggle")
+        .accessibilityLabel(showsKaraoke ? "Fechar karaokê" : "Abrir karaokê")
     }
+
 }
 
 // MARK: - Coreografia (entrada escalonada, saída rápida)
@@ -771,6 +1054,10 @@ private struct BackgroundLayer: View {
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
+    var liveMeter: AudioVisualLiveMeter? = nil
+    var reactionMode: CreativePreset.AudioReaction = .off
+    var creatorControls: CreatorControls = .neutral
+    var padAccentEmitter: PadVisualAccentEmitter? = nil
 
     @Environment(\.energyBudget) private var energyBudget
 
@@ -785,7 +1072,11 @@ private struct BackgroundLayer: View {
                                     reactiveDistortion: reactiveDistortion,
                                     material: material,
 
-                                    pulseDriver: pulseDriver)
+                                    pulseDriver: pulseDriver,
+                                    liveMeter: liveMeter,
+                                    reactionMode: reactionMode,
+                                    creatorControls: creatorControls,
+                                    padAccentEmitter: padAccentEmitter)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)

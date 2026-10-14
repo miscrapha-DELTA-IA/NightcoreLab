@@ -80,14 +80,27 @@ struct CompositionRuntime: Sendable {
     func frame(at elapsed: TimeInterval,
                audioTimeline: AudioFeatureTimeline?,
                typography: TypographyLayer? = nil,
-               rhythmAnalysis: RhythmAnalysisResult? = nil) -> ResolvedCompositionFrame? {
+               rhythmAnalysis: RhythmAnalysisResult? = nil,
+               performance: PerformanceTimeline? = nil,
+               padAccent: PadVisualAccent? = nil) -> ResolvedCompositionFrame? {
         guard let timestamp = composition.timeline.timestamp(at: elapsed) else {
             return nil
         }
         let features = CompositionAudioSampler.sample(
             audioTimeline, at: timestamp.sourceTime)
-        return frame(at: elapsed, features: features, typography: typography,
-                     rhythm: rhythmAnalysis.flatMap { RhythmFrame.at(timestamp.sourceTime, in: $0) })
+        guard let base = frame(
+            at: elapsed, features: features, typography: typography,
+            rhythm: rhythmAnalysis.flatMap {
+                RhythmFrame.at(timestamp.sourceTime, in: $0)
+            }) else { return nil }
+        guard let material = base.materialFrame else { return base }
+        // The shared StoryRenderFrame can supply the exact accent already
+        // resolved on its frame grid. Other clients resolve at the same
+        // source-audio coordinate, independent of call/order/frame rate.
+        let accent = padAccent ?? PadVisualAccentResolver.at(
+            sourceTime: timestamp.sourceTime, timeline: performance)
+        return base.withMaterial(
+            PadVisualAccentResolver.apply(material, accent: accent))
     }
 
     /// Opt-in experience entry point; no effect on the Story renderer or
