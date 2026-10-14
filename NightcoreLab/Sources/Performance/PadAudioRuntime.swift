@@ -67,7 +67,7 @@ enum PadSampleSynthesizer {
 /// A normal retrigger obtains another free voice so earlier tails overlap.
 @MainActor
 final class PadAudioRuntime {
-    static let releaseSeconds: Double = 0.008
+    nonisolated static let releaseSeconds: Double = 0.008
     static let releaseFrameCount = 384 // 8ms at 48k
     private static let format = AVAudioFormat(
         standardFormatWithSampleRate: PadSampleSynthesizer.sampleRate, channels: 2)!
@@ -78,7 +78,10 @@ final class PadAudioRuntime {
     /// Their PCM buffers are allocated once before any touch events.
     let releaseNodes: [AVAudioPlayerNode]
     private let releaseBuffers: [AVAudioPCMBuffer]
-    private var releaseExpires: [TimeInterval]
+    /// Never mutate PCM while the audio engine might still be consuming it.
+    /// Slots are freed by the AVAudioPlayerNode dataConsumed completion.
+    private var releaseSlotBusy: [Bool]
+    private var releaseToken: [UInt64]
     private var voiceGains: [Float]
     private(set) var prepared: [String: AVAudioPCMBuffer] = [:]
     private(set) var sourceClip: PerformanceSourceClip?
@@ -94,7 +97,8 @@ final class PadAudioRuntime {
             AVAudioPCMBuffer(pcmFormat: Self.format,
                               frameCapacity: AVAudioFrameCount(Self.releaseFrameCount))
         }
-        releaseExpires = Array(repeating: 0, count: releaseCapacity)
+        releaseSlotBusy = Array(repeating: false, count: releaseCapacity)
+        releaseToken = Array(repeating: 0, count: releaseCapacity)
         voiceGains = Array(repeating: 0, count: capacity)
         allocator = PadVoiceAllocator(capacity: capacity)
         for sample in kit.samples {
@@ -139,15 +143,14 @@ final class PadAudioRuntime {
 
     /// Continue a stolen/choked voice in a short preallocated release channel.
     /// Only 384 stereo frames are copied; no allocation or I/O on touch.
-    /// A very dense cluster exhausting release channels falls back to oldest
-    /// channel reuse, a bounded 8ms exception rather than unbounded polyphony.
+    /// When all release channels are busy, prefer a rare hard cut to
+    /// rewriting a PCM buffer that CoreAudio may still be reading.
     private func release(_ item: PadVoiceAllocator.InterruptedLease,
                          at now: TimeInterval) {
         guard let id = item.previous.id, let source = prepared[id],
               let srcL = source.floatChannelData?[0],
               let srcR = source.floatChannelData?[1],
-              let slot = releaseExpires.indices.first(where: { releaseExpires[$0] <= now })
-                    ?? releaseExpires.indices.min(by: { releaseExpires[$0] < releaseExpires[$1] }),
+              let slot = releaseSlotBusy.indices.first(where: { !releaseSlotBusy[$0] }),
               slot < releaseBuffers.count,
               let destL = releaseBuffers[slot].floatChannelData?[0],
               let destR = releaseBuffers[slot].floatChannelData?[1] else { return }
@@ -166,9 +169,17 @@ final class PadAudioRuntime {
         node.stop()
         node.volume = voiceGains[item.voiceIndex]
         releaseBuffers[slot].frameLength = AVAudioFrameCount(length)
-        node.scheduleBuffer(releaseBuffers[slot], at: nil, options: .interrupts)
+        releaseSlotBusy[slot] = true
+        releaseToken[slot] &+= 1
+        let token = releaseToken[slot]
+        node.scheduleBuffer(releaseBuffers[slot], at: nil, options: .interrupts,
+                            completionCallbackType: .dataConsumed) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.releaseToken[slot] == token else { return }
+                self.releaseSlotBusy[slot] = false
+            }
+        }
         node.play()
-        releaseExpires[slot] = now + Self.releaseSeconds
     }
 
     func trigger(padID: String, velocity: Float,
@@ -209,7 +220,8 @@ final class PadAudioRuntime {
 
     func stopAll() {
         (nodes + releaseNodes).forEach { $0.stop() }
-        releaseExpires = Array(repeating: 0, count: releaseExpires.count)
+        releaseToken = releaseToken.map { $0 &+ 1 }
+        releaseSlotBusy = Array(repeating: false, count: releaseSlotBusy.count)
         voiceGains = Array(repeating: 0, count: voiceGains.count)
         allocator.reset()
     }
