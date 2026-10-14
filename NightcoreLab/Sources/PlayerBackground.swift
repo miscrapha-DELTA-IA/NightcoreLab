@@ -53,6 +53,13 @@ struct PlayerBackgroundView: View {
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
+    var liveMeter: AudioVisualLiveMeter? = nil
+    var reactionMode: CreativePreset.AudioReaction = .off
+    var creatorControls: CreatorControls = .neutral
+
+    /// The on-screen palette/uniform route is identical to full-screen
+    /// TurbulentMarbleView, not an independent Cyber Night theme switch.
+    var resolvedMaterial: VisualMaterial { material }
 
     var body: some View {
         ZStack {
@@ -66,9 +73,11 @@ struct PlayerBackgroundView: View {
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
                     reactiveDistortion: reactiveDistortion,
-                    material: material,
-
-                    pulseDriver: frozenTime == nil ? pulseDriver : nil
+                    material: resolvedMaterial,
+                    pulseDriver: frozenTime == nil ? pulseDriver : nil,
+                    liveMeter: frozenTime == nil ? liveMeter : nil,
+                    reactionMode: reactionMode,
+                    creatorControls: creatorControls
                 )
                 // Preserve legacy readability while allowing authored
                 // high-contrast five-stop surfaces to remain recognizable.
