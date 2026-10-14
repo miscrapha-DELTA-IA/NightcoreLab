@@ -98,6 +98,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
     @State private var liveUniforms = CreativeLiveUniforms()
+    @State private var suggestedSongProfile: SongCreativeProfile?
+    @State private var activeSongProfile: SongCreativeProfile?
     @AppStorage("creativeReactionMode")
     private var reactionMode: CreativePreset.AudioReaction = .off
     @AppStorage(CreativePresetCatalog.storageKey)
@@ -236,6 +238,29 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                     .onTapGesture { panels.setZen(false) }
             }
         }
+        .overlay(alignment: .top) {
+            if isTrackLoaded {
+                Button {
+                    applySuggestedSongProfile()
+                } label: {
+                    Label("Criar", systemImage: "wand.and.stars")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 14).frame(height: 36)
+                        .foregroundStyle(.white)
+                        .background(.regularMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("songCreativeProfile.apply")
+                .contextMenu {
+                    ForEach(CreativePresetCatalog.selectableExperiences) { experience in
+                        Button(experience.name) {
+                            applySuggestedSongProfile(experienceID: experience.id)
+                        }
+                    }
+                }
+                .padding(.top, 18)
+            }
+        }
         .overlay(alignment: .topLeading) {
             EnvironmentBar(theme: $appTheme,
                            panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels)
@@ -311,7 +336,74 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
         .environment(\.colorScheme, .dark)
         .onAppear { lyricsStore.attach(clock: clock) }
+
+        .task(id: track.id) {
+            // Cache-only handoff, off the touch/audio thread. No FFT is run
+            // just to open Player; rejected/missing evidence uses Original.
+            let expectedTrack = track.id
+            activeSongProfile = nil
+            suggestedSongProfile = nil
+            guard let url = audio.visualAnalysisURL, url.isFileURL else {
+                suggestedSongProfile = SongCreativeProfileResolver.suggest(
+                    assetID: expectedTrack, sourceRevision: "not-analyzed",
+                    analysis: nil, expression: nil)
+                return
+            }
+            let descriptor = await Task.detached(priority: .utility) {
+                try? AudioAssetDescriptor.read(at: url)
+            }.value
+            guard !Task.isCancelled, track.id == expectedTrack else { return }
+            guard let descriptor else {
+                suggestedSongProfile = SongCreativeProfileResolver.suggest(
+                    assetID: expectedTrack, sourceRevision: "not-analyzed",
+                    analysis: nil, expression: nil)
+                return
+            }
+            let analysis = await MusicAnalysisCache().load(for: descriptor)
+            // Expression engine exposes versioned cache contracts only; do
+            // not guess unregistered algorithm/dependency fingerprints.
+            let expression = await ExpressionCache().load(
+                for: descriptor, requiring: [:])
+            guard !Task.isCancelled, track.id == expectedTrack else { return }
+            suggestedSongProfile = SongCreativeProfileResolver.suggest(
+                assetID: descriptor.assetID,
+                sourceRevision: descriptor.sourceRevision,
+                analysis: analysis, expression: expression)
+        }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
+    }
+
+    /// A single user action swaps existing observable visual/pad metadata
+    /// and one live reverb parameter. No AVAudioEngine rebuild, seek or clock
+    /// reset; the prepared Performance PadKit remains the original kit.
+    private func applySuggestedSongProfile(experienceID: String? = nil) {
+        let base = suggestedSongProfile ??
+            SongCreativeProfileResolver.suggest(
+                assetID: track.id, sourceRevision: "not-analyzed",
+                analysis: nil, expression: nil)
+        let profile: SongCreativeProfile
+        if let experienceID,
+           let selected = CreativePresetCatalog.selectedExperience(id: experienceID) {
+            profile = SongCreativeProfile(
+                assetID: base.assetID, sourceRevision: base.sourceRevision,
+                visualPresetID: selected.id, materialID: selected.visualMaterial.id,
+                typographyPreset: selected.typographyPreset,
+                padMapping: base.padMapping,
+                vocalAndAudioFXMacro: base.vocalAndAudioFXMacro,
+                reactionProfile: base.reactionProfile)
+        } else {
+            profile = base
+        }
+        guard profile.isValid else { return }
+        // Existing AppStorage keys are the source of truth for visual and
+        // typography consumers, including frozen Story requests.
+        creativePresetID = profile.visualPresetID
+        karaokeTypography = profile.typographyPreset.style
+        reactionMode = profile.reactionProfile
+        audio.setReverb(Float(profile.vocalAndAudioFXMacro * 35))
+        activeSongProfile = profile
+        try? CreatorPresetStore.save(
+            SongCreativeProfileResolver.creatorPreset(for: profile))
     }
 
     /// A antiga janela Reprodução agora é a metade inferior deste cartão.
