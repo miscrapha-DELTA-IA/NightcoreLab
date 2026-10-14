@@ -250,6 +250,7 @@ final class AudioEngineManager {
               performanceRecordingSourceRevision == playbackSourceRevision,
               !performanceRecorder.events.isEmpty else { return nil }
         let result = performanceRecorder.timeline(
+            sourceClip: padRuntime.sourceClip,
             quantizeStrength: quantizeStrength ?? padQuantizeStrength)
         return result.isValid ? result : nil
     }
