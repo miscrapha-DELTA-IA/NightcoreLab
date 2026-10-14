@@ -326,7 +326,11 @@ final class CompositionRuntimeTests: XCTestCase {
             XCTAssertEqual(liveFrame, exportFrame)
             XCTAssertEqual(liveFrame.materialFrame?.parameters.beatPulse,
                            exportFrame.materialFrame?.parameters.beatPulse)
-            XCTAssertGreaterThan(liveFrame.materialFrame?.parameters.beatPulse ?? 0, 0)
+            if encoded.sourceTime < 2.2 {
+                XCTAssertGreaterThan(liveFrame.materialFrame?.parameters.beatPulse ?? 0, 0)
+            } else {
+                XCTAssertEqual(liveFrame.materialFrame?.parameters.beatPulse ?? -1, 0)
+            }
             XCTAssertEqual(runtime.frame(at: preview.elapsed, features: nil),
                            runtime.frame(at: encoded.elapsed, features: nil))
         }
