@@ -77,7 +77,7 @@ struct SongDNA: Codable, Equatable, Sendable {
                        mood: accepted(.moodHints, expr?.moodHints?.provenance)
                          ? expr?.moodHints : nil,
                        sections: accepted(.sections, expr?.sections?.provenance)
-                         ? expr?.sections?.sections ?? [] : [])
+                         ? (expr?.sections?.sections ?? []) : [])
     }
 
     var isValid: Bool {
@@ -108,8 +108,10 @@ struct SongDNA: Codable, Equatable, Sendable {
     /// Half-open intervals: deterministic at exact section boundaries.
     /// Confidence below 0.65 and unclassified gaps are neutral.
     func section(at time: TimeInterval) -> MusicSection? {
-        guard isValid, time.isFinite, time >= 0,
-              time < sourceDuration else { return nil }
+        // This executes during frame resolution. Validate the whole DNA once
+        // on cache ingress, not O(beats + sections) on every rendered frame.
+        guard sourceDuration.isFinite, sourceDuration > 0,
+              time.isFinite, time >= 0, time < sourceDuration else { return nil }
         var low = 0, high = sections.count
         while low < high {
             let mid = low + (high - low) / 2
@@ -118,6 +120,9 @@ struct SongDNA: Codable, Equatable, Sendable {
         }
         guard low > 0 else { return nil }
         let item = sections[low - 1]
-        return time < item.endTime && item.confidence >= 0.65 ? item : nil
+        return item.startTime.isFinite && item.endTime.isFinite &&
+            item.startTime <= time && time < item.endTime &&
+            item.confidence.isFinite && item.confidence >= 0.65 &&
+            item.confidence <= 1 ? item : nil
     }
 }
