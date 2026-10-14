@@ -7,6 +7,70 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
 
+    @MainActor
+    func testExp5MusicalGridAndOptionalQuantizeAreDeterministic() throws {
+        let beats = (0..<12).map {
+            RhythmAnalysisResult.BeatEvent(time: Double($0) * 0.5,
+                index: $0, strength: 0.9, isDownbeat: $0.isMultiple(of: 4))
+        }
+        let rhythm = RhythmAnalysisResult(
+            onsetEvents: [], bpmCandidates: [.init(bpm: 120, confidence: 0.95)],
+            beatGrid: beats, confidence: 0.95, downbeatConfidence: 0.95)
+        let position = try XCTUnwrap(PadMusicalGrid.at(1.06, rhythm: rhythm))
+        XCTAssertEqual(position.beat, 2.12, accuracy: 0.000001)
+        XCTAssertEqual(position.bar, 1)
+        XCTAssertEqual(position.bpm, 120, accuracy: 0.000001)
+        XCTAssertEqual(position.nearestGridSourceTime ?? -1, 1, accuracy: 0.000001)
+        XCTAssertEqual(PadMusicalGrid.time(forBeat: 2.12, rhythm: rhythm) ?? -1,
+                       1.06, accuracy: 0.000001)
+        XCTAssertEqual(PadMusicalGrid.at(2.25, rhythm: rhythm)?.bar, 2)
+
+        let sample = try XCTUnwrap(PadKit.starter.samples.first)
+        let recorder = PerformanceRecorder()
+        recorder.start(at: 10)
+        recorder.append(sample, velocity: 0.8, sourceTime: 1.06,
+                        at: 10.2, rhythm: rhythm)
+        recorder.stop()
+        let event = try XCTUnwrap(recorder.events.first)
+        XCTAssertEqual(event.timestamp, 0.2, accuracy: 0.000001)
+        XCTAssertEqual(event.musicalBeat ?? -1, 2.12, accuracy: 0.000001)
+        XCTAssertEqual(event.musicalBar, 1)
+        XCTAssertEqual(event.bpmAtTrigger ?? -1, 120, accuracy: 0.000001)
+        XCTAssertEqual(CompositionRuntime.padEventSourceTime(event,
+            quantizeStrength: 0) ?? -1, 1.06, accuracy: 0.000001)
+        XCTAssertEqual(CompositionRuntime.padEventSourceTime(event,
+            quantizeStrength: 0.5) ?? -1, 1.03, accuracy: 0.000001)
+        XCTAssertEqual(CompositionRuntime.padEventSourceTime(event,
+            quantizeStrength: 1) ?? -1, 1, accuracy: 0.000001)
+        for (strength, expected) in [(Float(0), Int64(50_880)),
+                                     (0.5, 49_440), (1, 48_000)] {
+            let timeline = recorder.timeline(quantizeStrength: strength)
+            let schedule = try PerformancePadMixdown.schedule(
+                timeline, kit: .starter, startTime: 0,
+                speed: 1, sampleRate: 48_000)
+            XCTAssertEqual(schedule.first?.startFrame, expected)
+            XCTAssertEqual(try JSONDecoder().decode(
+                PerformanceTimeline.self,
+                from: JSONEncoder().encode(timeline)), timeline)
+        }
+        // Missing legacy v1 musical keys and strength must keep raw timing.
+        let legacy = PadEvent(id: UUID(), padId: sample.id, timestamp: 0.2,
+                              velocity: 0.8, duration: sample.duration,
+                              sourceTime: 1.06)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            JSONEncoder().encode(PerformanceTimeline(
+                kitID: PadKit.starter.id, events: [legacy]))) as? [String: Any])
+        json.removeValue(forKey: "quantizeStrength")
+        let restored = try JSONDecoder().decode(PerformanceTimeline.self,
+                         from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertTrue(restored.isValid)
+        XCTAssertEqual(restored.quantizeStrength, 0)
+        XCTAssertNil(restored.events.first?.musicalBeat)
+        XCTAssertEqual(restored.events.first?.timestamp ?? -1, 0.2, accuracy: 0.000001)
+    }
+
+
+
     func testExp4SongDNAMappingAndSectionBoundariesAreDeterministic() throws {
         let sections = [
             MusicSection(startTime: 0, endTime: 8, label: .intro, confidence: 0.9),
