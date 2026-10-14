@@ -66,6 +66,55 @@ struct TrackInfo: Equatable {
 }
 
 
+
+private struct VocalFXMacroBar: View {
+    @Binding var settings: VocalFXSetting
+    let monitoringSafe: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("VOCAL FX", systemImage: "mic.fill")
+                    .font(.caption.bold())
+                Spacer()
+                Text(monitoringSafe ? "Retorno nos fones" : "Retorno mudo · captura ativa")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(VocalFXPreset.allCases) { preset in
+                        Button {
+                            settings.preset = preset
+                        } label: {
+                            Text(preset.rawValue)
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(settings.preset == preset
+                                    ? Color.pink.opacity(0.36) : Color.white.opacity(0.1),
+                                    in: Capsule())
+                        }
+                        .accessibilityIdentifier("vocalFX.preset.\(preset.id)")
+                    }
+                }
+            }
+            HStack(spacing: 12) {
+                Text("Intensidade").font(.caption2).frame(width: 70, alignment: .leading)
+                Slider(value: Binding(
+                    get: { Double(settings.intensity) },
+                    set: { settings.intensity = Float($0) }),
+                    in: 0...1)
+                .accessibilityIdentifier("vocalFX.intensity")
+                Text("\(Int(settings.intensity * 100))%")
+                    .font(.caption.monospacedDigit()).frame(width: 36)
+            }
+        }
+        .foregroundStyle(.white).padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityIdentifier("vocalFX.macroBar")
+    }
+}
+
 /// View-navigation state used directly by the centered Criar button.
 /// Opening Studio never mutates theme, preset, transport, or audio effects.
 struct CreatorStudioRoute: Equatable {
