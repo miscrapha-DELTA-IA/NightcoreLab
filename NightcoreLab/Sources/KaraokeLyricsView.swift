@@ -184,6 +184,7 @@ struct KaraokeLyricsView: View {
     @State private var followsPlayback = true
     @State private var lastRequestedLineID: Int?
     @State private var animateLineTransition = false
+    @State private var entryAnchored = false
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
@@ -207,6 +208,12 @@ struct KaraokeLyricsView: View {
         GeometryReader { viewport in
             let inset = KaraokeLayoutMetrics.horizontalInset(for: viewport.size.width)
             let wordLimit = KaraokeLayoutMetrics.textWidth(for: viewport.size.width)
+            // Frame-0 resolves from the source clock; store.activeLineIndex
+            // can still reflect the previous display-link tick on re-entry.
+            let activeLineID = entryAnchored ? store.activeLineIndex :
+                KaraokeEntryAnchor.activeLineID(
+                    in: store.lines, sourceTime: clock.lyricTime,
+                    userOffset: store.userOffset)
             let fittedTheme: KaraokeTheme = {
                 var adjusted = theme
                 adjusted.font = typography.font(
@@ -220,11 +227,11 @@ struct KaraokeLyricsView: View {
                     LazyVStack(spacing: 24) {
                         ForEach(store.lines) { line in
                             let emphasis = KaraokeFocusResolver.emphasis(
-                                lineID: line.id, activeID: store.activeLineIndex,
+                                lineID: line.id, activeID: activeLineID,
                                 mode: focusMode)
                             KaraokeLineView(
                                 line: line,
-                                status: status(of: line),
+                                status: status(of: line, activeLineID: activeLineID),
                                 isPlaying: store.isPlaying,
                                 offset: store.userOffset,
                                 clock: clock,
@@ -261,9 +268,12 @@ struct KaraokeLyricsView: View {
                             .accessibilityLabel(line.text)
                             .accessibilityAddTraits(.isButton)
                             .accessibilityHint("Toque para reproduzir a partir desta linha")
+                            // Pure compositor transforms: opacity/scale do not
+                            // mutate font metrics or FlowLayout row heights.
                             .animation(reduceMotion || !energyBudget.allowsDecorativeMotion ||
-                                       !animateLineTransition ? nil : .easeOut(duration: 0.12),
-                                       value: store.activeLineIndex)
+                                       !animateLineTransition ? nil :
+                                       .spring(response: 0.48, dampingFraction: 0.86),
+                                       value: activeLineID)
                         }
                     }
                     .padding(.horizontal, inset)
@@ -276,6 +286,9 @@ struct KaraokeLyricsView: View {
                         : KaraokeLayoutMetrics.verticalMargin(for: viewport.size.height),
                     for: .scrollContent
                 )
+                // Keep frame zero concealed until the anchor and initial
+                // scroll are committed in one animation-free transaction.
+                .opacity(entryAnchored ? 1 : 0)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 14)
                         .onChanged { _ in
@@ -307,22 +320,36 @@ struct KaraokeLyricsView: View {
                         .accessibilityIdentifier("karaoke.returnToLive")
                     }
                 }
+                .onAppear {
+                    anchorInitialLine(proxy: proxy)
+                }
                 .onChange(of: store.activeLineIndex) { _, new in
-                    guard followsPlayback, let new else { return }
+                    // Per-frame word progress never changes the scroll target.
+                    guard entryAnchored, followsPlayback, let new else { return }
                     scrollTo(new, proxy: proxy, reason: .automatic)
                 }
                 .onChange(of: store.trackID) { _, _ in
                     KaraokePerformanceProbe.shared.timelineSuspended()
-                    followsPlayback = true
-                    lastRequestedLineID = nil
-                    animateLineTransition = false
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        entryAnchored = false
+                        followsPlayback = true
+                        lastRequestedLineID = nil
+                        animateLineTransition = false
+                    }
+                    if !store.lines.isEmpty { anchorInitialLine(proxy: proxy) }
                 }
-                .task(id: store.trackID) {
-                    // Reopen at the current line, even if the active index
-                    // was already known before this view was mounted.
-                    await Task.yield()
-                    guard !Task.isCancelled, let active = store.activeLineIndex else { return }
-                    scrollTo(active, proxy: proxy, reason: .restoration)
+                .onChange(of: store.lines.count) { _, count in
+                    // Also handles asynchronous LRC completion and manual
+                    // replacement, which may occur after the sheet appears.
+                    if count > 0 {
+                        anchorInitialLine(proxy: proxy)
+                    } else {
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { entryAnchored = false }
+                    }
                 }
             }
         }
@@ -339,6 +366,23 @@ struct KaraokeLyricsView: View {
         }
     }
 
+    private func anchorInitialLine(proxy: ScrollViewProxy) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            let active = store.synchronizeForEntry(using: clock)
+            followsPlayback = true
+            animateLineTransition = false
+            lastRequestedLineID = active
+            if let active {
+                KaraokePerformanceProbe.shared.scrollRequested(
+                    animatedDuration: 0, automatic: false)
+                proxy.scrollTo(active, anchor: .center)
+            }
+            entryAnchored = true
+        }
+    }
+
     private func scrollTo(_ id: Int, proxy: ScrollViewProxy,
                           reason: KaraokeScrollReason) {
         guard let decision = KaraokeScrollPolicy.decision(
@@ -346,27 +390,30 @@ struct KaraokeLyricsView: View {
             reason: reason, reduceMotion: reduceMotion,
             allowsDecorativeMotion: energyBudget.allowsDecorativeMotion) else { return }
         lastRequestedLineID = id
-        animateLineTransition = reason == .automatic && decision.animated
         KaraokePerformanceProbe.shared.scrollRequested(
             animatedDuration: decision.duration,
             automatic: reason == .automatic)
         if decision.animated {
-            withAnimation(.smooth(duration: decision.duration)) {
+            // A spring begins only on a new active verse ID. TimelineView
+            // word ticks do not issue or reset this transaction.
+            withAnimation(.spring(response: decision.duration, dampingFraction: 0.86)) {
+                animateLineTransition = true
                 proxy.scrollTo(id, anchor: .center)
             }
         } else {
-            // Seeking, rapid lyrics, Reduce Motion and large jumps should
-            // reach the current line immediately, not queue animations.
+            // Entry, seeks, rapid verses and reduced motion are immediate.
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
+                animateLineTransition = false
                 proxy.scrollTo(id, anchor: .center)
             }
         }
     }
 
-    private func status(of line: TimedLyricLine) -> KaraokeLineView.Status {
-        guard let a = store.activeLineIndex else { return .upcoming }
+    private func status(of line: TimedLyricLine,
+                        activeLineID: Int?) -> KaraokeLineView.Status {
+        guard let a = activeLineID else { return .upcoming }
         return line.id < a ? .past : (line.id == a ? .active : .upcoming)
     }
 }
@@ -461,7 +508,8 @@ private struct KaraokeLineView: View {
             layout(frame: resolve(sourceTime: -offset, features: nil))
             .scaleEffect(status == .upcoming ? 0.96 : 1.0)
             .animation(allowStatusAnimation && energyBudget.allowsDecorativeMotion
-                       ? .easeOut(duration: 0.12) : nil, value: status)
+                       ? .spring(response: 0.48, dampingFraction: 0.86) : nil,
+                       value: status)
         }
     }
 
