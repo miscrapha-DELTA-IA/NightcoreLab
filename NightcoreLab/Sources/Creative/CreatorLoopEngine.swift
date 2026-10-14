@@ -70,7 +70,8 @@ final class CreatorLoopEngine {
 
     func toggle(_ slot: CreatorLoopSlot, sourceTime: TimeInterval,
                 speed: Float, rhythm: RhythmAnalysisResult?,
-                key: KeyAnalysisResult?, engine: AVAudioEngine) -> Bool {
+                key: KeyAnalysisResult?, engine: AVAudioEngine,
+                onStopped: @escaping @MainActor (CreatorLoopSlot) -> Void = { _ in }) -> Bool {
         guard speed.isFinite, speed > 0,
               let next = CreatorLoopGrid.nextBoundary(after: sourceTime, rhythm: rhythm),
               let bpm = CreatorLoopGrid.tempo(rhythm),
@@ -85,6 +86,7 @@ final class CreatorLoopEngine {
                 voice.node.stop()
                 self.active.remove(slot)
                 self.stopTasks[slot] = nil
+                onStopped(slot)
             }
             return true
         }
