@@ -158,6 +158,10 @@ struct PerformanceModeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var recorder: PerformanceRecorder { audio.performanceRecorder }
     @AppStorage("performance.grooveStrength") private var grooveStrength: Double = 0
+    @AppStorage(CreativePresetCatalog.storageKey)
+    private var visibleCreativePresetID = CreativePresetCatalog.defaultID
+    @AppStorage("creativeReactionMode")
+    private var visibleReactionMode: CreativePreset.AudioReaction = .off
     @State private var padRhythm: RhythmAnalysisResult?
     @State private var padRhythmTask: Task<Void, Never>?
     @State private var haptics = false
@@ -374,7 +378,22 @@ struct PerformanceModeView: View {
                     .padding(20)
                 }
             }
-            .background(Color(red: 0.045, green: 0.055, blue: 0.075))
+            .background {
+                // The Performance sheet is opaque and otherwise conceals the
+                // Player's Marble. Show the SAME procedural material here so
+                // finger hits visibly animate while the pads are being played.
+                TurbulentMarbleView(
+                    theme: .cyber, speed: 0.42,
+                    maxFPS: 30, isPaused: reduceMotion,
+                    extendIntoSafeArea: false,
+                    material: CreativePresetCatalog.material(
+                        selection: visibleCreativePresetID),
+                    liveMeter: audio.liveVisualMeter,
+                    reactionMode: visibleReactionMode,
+                    padAccentEmitter: audio.padAccentEmitter)
+                    .overlay(Color(red: 0.045, green: 0.055, blue: 0.075)
+                        .opacity(0.78))
+            }
             .navigationTitle("Performance")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
