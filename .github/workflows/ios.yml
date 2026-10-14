@@ -72,7 +72,7 @@ jobs:
             test-without-building
 
   build:
-    name: Delivery — full XCTest, Release and unsigned IPA
+    name: build
     # Manual dispatch can force the entire delivery gate on any branch.
     # Release/final PRs and pushes to main also retain the original pipeline.
     if: >-
