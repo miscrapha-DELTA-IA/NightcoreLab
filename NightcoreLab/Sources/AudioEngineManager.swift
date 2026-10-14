@@ -408,7 +408,7 @@ final class AudioEngineManager {
             slot, sourceTime: currentTime, speed: speed,
             rhythm: rhythm, key: key, engine: engine,
             onStopped: { [weak self] slot in
-                self?.activeCreatorLoops.remove(slot)
+                _ = self?.activeCreatorLoops.remove(slot)
             })
         if launched { activeCreatorLoops = creatorLoops.active }
         return launched
