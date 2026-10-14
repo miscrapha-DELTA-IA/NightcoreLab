@@ -35,7 +35,17 @@ enum MaterialResolver {
             distortion: material.parameters.distortion + programDistortion + bass,
             beatPulse: pulse, pulseDecay: material.pulseDecay,
             offbeatScale: material.offbeatScale, warpAmount: material.warpAmount,
-            brightnessBoost: material.brightnessBoost + energy + accent)
+            brightnessBoost: material.brightnessBoost + energy + accent,
+            stripingFrequency: material.parameters.stripingFrequency,
+            stripingMix: material.parameters.stripingMix,
+            speckleIntensity: material.parameters.speckleIntensity,
+            embossStrength: material.parameters.embossStrength,
+            scanlineDensity: material.parameters.scanlineDensity,
+            diffusionSoftness: material.parameters.diffusionSoftness,
+            voidThreshold: material.parameters.voidThreshold,
+            combStretch: material.parameters.combStretch,
+            bilateralSymmetry: material.parameters.bilateralSymmetry,
+            halftoneGrating: material.parameters.halftoneGrating)
         let activeFeatures = gain > 0 ? features : nil
         let allowed = material.type.acceptedSignals
         func accepts(_ input: MaterialAudioSignal) -> Bool { allowed.contains(input) }
