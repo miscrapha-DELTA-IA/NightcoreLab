@@ -147,7 +147,7 @@ private struct CreatorStudioPanel: View {
                     Text("Experiências visuais. Seu tema e a música continuam inalterados.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let suggestedPresetID,
-                       CreativePresetCatalog.selectedExperience(id: suggestedPresetID) != nil {
+                       CreativePresetCatalog.isLiveExperience(suggestedPresetID) {
                         Button("Aplicar sugestão: \(suggestedPresetID)") {
                             selectedPresetID = suggestedPresetID
                         }
@@ -237,7 +237,7 @@ private struct CreatorStudioPanel: View {
                     Divider()
                     Picker("Ritmo visual", selection: $reactionMode) {
                         Text("Desligado").tag(CreativePreset.AudioReaction.off)
-                        Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                        Text("Fluido").tag(CreativePreset.AudioReaction.subtle)
                         Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
                     }
                     .pickerStyle(.segmented)
@@ -264,7 +264,7 @@ private struct CreatorStudioPanel: View {
                 }
             }
             .task {
-                experiences = await CreativePresetCatalog.availableExperiences(from: store)
+                experiences = CreativePresetCatalog.selectableExperiences
             }
             .task(id: audio.playbackSourceRevision) {
                 rhythm = nil
