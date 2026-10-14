@@ -89,7 +89,7 @@ struct StoryVideoRequest: Sendable {
             typography: typographyLayer(atLyricTime: frame.lyricTime),
             rhythmAnalysis: rhythm) else { return nil }
         guard let material = base.materialFrame else { return base }
-        let accent = PadVisualAccentResolver.at(
+        let accent = frame.padAccent ?? PadVisualAccentResolver.at(
             sourceTime: frame.sourceTime, timeline: padPerformance)
         return base.withMaterial(PadVisualAccentResolver.apply(material, accent: accent))
     }
