@@ -214,10 +214,17 @@ enum StoryVideoExporter {
         let timeline = StoryRenderTimeline(request: request, profile: profile)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("NightcoreStory-\(UUID().uuidString).mp4")
-        let encoder = try StoryPixelWriter(url: url, profile: profile)
-        try await encoder.start()
-        let count = timeline.frameCount
+        // If the writer cannot initialize, no partial MP4 may remain.
+        let encoder: StoryPixelWriter
         do {
+            encoder = try StoryPixelWriter(url: url, profile: profile)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+        do {
+            try await encoder.start()
+            let count = timeline.frameCount
             for index in 0..<count {
                 try Task.checkCancellation()
                 let frame = timeline.frame(index: index)
@@ -258,9 +265,15 @@ enum StoryVideoExporter {
                                            fps: 1, bitRate: 500_000)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("NightcoreOrientation-\(UUID().uuidString).mp4")
-        let encoder = try StoryPixelWriter(url: url, profile: profile)
-        try await encoder.start()
+        let encoder: StoryPixelWriter
         do {
+            encoder = try StoryPixelWriter(url: url, profile: profile)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+        do {
+            try await encoder.start()
             try await encoder.append(image, at: 0)
             try await encoder.finish()
             return url
@@ -301,11 +314,16 @@ enum StoryVideoExporter {
         exporter.outputURL = url
         exporter.outputFileType = .mp4
         do {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                exporter.exportAsynchronously {
-                    if exporter.status == .completed { cont.resume(returning: ()) }
-                    else { cont.resume(throwing: exporter.error ?? StoryVideoError.muxFailed) }
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    exporter.exportAsynchronously {
+                        if exporter.status == .completed { cont.resume(returning: ()) }
+                        else { cont.resume(throwing: exporter.error ?? StoryVideoError.muxFailed) }
+                    }
                 }
+            } onCancel: {
+                // Cancel in-flight muxing now, not after the async export returns.
+                exporter.cancelExport()
             }
             try Task.checkCancellation()
             return url
