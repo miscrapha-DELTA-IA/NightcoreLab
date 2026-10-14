@@ -204,7 +204,9 @@ final class AudioEngineManager {
                           performanceMixer: performanceMixer)
         padRuntime.connect(to: engine, mixer: performanceMixer)
         engine.prepare()
-        if performanceModePresented { try? engine.start() }
+        if performanceModePresented {
+            if (try? engine.start()) != nil { padRuntime.primeVoices() }
+        }
         needsScheduling = true
         scheduledStartTime = 0
         lastKnownTime = 0
@@ -222,6 +224,7 @@ final class AudioEngineManager {
         refreshPerformanceOutputLatency()
         cancelIdleStop()
         if !engine.isRunning { try? engine.start() }
+        if engine.isRunning { padRuntime.primeVoices() }
     }
 
     /// Restore the normal energy policy when the instrument is dismissed.
@@ -306,6 +309,7 @@ final class AudioEngineManager {
             if wasCold {
                 let start = profiling ? ProcessInfo.processInfo.systemUptime : 0
                 try engine.start()
+                if performanceModePresented { padRuntime.primeVoices() }
                 if profiling {
                     engineStartMS = (ProcessInfo.processInfo.systemUptime - start) * 1_000
                 }
@@ -359,6 +363,7 @@ final class AudioEngineManager {
         defer { transportSignposter.endInterval("Audio resume", interval) }
         do {
             if !engine.isRunning { try engine.start() }
+            if performanceModePresented { padRuntime.primeVoices() }
             if needsScheduling {
                 // Preserve the existing replay-from-start behavior at EOF.
                 if lastKnownTime >= duration { lastKnownTime = 0 }
