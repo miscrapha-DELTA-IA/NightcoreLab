@@ -11,7 +11,7 @@ struct KaraokeScoreHUD: View {
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")
+                        Text(session.mode == .passive ? "RITMO DA FAIXA · SEM MICROFONE" : (session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO"))
                             .font(.system(size: 9, weight: .bold))
                         Text(session.snapshot.totalScore, format: .number)
                             .font(.title3.bold().monospacedDigit())
@@ -30,10 +30,10 @@ struct KaraokeScoreHUD: View {
                 }
                 ProgressView(value: session.snapshot.vocalAccuracy)
                     .tint(accent)
-                    .accessibilityLabel("Precisão vocal")
+                    .accessibilityLabel(session.mode == .passive ? "Sincronia da faixa" : "Precisão vocal")
                     .accessibilityValue("\(Int(session.snapshot.vocalAccuracy * 100)) por cento")
                 if session.snapshot.isFinished {
-                    KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode == .simulation)
+                    KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode != .microphone)
                 }
             }
             .padding(12)
@@ -41,13 +41,12 @@ struct KaraokeScoreHUD: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.3)))
             .shadow(color: accent.opacity(session.snapshot.vocalAccuracy * 0.15), radius: 8)
-            .overlay(alignment: .bottom) {
+            .safeAreaInset(edge: .bottom, spacing: 4) {
                 Text(session.judgmentVisible ? session.snapshot.lastVerseRating?.rawValue ?? "" : "")
                     .font(.caption.bold())
                     .foregroundStyle(accent)
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.black.opacity(session.judgmentVisible ? 0.7 : 0), in: Capsule())
-                    .offset(y: 34)
                     .allowsHitTesting(false)
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.snapshot.totalScore)
@@ -112,7 +111,7 @@ struct KaraokeScoringControls: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .accessibilityLabel("Pontuação do karaokê")
-        .alert("Microfone indisponível", isPresented: $showsError) {
+        .alert("Permissão do microfone desativada", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Autorize o microfone nos Ajustes ou escolha Experimentar simulação. Nenhum resultado simulado é apresentado como canto real.")
@@ -126,7 +125,7 @@ struct KaraokeScoringControls: View {
             if mode == .off { audio.endKaraokeMicrophone() }
         }
         .onDisappear {
-            request?.cancel(); audio.endKaraokeMicrophone()
+            request?.cancel()
         }
     }
 
@@ -141,7 +140,7 @@ struct KaraokeScoringControls: View {
             guard store.scoring.isPresented, audio.playbackSourceRevision == revision else {
                 audio.endKaraokeMicrophone(); return
             }
-            guard allowed else { showsError = true; return }
+            guard allowed else { showsError = audio.microphonePermissionDenied; return }
             store.scoring.start(mode: .microphone, lines: store.lines,
                                 at: clock.lyricTime + store.userOffset)
             store.scoring.microphoneFrame = { [weak audio] _ in audio?.karaokeVoiceFrame() ?? .silence }

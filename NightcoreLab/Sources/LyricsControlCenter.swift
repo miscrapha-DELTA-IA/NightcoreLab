@@ -14,6 +14,8 @@ struct LyricsControlCenter: View {
     let onChooseLyrics: () -> Void
     let onDismiss: () -> Void
 
+    var audio: AudioEngineManager? = nil
+
     @Environment(LyricsStore.self) private var lyricsStore
     @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
@@ -21,6 +23,25 @@ struct LyricsControlCenter: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let audio {
+                    Section("Vocal FX") {
+                        KaraokeScoringControls(store: lyricsStore, audio: audio,
+                            clock: audio.lyricsClock, accent: theme.accent)
+                        Picker("Efeito vocal", selection: Binding(
+                            get: { audio.vocalSetting.preset },
+                            set: { var value = audio.vocalSetting; value.preset = $0; audio.applyVocalFX(value) })) {
+                            ForEach(VocalFXPreset.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Slider(value: Binding(
+                            get: { Double(audio.vocalSetting.intensity) },
+                            set: { var value = audio.vocalSetting; value.intensity = Float($0); audio.applyVocalFX(value) }), in: 0...1)
+                            .accessibilityLabel("Intensidade Vocal FX")
+                        Text("Captura para pontuação. Retorno de voz desativado nesta rota de captura segura.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("lyrics.controls.vocalFX")
+                }
+
                 Section {
                     Toggle("Karaokê limpo", isOn: $lyricsCleanMode)
                         .tint(theme.accent)

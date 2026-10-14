@@ -6,6 +6,58 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    @MainActor
+    func testKaraokePresentationPreservesLiveTransportAndQueueCompletion() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441000))
+        buffer.frameLength = 441000
+        for channel in 0..<2 {
+            for index in 0..<441000 { buffer.floatChannelData![channel][index] = 0.05 }
+        }
+        do { let file = try AVAudioFile(forWriting: url, settings: format.settings); try file.write(from: buffer) }
+        let audio = AudioEngineManager()
+        try audio.load(url: url)
+        audio.seek(to: 2)
+        audio.play()
+        defer { audio.pause() }
+        let session = KaraokeScoringSession()
+        let generation = audio.scheduleGeneration
+        let clock = audio.lyricsClock
+        let category = AVAudioSession.sharedInstance().category
+        for _ in 0..<3 {
+            session.setKaraokePresented(true, lines: karaokeLines(5), at: clock.lyricTime,
+                                       trackEnergy: { 0.1 })
+            XCTAssertEqual(session.mode, .passive)
+            session.setKaraokePresented(false, lines: [], at: clock.lyricTime, trackEnergy: { 0 })
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertTrue(audio.isAudioEngineRunning)
+        XCTAssertTrue(clock === audio.lyricsClock)
+        XCTAssertGreaterThanOrEqual(clock.lyricTime, 1.9)
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        XCTAssertEqual(AVAudioSession.sharedInstance().category, category)
+
+        // A stop-triggered callback can arrive while guarded OR after resuming.
+        audio.beginGraphReconfiguration()
+        audio.playbackFinished(generation: generation)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        audio.finishGraphReconfiguration(resume: true)
+        audio.playbackFinished(generation: generation)
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        XCTAssertGreaterThanOrEqual(audio.lyricsClock.lyricTime, 1.8)
+    }
+
+    func testGrantedMicrophonePermissionNeverRequestsErrorBanner() {
+        XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.granted))
+        XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.undetermined))
+        XCTAssertTrue(AudioEngineManager.shouldShowMicrophonePermissionError(.denied))
+    }
+
     private func karaokeKey() -> KeyAnalysisResult {
         KeyAnalysisResult(hypotheses: [.init(tonic: .c, scale: .major, confidence: 0.9)],
                           provenance: .init(method: "fixture", fingerprint: .init(algorithmVersion: 1),

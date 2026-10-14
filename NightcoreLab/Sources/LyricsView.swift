@@ -430,7 +430,8 @@ struct LyricsView: View {
                     queuedManualPicker = true
                     showLyricsControlCenter = false
                 },
-                onDismiss: { showLyricsControlCenter = false }
+                onDismiss: { showLyricsControlCenter = false },
+                audio: audio
             )
         }
         .sheet(isPresented: $isChoosingLyrics) {

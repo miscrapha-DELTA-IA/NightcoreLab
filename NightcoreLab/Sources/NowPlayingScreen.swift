@@ -333,8 +333,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var liveUniforms = CreativeLiveUniforms()
     @State private var creatorRoute = CreatorStudioRoute()
     @State private var creatorControls = CreatorControls()
-    @State private var vocalMacroBarVisible = false
-    @State private var micPermissionError = false
     @State private var suggestedSongProfile: SongCreativeProfile?
     @State private var activeSongProfile: SongCreativeProfile?
     @State private var songProfileStore = CreativePresetPackageStore()
@@ -525,26 +523,12 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                             shareVideo(mode: mode, includeAudio: includeAudio)
                         }
                     )
-                    if showsKaraoke {
-                        KaraokeScoringControls(store: lyricsStore, audio: audio,
-                                               clock: clock, accent: appTheme.accent)
-                    }
                     if canShowKaraoke {
                         micButton
                     }
                 }
                 .padding(.top, 16)
                 .padding(.trailing, 16)
-            }
-        }
-        .overlay(alignment: .top) {
-            if vocalMacroBarVisible && showsKaraoke {
-                VocalFXMacroBar(settings: Binding(
-                    get: { creatorControls.vocalFX },
-                    set: { creatorControls.vocalFX = $0 }),
-                    monitoringSafe: audio.vocalMonitoringEnabled)
-                    .padding(.horizontal, 18).padding(.top, 72)
-                    .transition(.opacity)
             }
         }
         .sheet(isPresented: $creatorRoute.isPresented) {
@@ -606,7 +590,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .environment(\.colorScheme, .dark)
         .onAppear {
             lyricsStore.attach(clock: clock)
-            lyricsStore.scoring.present(showsKaraoke)
+            updateKaraokePresentation(showsKaraoke)
             lyricsStore.scoringPitchShift = { [weak audio] in Double(audio?.pitch ?? 0) }
             if let data = UserDefaults.standard.data(
                 forKey: "NightcoreLab.liveCreatorControls.v1"),
@@ -615,17 +599,23 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             }
             audio.applyVocalFX(creatorControls.vocalFX)
         }
+        .onChange(of: audio.vocalSetting) { _, value in creatorControls.vocalFX = value }
         .onChange(of: creatorControls.vocalFX) { _, value in
             audio.applyVocalFX(value)
             if let data = try? JSONEncoder().encode(creatorControls) {
                 UserDefaults.standard.set(data, forKey: "NightcoreLab.liveCreatorControls.v1")
             }
         }
+        .onChange(of: lyricsStore.lines) { _, _ in
+            if showsKaraoke && lyricsStore.scoring.mode != .microphone {
+                lyricsStore.scoring.stop()
+                updateKaraokePresentation(true)
+            }
+        }
         .onChange(of: showsKaraoke) { _, shown in
-            lyricsStore.scoring.present(shown)
+            updateKaraokePresentation(shown)
             if !shown {
                 audio.endVocalCapture()
-                vocalMacroBarVisible = false
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -639,11 +629,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             audio.endVocalCapture()
             lyricsStore.scoring.present(false)
         }
-        .alert("Microfone indisponível", isPresented: $micPermissionError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Ative o acesso ao microfone nos Ajustes. O karaokê sem captura continua disponível.")
-        }
+
 
         .task(id: track.id) {
             // Cache-only handoff, off the touch/audio thread. No FFT is run
@@ -652,6 +638,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             activeSongProfile = nil
             suggestedSongProfile = nil
             lyricsStore.scoring.resetForTrack()
+            updateKaraokePresentation(showsKaraoke)
             guard let url = audio.visualAnalysisURL, url.isFileURL else {
                 suggestedSongProfile = SongCreativeProfileResolver.suggest(
                     assetID: expectedTrack, sourceRevision: "not-analyzed",
@@ -904,53 +891,27 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
     }
 
+    private func updateKaraokePresentation(_ shown: Bool) {
+        lyricsStore.scoring.setKaraokePresented(shown, lines: lyricsStore.lines,
+            at: clock.lyricTime + lyricsStore.userOffset,
+            trackEnergy: { [weak audio] in audio?.liveVisualMeter.snapshot().rms ?? 0 })
+    }
+
     private var micButton: some View {
         Button {
-            if showsKaraoke {
-                audio.endVocalCapture()
-                lyricsStore.scoring.stop()
-                withAnimation(motion) { isKaraokeMode = false }
-            } else {
-                withAnimation(motion) { isKaraokeMode = true }
-                vocalMacroBarVisible = true
-                let sourceRevision = audio.playbackSourceRevision
-                Task { @MainActor in
-                    let started = await audio.beginVocalCapture()
-                    guard audio.playbackSourceRevision == sourceRevision,
-                          showsKaraoke else {
-                        audio.endVocalCapture()
-                        return
-                    }
-                    guard started else { micPermissionError = true; return }
-                    lyricsStore.scoring.start(mode: .microphone,
-                        lines: lyricsStore.lines,
-                        at: clock.lyricTime + lyricsStore.userOffset)
-                    lyricsStore.scoring.microphoneFrame = {
-                        [weak audio] _ in audio?.karaokeVoiceFrame() ?? .silence
-                    }
-                    audio.karaokeCompletion = {
-                        [weak session = lyricsStore.scoring] in session?.finish()
-                    }
-                }
-            }
+            withAnimation(motion) { isKaraokeMode.toggle() }
         } label: {
-            Image(systemName: showsKaraoke ? "mic.fill" : "mic")
+            Image(systemName: showsKaraoke ? "text.quote" : "music.mic")
                 .font(.system(size: 18, weight: .semibold))
-                .symbolEffect(.bounce, value: showsKaraoke)
                 .frame(width: 44, height: 44)
-                .background(showsKaraoke
-                            ? MarbleTheme(appTheme: appTheme).palette.body.opacity(0.28)
-                            : Color.white.opacity(0.10), in: Circle())
+                .background(.ultraThinMaterial, in: Circle())
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .onLongPressGesture {
-            if !showsKaraoke { isKaraokeMode = true }
-            vocalMacroBarVisible.toggle()
-        }
-        .accessibilityIdentifier("vocalFX.micButton")
-        .accessibilityLabel(showsKaraoke ? "Encerrar canto ao vivo" : "Iniciar canto e Vocal FX")
+        .accessibilityIdentifier("karaoke.presentationToggle")
+        .accessibilityLabel(showsKaraoke ? "Fechar karaokê" : "Abrir karaokê")
     }
+
 }
 
 // MARK: - Coreografia (entrada escalonada, saída rápida)

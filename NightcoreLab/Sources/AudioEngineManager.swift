@@ -155,7 +155,13 @@ final class AudioEngineManager {
     /// independently obtained from the existing mixer through liveVisualMeter.
     var visualAnalysisURL: URL? { sourceURL }
     @ObservationIgnored private var needsScheduling = true
-    @ObservationIgnored private var scheduleGeneration = 0
+    @ObservationIgnored private(set) var scheduleGeneration = 0
+    private(set) var isReconfiguringGraph = false
+    var microphonePermissionDenied: Bool {
+        Self.shouldShowMicrophonePermissionError(AVAudioApplication.shared.recordPermission)
+    }
+    nonisolated static func shouldShowMicrophonePermissionError(
+        _ permission: AVAudioApplication.recordPermission) -> Bool { permission == .denied }
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
     @ObservationIgnored private weak var remoteRelay: RemotePlaybackRelay?
@@ -329,82 +335,80 @@ final class AudioEngineManager {
     }
 
     private func refreshVocalMonitorSafety() {
-        let session = AVAudioSession.sharedInstance()
-        let safe = vocalCaptureActive &&
-            VocalMonitorSafety.allows(session.currentRoute.outputs,
-                                      latency: session.outputLatency)
-        vocalMonitoringEnabled = safe
-        // Avoid feedback and A2DP delay. Capture/scoring remain active.
-        vocalGate.outputVolume = safe ? min(0.5, vocalSetting.intensity * 0.42) : 0
+        vocalMonitoringEnabled = false
+        vocalGate.outputVolume = 0
     }
+
+    /// Explicit opt-in only. Opening lyrics never calls this method.
 
     func beginVocalCapture() async -> Bool {
         if vocalCaptureActive { return true }
         vocalGeneration &+= 1
         let requested = vocalGeneration
-        let allowed = await AVAudioApplication.requestRecordPermission()
-        guard allowed, requested == vocalGeneration, !Task.isCancelled else {
-            return false
-        }
+        let permission = AVAudioApplication.shared.recordPermission
+        let allowed = permission == .granted ? true :
+            (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
+        guard allowed, requested == vocalGeneration, !Task.isCancelled else { return false }
         let resume = isPlaying
-        if resume { pause() }
-        removeVisualMeterTap()
-        engine.stop()
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
         let capture = KaraokeMicrophoneCapture()
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.allowBluetoothA2DP, .defaultToSpeaker])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
-            // isInputAvailable is safe on headless macOS/simulators. Avoid
-            // engine.inputNode entirely when no physical microphone exists.
-            guard session.isInputAvailable else {
-                throw AudioEngineError.unsupportedAudio
-            }
+            // Inspect input only AFTER activating the recording session.
+            guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
             let input = engine.inputNode
-            let hardwareFormat = input.inputFormat(forBus: 0)
-            let format = input.outputFormat(forBus: 0)
-            guard hardwareFormat.channelCount > 0,
-                  hardwareFormat.sampleRate.isFinite,
-                  hardwareFormat.sampleRate > 0,
-                  format.channelCount > 0,
-                  format.sampleRate.isFinite,
-                  format.sampleRate > 0 else {
-                throw AudioEngineError.unsupportedAudio
-            }
-            connectVocalChain(input: input, format: format)
+            let native = input.outputFormat(forBus: 0)
+            guard native.channelCount > 0, native.sampleRate.isFinite,
+                  native.sampleRate > 0 else { throw AudioEngineError.unsupportedAudio }
             let scoringClock = lyricsClock
-            input.installTap(onBus: 0, bufferSize: 2048, format: format) {
-                buffer, _ in
-                // Captured clock is thread-safe; no MainActor hop on CoreAudio.
+            // Capture has no connection to the song's 44.1/48kHz mixer buses.
+            input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
                 capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
+            connectedVocalInput = input
             microphoneCapture = capture
             vocalCaptureActive = true
-            applyVocalFX(vocalSetting)
-            cancelIdleStop()
             try engine.start()
             installVisualMeterTap()
-            lyricsClock.refreshOutputLatency()
-            refreshVocalMonitorSafety()
-            if resume { play() }
             return true
         } catch {
+            if let input = connectedVocalInput { input.removeTap(onBus: 0) }
+            connectedVocalInput = nil
             capture.stop()
-            if connectedVocalInput != nil || vocalCaptureActive {
-                endVocalCapture()
-            } else {
-                // No valid input was attached. Never query engine.inputNode
-                // while recovering from a simulator/no-mic failure.
-                engine.stop()
-                vocalGate.outputVolume = 0
-                vocalMonitoringEnabled = false
-                configureSession()
-                lyricsClock.refreshOutputLatency()
-            }
-            if resume && !isPlaying { play() }
-            return false
+            microphoneCapture = nil
+            vocalCaptureActive = false
+            configureSession()
+            return false // Busy hardware keeps passive scoring; not a permission error.
         }
+    }
+
+    /// Invalidate BEFORE stop: callbacks already enqueued remain stale after
+    /// the guard is lowered. A Boolean alone cannot protect delayed callbacks.
+    func beginGraphReconfiguration() {
+        let position = min(duration, max(0, lyricsClock.lyricTime))
+        isReconfiguringGraph = true
+        scheduleGeneration &+= 1
+        cancelIdleStop()
+        lastKnownTime = position
+        lyricsClock.didPause(at: position)
+        isPlaying = false
+        player.stop()
+        needsScheduling = true
+        scheduledStartTime = position
+        removeVisualMeterTap()
+        engine.stop()
+    }
+
+    func finishGraphReconfiguration(resume: Bool) {
+        isReconfiguringGraph = false
+        lyricsClock.refreshOutputLatency()
+        if resume { play() }
+        else if performanceModePresented { try? engine.start() }
+        else { scheduleIdleStop() }
     }
 
     // Compatibility with the already-merged KaraokeScoringControls surface.
@@ -422,12 +426,10 @@ final class AudioEngineManager {
         guard vocalCaptureActive || microphoneCapture != nil ||
               connectedVocalInput != nil else { return }
         let resume = isPlaying
-        if resume { pause() }
-        removeVisualMeterTap()
-        engine.stop()
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
         if let input = connectedVocalInput {
             input.removeTap(onBus: 0)
-            engine.disconnectNodeOutput(input)
             connectedVocalInput = nil
         }
         microphoneCapture?.stop()
@@ -436,10 +438,6 @@ final class AudioEngineManager {
         vocalGate.outputVolume = 0
         vocalMonitoringEnabled = false
         configureSession()
-        lyricsClock.refreshOutputLatency()
-        if resume { play() }
-        else if performanceModePresented { try? engine.start() }
-        else { scheduleIdleStop() }
     }
 
     func toggleCreatorLoop(_ slot: CreatorLoopSlot, rhythm: RhythmAnalysisResult?,
@@ -650,14 +648,14 @@ final class AudioEngineManager {
 
     private func scheduleIdleStop() {
         cancelIdleStop()
-        guard !performanceModePresented else { return }
+        guard !performanceModePresented, !vocalCaptureActive else { return }
         let generation = idleStopGeneration
         let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
                   generation == self.idleStopGeneration,
-                  !self.isPlaying, !self.performanceModePresented else { return }
+                  !self.isPlaying, !self.performanceModePresented, !self.vocalCaptureActive else { return }
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
@@ -842,9 +840,9 @@ final class AudioEngineManager {
         needsScheduling = false
     }
 
-    private func playbackFinished(generation: Int) {
+    func playbackFinished(generation: Int) {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
-        guard generation == scheduleGeneration else { return }
+        guard !isReconfiguringGraph, generation == scheduleGeneration else { return }
         karaokeCompletion?()
         player.stop()
         // Pads are an independent performance surface: ending the song must
@@ -1047,7 +1045,6 @@ final class AudioEngineManager {
         vocalMonitoringEnabled = false
         if let input = connectedVocalInput {
             input.removeTap(onBus: 0)
-            engine.disconnectNodeOutput(input)
             connectedVocalInput = nil
         }
         microphoneCapture?.stop()
@@ -1072,8 +1069,9 @@ final class AudioEngineManager {
                 case .began:
                     let wasPlaying = self.isPlaying
                     let source = self.sourceURL
+                    self.beginGraphReconfiguration()
                     self.suspendLivePerformanceForSystemEvent()
-                    self.pause()
+                    self.finishGraphReconfiguration(resume: false)
                     // Pause invalidates any previous request. Capture *after*
                     // it so a later user pause or replacement cancels resumption.
                     self.interruptedSourceURL = wasPlaying ? source : nil
@@ -1104,8 +1102,9 @@ final class AudioEngineManager {
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
-            let removed = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ==
-                .oldDeviceUnavailable
+            let reason = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+            let removed = reason == .oldDeviceUnavailable
+            let hardwareChanged = removed || reason == .newDeviceAvailable
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lyricsClock.refreshOutputLatency()
@@ -1113,14 +1112,15 @@ final class AudioEngineManager {
                 // Hardware input formats and scheduled voices may become
                 // invalid during route negotiation. The current song file is
                 // retained; no accidental auto-resume on unplug.
-                if self.vocalCaptureActive {
-                    self.suspendLivePerformanceForSystemEvent()
+                if hardwareChanged && !removed && self.vocalCaptureActive {
+                    self.endVocalCapture()
                 }
                 self.refreshVocalMonitorSafety()
                 if removed {
+                    self.beginGraphReconfiguration()
                     self.suspendLivePerformanceForSystemEvent()
                     self.interruptedSourceURL = nil
-                    self.pause()
+                    self.finishGraphReconfiguration(resume: false)
                 }
             }
         }
