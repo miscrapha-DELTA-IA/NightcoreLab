@@ -235,7 +235,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
-                        creatorControls: creatorControls
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter
                     )
                 }
                 .transition(.opacity)
@@ -255,7 +256,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         pulseDriver: pulse,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
-                        creatorControls: creatorControls
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -551,7 +553,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         pulseDriver: pulse, material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
-                        creatorControls: creatorControls)
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter)
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -851,6 +854,7 @@ private struct BackgroundLayer: View {
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
     var creatorControls: CreatorControls = .neutral
+    var padAccentEmitter: PadVisualAccentEmitter? = nil
 
     @Environment(\.energyBudget) private var energyBudget
 
@@ -868,7 +872,8 @@ private struct BackgroundLayer: View {
                                     pulseDriver: pulseDriver,
                                     liveMeter: liveMeter,
                                     reactionMode: reactionMode,
-                                    creatorControls: creatorControls)
+                                    creatorControls: creatorControls,
+                                    padAccentEmitter: padAccentEmitter)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)
