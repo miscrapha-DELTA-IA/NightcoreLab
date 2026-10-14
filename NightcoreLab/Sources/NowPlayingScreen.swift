@@ -65,6 +65,92 @@ struct TrackInfo: Equatable {
     }
 }
 
+
+/// View-navigation state used directly by the centered Criar button.
+/// Opening Studio never mutates theme, preset, transport, or audio effects.
+struct CreatorStudioRoute: Equatable {
+    var isPresented = false
+    mutating func toggle() { isPresented.toggle() }
+}
+
+/// Actual editable Creator surface, backed by the existing experience and
+/// package store rather than a new preset catalogue.
+private struct CreatorStudioPanel: View {
+    let store: CreativePresetPackageStore
+    @Binding var selectedPresetID: String
+    @Binding var reactionMode: CreativePreset.AudioReaction
+    @Binding var controls: CreatorControls
+    let suggestedPresetID: String?
+
+    @State private var experiences: [CreativeExperiencePreset] =
+        CreativePresetCatalog.selectableExperiences
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Experiências visuais. Seu tema e a música continuam inalterados.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let suggestedPresetID,
+                       CreativePresetCatalog.selectedExperience(id: suggestedPresetID) != nil {
+                        Button("Aplicar sugestão: \(suggestedPresetID)") {
+                            selectedPresetID = suggestedPresetID
+                        }
+                        .accessibilityIdentifier("creator.suggested")
+                    }
+                    ForEach(experiences) { experience in
+                        Button {
+                            selectedPresetID = experience.id
+                        } label: {
+                            HStack {
+                                Text(experience.name)
+                                Spacer()
+                                if experience.id == selectedPresetID {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("creator.preset.\(experience.id)")
+                    }
+                    Divider()
+                    Picker("Ritmo visual", selection: $reactionMode) {
+                        Text("Desligado").tag(CreativePreset.AudioReaction.off)
+                        Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                        Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Controles do material").font(.headline)
+                    ForEach([CreatorControl.materialIntensity, .distortion, .brightness,
+                             .movement, .beatSensitivity, .energyResponse]) { control in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(control.label).font(.caption)
+                            Slider(value: Binding(
+                                get: { controls.value(for: control) },
+                                set: { controls.set($0, for: control) }), in: 0...1)
+                            .accessibilityIdentifier("creator.control.\(control.rawValue)")
+                        }
+                    }
+                    Button("Restaurar controles") { controls = .neutral }
+                        .font(.caption.weight(.semibold))
+                }
+                .padding(20)
+            }
+            .navigationTitle("Criar · Studio")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Concluído") { dismiss() }
+                }
+            }
+            .task {
+                experiences = await CreativePresetCatalog.availableExperiences(from: store)
+            }
+        }
+        .accessibilityIdentifier("creator.studio")
+    }
+}
+
 // MARK: - Tela
 
 struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsContent: View>: View {
