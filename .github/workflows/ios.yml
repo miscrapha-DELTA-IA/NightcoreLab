@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   fast-check:
-    name: Fast Check — compile and two smoke suites
+    name: Fast Check — compile, smoke suites and visual contract
     if: >-
       ${{ github.event_name != 'workflow_dispatch' && (startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) }}
     runs-on: macos-15
@@ -55,7 +55,8 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             build-for-testing
-      - name: Run ONLY RuntimeStabilization and AudioQuality tests
+      # Reuse the compiled test bundle; no rendering/pixel tests in the fast lane.
+      - name: Run smoke suites and fast visual catalog contract
         shell: bash
         run: |
           set -o pipefail
@@ -68,6 +69,7 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:NightcoreLabTests/RuntimeStabilizationTests \
             -only-testing:NightcoreLabTests/AudioQualityTests \
+            -only-testing:NightcoreLabTests/VisualMaterialEngineTests/testLegacyMaterialCatalogPrefixAndExpandedTypes \
             CODE_SIGNING_ALLOWED=NO \
             test-without-building
 
