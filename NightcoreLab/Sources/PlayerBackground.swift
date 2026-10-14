@@ -60,10 +60,16 @@ struct PlayerBackgroundView: View {
     /// The on-screen palette/uniform route is identical to full-screen
     /// TurbulentMarbleView, not an independent Cyber Night theme switch.
     var resolvedMaterial: VisualMaterial { material }
+    var renderedSurface: MarbleSurfaceBinding {
+        MarbleSurfaceBinding.resolve(material: resolvedMaterial)
+    }
+    var effectiveStyle: PlayerBackgroundStyle {
+        renderedSurface.textured ? .turbulent : style
+    }
 
     var body: some View {
         ZStack {
-            if style == .turbulent {
+            if effectiveStyle == .turbulent {
                 // O modo fluido do cartão usa o mesmo shader Metal do fundo
                 // principal; 30 fps e scrim escuro preservam os controles.
                 TurbulentMarbleView(
@@ -84,7 +90,7 @@ struct PlayerBackgroundView: View {
                 .overlay(Color.black.opacity(
                     material.parameters.usesProceduralTexture ? 0.30 : 0.4))
             } else if let imageURL {
-                switch style {
+                switch effectiveStyle {
                 case .blurred:
                 ZStack {
                     CoverFill(url: imageURL)
