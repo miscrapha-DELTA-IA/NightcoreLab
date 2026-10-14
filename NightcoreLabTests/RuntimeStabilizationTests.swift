@@ -7,6 +7,87 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
 
+    func testExp7CuratedMaterialsHaveUniquePalettesAndTextureTopology() throws {
+        let ids = ["neon-pulse", "agate-zebra", "void-gloss", "terrazzo-magma",
+                   "airbrush-mirage", "groove-ebru", "cymatic-rorschach"]
+        let selected = ids.compactMap(CreativePresetCatalog.selectedExperience(id:))
+        XCTAssertEqual(selected.count, ids.count)
+        let materials = ids.map(CreativePresetCatalog.material(selection:))
+        XCTAssertEqual(materials.map(\.id), ids)
+        XCTAssertTrue(materials.allSatisfy { $0.parameters.usesProceduralTexture })
+        XCTAssertEqual(VisualMaterialCatalog.curatedPalettes.count, 7)
+        let palettes = ids.compactMap { VisualMaterialCatalog.curatedPalettes[$0]?.hex }
+        XCTAssertEqual(palettes.count, ids.count)
+        XCTAssertEqual(Set(palettes).count, ids.count)
+        XCTAssertTrue(palettes.allSatisfy {
+            $0.count == 5 && $0.allSatisfy {
+                $0.count == 7 && $0.first == "#" &&
+                $0.dropFirst().allSatisfy { $0.isHexDigit }
+            }
+        })
+        XCTAssertEqual(VisualMaterialCatalog.curatedPalettes["neon-pulse"]?.hex,
+                       ["#040406", "#FF0088", "#00FF9D", "#00E5FF", "#F8FAFC"])
+        XCTAssertEqual(VisualMaterialCatalog.curatedPalettes["void-gloss"]?.hex,
+                       ["#000000", "#00D2E6", "#00E5A3", "#F4DCE0", "#FF1A1A"])
+        let fingerprints: [VisualParameterSet] = materials.map(\.parameters)
+        XCTAssertEqual(Set(fingerprints.map {
+            "\($0.stripingFrequency),\($0.stripingMix),\($0.speckleIntensity)," +
+            "\($0.embossStrength),\($0.scanlineDensity),\($0.diffusionSoftness)," +
+            "\($0.voidThreshold),\($0.combStretch),\($0.bilateralSymmetry)," +
+            "\($0.halftoneGrating)"
+        }).count, 7)
+        XCTAssertGreaterThan(materials[0].parameters.stripingFrequency, 0)
+        XCTAssertGreaterThan(materials[2].parameters.voidThreshold, 0.5)
+        XCTAssertGreaterThan(materials[3].parameters.speckleIntensity, 0.5)
+        XCTAssertGreaterThan(materials[4].parameters.scanlineDensity, 0)
+        XCTAssertGreaterThan(materials[5].parameters.combStretch, 0)
+        XCTAssertEqual(materials[6].parameters.bilateralSymmetry, 1)
+
+        let cyber = CreativePresetCatalog.material(selection: "cyber-night")
+        XCTAssertFalse(cyber.parameters.usesProceduralTexture)
+        XCTAssertNotEqual(materials[0].parameters, cyber.parameters)
+        XCTAssertNil(VisualMaterialCatalog.curatedPalettes[cyber.id])
+        for material in materials {
+            XCTAssertEqual(try JSONDecoder().decode(
+                VisualMaterial.self, from: JSONEncoder().encode(material)), material)
+            let frame = MaterialResolver.resolve(material, timestamp: 12,
+                                                 reactionGain: 0)
+            XCTAssertEqual(frame.parameters.stripingMix, material.parameters.stripingMix)
+            XCTAssertEqual(frame.parameters.voidThreshold, material.parameters.voidThreshold)
+            XCTAssertEqual(frame.parameters.scanlineDensity, material.parameters.scanlineDensity)
+            XCTAssertEqual(frame.parameters.halftoneGrating, material.parameters.halftoneGrating)
+            XCTAssertEqual(frame.parameters.beatPulse, 0)
+        }
+    }
+
+    func testExp7VisualParameterSetCodableLegacyAndClamping() throws {
+        let wild = VisualParameterSet(
+            stripingFrequency: 999, stripingMix: 7,
+            speckleIntensity: .nan, embossStrength: .infinity,
+            scanlineDensity: 999, diffusionSoftness: -1,
+            voidThreshold: 4, combStretch: 40,
+            bilateralSymmetry: 9, halftoneGrating: 300)
+        XCTAssertEqual(wild.stripingFrequency, 80)
+        XCTAssertEqual(wild.stripingMix, 1)
+        XCTAssertEqual(wild.speckleIntensity, 0)
+        XCTAssertEqual(wild.embossStrength, 0)
+        XCTAssertEqual(wild.scanlineDensity, 160)
+        XCTAssertEqual(wild.diffusionSoftness, 0)
+        XCTAssertEqual(wild.voidThreshold, 1)
+        XCTAssertEqual(wild.combStretch, 8)
+        XCTAssertEqual(wild.bilateralSymmetry, 1)
+        XCTAssertEqual(wild.halftoneGrating, 120)
+        XCTAssertEqual(try JSONDecoder().decode(
+            VisualParameterSet.self, from: JSONEncoder().encode(wild)), wild)
+        let legacy = Data(#"{"distortion":0.2,"beatPulse":0.6,"pulseDecay":6,"offbeatScale":0.7,"warpAmount":0.18,"brightnessBoost":0.1}"#.utf8)
+        let restored = try JSONDecoder().decode(VisualParameterSet.self, from: legacy)
+        XCTAssertEqual(restored, VisualParameterSet(distortion: 0.2, beatPulse: 0.6))
+        XCTAssertFalse(restored.usesProceduralTexture)
+        XCTAssertFalse(VisualParameterSet.neutral.usesProceduralTexture)
+    }
+
+
+
     @MainActor
     func testExp5MusicalGridAndOptionalQuantizeAreDeterministic() throws {
         let beats = (0..<12).map {
