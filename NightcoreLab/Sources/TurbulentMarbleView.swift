@@ -165,10 +165,40 @@ struct TurbulentMarbleView: View {
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
         let palette = theme.palette
         let uniforms = resolved.marbleUniforms
+        let authoredPalette = VisualMaterialCatalog.curatedPalettes[resolved.materialID]
+        let colors = authoredPalette?.hex.map { Color(materialHex: $0) }
+        let texture = resolved.parameters.usesProceduralTexture && colors?.count == 5
+        // Secondary details are gated under thermal pressure; main flow,
+        // palette and timestamp stay identical and never allocate bitmaps.
+        let detailQuality: Float = energyBudget.thermal.rawValue >= 2 ? 0 :
+            (energyBudget.lowPower || energyBudget.thermal == .fair ? 0.25 : 1)
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
-                if resolved.type == .marble {
+                if texture, let colors {
+                    content.colorEffect(
+                        ShaderLibrary.texturedMarble(
+                            .float2(proxy.size), .float(time),
+                            .color(colors[0]), .color(colors[1]),
+                            .color(colors[2]), .color(colors[3]), .color(colors[4]),
+                            .float(Float(uniforms.stripingFrequency)),
+                            .float(Float(uniforms.stripingMix)),
+                            .float(Float(uniforms.speckleIntensity)),
+                            .float(Float(uniforms.embossStrength)),
+                            .float(Float(uniforms.scanlineDensity)),
+                            .float(Float(uniforms.diffusionSoftness)),
+                            .float(Float(uniforms.voidThreshold)),
+                            .float(Float(uniforms.combStretch)),
+                            .float(Float(uniforms.bilateralSymmetry)),
+                            .float(Float(uniforms.halftoneGrating)),
+                            .float(Float(uniforms.distortion)),
+                            .float(Float(uniforms.beatPulse)),
+                            .float(Float(uniforms.warpAmount)),
+                            .float(Float(uniforms.brightnessBoost)),
+                            .float(detailQuality)
+                        )
+                    )
+                } else if resolved.type == .marble {
                     // Identity path: retain the complete Stage 13 shader call.
                     content.colorEffect(
                         ShaderLibrary.liquidMarble(
@@ -211,5 +241,17 @@ struct TurbulentMarbleView: View {
         TurbulentMarbleView(theme: .acid)
         Color.black.opacity(0.35)                   // scrim: garante contraste do karaokê
         Text("Nightcore Lab").font(.largeTitle.bold()).foregroundStyle(.white)
+    }
+}
+
+/// Exact sRGB 8-bit palette stops, used exclusively for the seven curated
+/// procedural materials. Existing MarbleTheme palettes remain untouched.
+private extension Color {
+    init(materialHex: String) {
+        let text = materialHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let value = UInt32(text, radix: 16) ?? 0
+        self.init(red: Double((value >> 16) & 0xFF) / 255,
+                  green: Double((value >> 8) & 0xFF) / 255,
+                  blue: Double(value & 0xFF) / 255)
     }
 }
