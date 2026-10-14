@@ -166,7 +166,9 @@ struct PerformanceModeView: View {
     @State private var padRhythmTask: Task<Void, Never>?
     @State private var haptics = false
     @State private var heldPads: Set<String> = []
-    @State private var recordedSourceRevision: Int?
+    private var recordedSourceRevision: Int? {
+        audio.performanceRecordingSourceRevision
+    }
     @State private var isRenderingAudio = false
     @State private var exportedAudio: URL?
     @State private var renderError: String?
@@ -255,8 +257,7 @@ struct PerformanceModeView: View {
                             Button {
                                 if recorder.isRecording { audio.stopPadTake() }
                                 else {
-                                    recordedSourceRevision = audio.playbackSourceRevision
-                                    recordedClip = sourceClip
+                                    recordedClip = sourceClip ?? audio.performanceSourceClip
                                     audio.beginPadTake()
                                     exportedAudio = nil
                                 }
@@ -271,7 +272,6 @@ struct PerformanceModeView: View {
                             .accessibilityIdentifier("performance.record")
                             if !recorder.isRecording && !recorder.events.isEmpty {
                                 Button {
-                                    recordedSourceRevision = audio.playbackSourceRevision
                                     audio.beginPadTake(overdub: true)
                                     exportedAudio = nil
                                 } label: {
@@ -282,7 +282,7 @@ struct PerformanceModeView: View {
 
                             if !recorder.events.isEmpty && !recorder.isRecording,
                                let payload = recorder.shareJSON(
-                                   sourceClip: recordedClip,
+                                   sourceClip: recordedClip ?? audio.performanceSourceClip,
                                    quantizeStrength: Float(grooveStrength)) {
                                 ShareLink(item: payload,
                                           subject: Text("NightcoreLab Performance Events"),
@@ -708,7 +708,7 @@ struct PerformanceModeView: View {
         guard !isRenderingAudio, audio.fileName != nil,
               recordedSourceRevision == audio.playbackSourceRevision else { return }
         let frozen = recorder.timeline(
-            sourceClip: recordedClip, quantizeStrength: Float(grooveStrength))
+            sourceClip: recordedClip ?? audio.performanceSourceClip, quantizeStrength: Float(grooveStrength))
         guard frozen.isValid && !frozen.events.isEmpty else { return }
         isRenderingAudio = true
         exportedAudio = nil
