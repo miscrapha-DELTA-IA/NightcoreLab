@@ -90,6 +90,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -281,6 +282,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                             shareVideo(mode: mode, includeAudio: includeAudio)
                         }
                     )
+                    if showsKaraoke {
+                        KaraokeScoringControls(store: lyricsStore, audio: audio,
+                                               clock: clock, accent: appTheme.accent)
+                    }
                     if canShowKaraoke {
                         micButton
                     }
@@ -336,7 +341,25 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                  "Tente compartilhar novamente. A reprodução continua normalmente.")
         }
         .environment(\.colorScheme, .dark)
-        .onAppear { lyricsStore.attach(clock: clock) }
+        .onAppear {
+            lyricsStore.attach(clock: clock)
+            lyricsStore.scoring.present(showsKaraoke)
+            lyricsStore.scoringPitchShift = { [weak audio] in Double(audio?.pitch ?? 0) }
+        }
+        .onChange(of: showsKaraoke) { _, presented in
+            lyricsStore.scoring.present(presented)
+            if !presented { audio.endKaraokeMicrophone() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                audio.endKaraokeMicrophone()
+                lyricsStore.scoring.stop()
+            }
+        }
+        .onDisappear {
+            audio.endKaraokeMicrophone()
+            lyricsStore.scoring.present(false)
+        }
 
         .task(id: track.id) {
             // Cache-only handoff, off the touch/audio thread. No FFT is run
@@ -344,6 +367,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             let expectedTrack = track.id
             activeSongProfile = nil
             suggestedSongProfile = nil
+            lyricsStore.scoring.resetForTrack()
             guard let url = audio.visualAnalysisURL, url.isFileURL else {
                 suggestedSongProfile = SongCreativeProfileResolver.suggest(
                     assetID: expectedTrack, sourceRevision: "not-analyzed",
@@ -365,11 +389,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             // algorithms from silently affecting the creative scene.
             let expression = await ExpressionCache().load(
                 for: descriptor,
-                requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints)
+                requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints.merging(
+                    [.melody: ExpressionFingerprint(algorithmVersion: 1)]) { current, _ in current })
             let saved = await songProfileStore.loadSongProfile(
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision)
             guard !Task.isCancelled, track.id == expectedTrack else { return }
+            lyricsStore.scoring.setReference(key: expression.key, melody: expression.melodicFeatures)
             suggestedSongProfile = saved ?? SongCreativeProfileResolver.suggest(
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision,

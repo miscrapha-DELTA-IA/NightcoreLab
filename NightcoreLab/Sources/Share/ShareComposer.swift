@@ -122,3 +122,14 @@ struct ShareCardView: View {
         }
     }
 }
+
+/// Compact result uses the existing share surface; no voice recording or lyric
+/// content is exported. Simulation and missing harmonic evidence stay explicit.
+enum KaraokeScoreShareComposer {
+    static func text(_ score: KaraokeScoreSnapshot, simulation: Bool) -> String {
+        let mode = simulation ? "SIMULAÇÃO" : "Karaokê"
+        let evidence = score.hasHarmonicReference ? "Ritmo + afinação" : "Ritmo e presença (sem referência tonal)"
+        return "NightcoreLab · \(mode)\nNota \(score.rank) · \(score.totalScore) pontos\n" +
+            "Maior combo: \(score.bestCombo) · Precisão: \(Int(score.accuracyPercentage.rounded()))%\n\(evidence)"
+    }
+}
