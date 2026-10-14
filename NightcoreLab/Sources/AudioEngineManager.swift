@@ -134,6 +134,9 @@ final class AudioEngineManager {
     @ObservationIgnored private let vocalReverb = AVAudioUnitReverb()
     @ObservationIgnored private let vocalGate = AVAudioMixerNode()
     @ObservationIgnored private var microphoneCapture: KaraokeMicrophoneCapture?
+    /// Never read engine.inputNode just to initialize the engine or clean up
+    /// headless CI; retained only after a hardware-format validation.
+    @ObservationIgnored private var connectedVocalInput: AVAudioInputNode?
     @ObservationIgnored private var vocalGeneration = 0
     @ObservationIgnored var karaokeCompletion: (() -> Void)?
 
@@ -182,8 +185,8 @@ final class AudioEngineManager {
     /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
-        [vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
-            .forEach { engine.attach($0) }
+        // Microphone DSP units are attached only after permission and a
+        // valid hardware input format. The simulator needs no input graph.
         padRuntime.attach(to: engine)
         // Pads can sound before a song has been selected.
         let standaloneFormat = AVAudioFormat(
@@ -191,7 +194,6 @@ final class AudioEngineManager {
         engine.connect(performanceMixer, to: limiter, format: standaloneFormat)
         engine.connect(limiter, to: engine.mainMixerNode, format: standaloneFormat)
         padRuntime.connect(to: engine, mixer: performanceMixer)
-        connectVocalChain(graphFormat: standaloneFormat)
         creatorLoops.attach(to: engine, output: performanceMixer,
                             format: standaloneFormat)
         engine.mainMixerNode.outputVolume = pow(10, Self.outputHeadroomDB / 20)
@@ -239,7 +241,8 @@ final class AudioEngineManager {
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
                           performanceMixer: performanceMixer)
         padRuntime.connect(to: engine, mixer: performanceMixer)
-        engine.connect(vocalGate, to: performanceMixer, format: graphFormat)
+        // No mic FX wiring during load/prepare/offline tests. It is done on
+        // opt-in activation, after validating actual hardware input.
         creatorLoops.attach(to: engine, output: performanceMixer, format: graphFormat)
         engine.prepare()
         if performanceModePresented {
@@ -285,6 +288,7 @@ final class AudioEngineManager {
     func applyVocalFX(_ settings: VocalFXSetting) {
         guard settings.isValid else { return }
         vocalSetting = settings
+        guard vocalPitch.engine != nil else { return }
         let m = VocalFXParameters.resolve(settings)
         vocalPitch.rate = 1
         vocalPitch.pitch = m.pitchCents
@@ -304,13 +308,24 @@ final class AudioEngineManager {
         refreshVocalMonitorSafety()
     }
 
-    private func connectVocalChain(graphFormat: AVAudioFormat) {
-        engine.connect(vocalPitch, to: vocalEQ, format: graphFormat)
-        engine.connect(vocalEQ, to: vocalDelay, format: graphFormat)
-        engine.connect(vocalDelay, to: vocalReverb, format: graphFormat)
-        engine.connect(vocalReverb, to: vocalGate, format: graphFormat)
-        engine.connect(vocalGate, to: performanceMixer, format: graphFormat)
-        vocalGate.outputVolume = 0
+    /// Only after the AVAudioSession reports input hardware and a valid
+    /// nonzero input bus format. Nil formats let native units negotiate
+    /// their own processing sample rate rather than forcing the song rate
+    /// (or a stale 48-kHz standalone rate) onto the microphone path.
+    private func connectVocalChain(input: AVAudioInputNode,
+                                   format: AVAudioFormat) {
+        if vocalPitch.engine == nil {
+            [vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
+                .forEach { engine.attach($0) }
+        }
+        vocalGate.outputVolume = 0 // before *any* input edge is attached
+        engine.connect(input, to: vocalPitch, format: format)
+        engine.connect(vocalPitch, to: vocalEQ, format: nil)
+        engine.connect(vocalEQ, to: vocalDelay, format: nil)
+        engine.connect(vocalDelay, to: vocalReverb, format: nil)
+        engine.connect(vocalReverb, to: vocalGate, format: nil)
+        engine.connect(vocalGate, to: performanceMixer, format: nil)
+        connectedVocalInput = input
     }
 
     private func refreshVocalMonitorSafety() {
@@ -336,25 +351,34 @@ final class AudioEngineManager {
         removeVisualMeterTap()
         engine.stop()
         let capture = KaraokeMicrophoneCapture()
-        var tapInstalled = false
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.allowBluetoothA2DP, .defaultToSpeaker])
             try session.setActive(true)
-            let input = engine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            guard format.sampleRate > 0, format.channelCount > 0 else {
+            // isInputAvailable is safe on headless macOS/simulators. Avoid
+            // engine.inputNode entirely when no physical microphone exists.
+            guard session.isInputAvailable else {
                 throw AudioEngineError.unsupportedAudio
             }
-            engine.connect(input, to: vocalPitch, format: format)
+            let input = engine.inputNode
+            let hardwareFormat = input.inputFormat(forBus: 0)
+            let format = input.outputFormat(forBus: 0)
+            guard hardwareFormat.channelCount > 0,
+                  hardwareFormat.sampleRate.isFinite,
+                  hardwareFormat.sampleRate > 0,
+                  format.channelCount > 0,
+                  format.sampleRate.isFinite,
+                  format.sampleRate > 0 else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            connectVocalChain(input: input, format: format)
             let scoringClock = lyricsClock
             input.installTap(onBus: 0, bufferSize: 2048, format: format) {
                 buffer, _ in
                 // Captured clock is thread-safe; no MainActor hop on CoreAudio.
                 capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
-            tapInstalled = true
             microphoneCapture = capture
             vocalCaptureActive = true
             applyVocalFX(vocalSetting)
@@ -367,11 +391,14 @@ final class AudioEngineManager {
             return true
         } catch {
             capture.stop()
-            if tapInstalled || vocalCaptureActive {
+            if connectedVocalInput != nil || vocalCaptureActive {
                 endVocalCapture()
             } else {
+                // No valid input was attached. Never query engine.inputNode
+                // while recovering from a simulator/no-mic failure.
                 engine.stop()
-                engine.disconnectNodeOutput(engine.inputNode)
+                vocalGate.outputVolume = 0
+                vocalMonitoringEnabled = false
                 configureSession()
                 lyricsClock.refreshOutputLatency()
             }
@@ -392,13 +419,17 @@ final class AudioEngineManager {
     func endVocalCapture() {
         vocalGeneration &+= 1
         karaokeCompletion = nil
-        guard vocalCaptureActive || microphoneCapture != nil else { return }
+        guard vocalCaptureActive || microphoneCapture != nil ||
+              connectedVocalInput != nil else { return }
         let resume = isPlaying
         if resume { pause() }
         removeVisualMeterTap()
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        engine.disconnectNodeOutput(engine.inputNode)
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
         microphoneCapture?.stop()
         microphoneCapture = nil
         vocalCaptureActive = false
