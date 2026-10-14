@@ -62,10 +62,35 @@ struct PadKit: Codable, Equatable, Sendable, Identifiable {
 struct PadEvent: Codable, Equatable, Sendable, Identifiable {
     let id: UUID
     let padId: String
+    /// Raw monotonic seconds since recording began; NEVER quantized.
     let timestamp: TimeInterval
     let velocity: Float
     let duration: TimeInterval
+    /// Absolute source-audio seconds, when a song is playing.
     let sourceTime: TimeInterval?
+    /// Additive, optional 0-based beat and 1-based 4/4 bar coordinates.
+    let musicalBeat: Double?
+    let musicalBar: Int?
+    let bpmAtTrigger: Double?
+    /// Frozen target computed from the cached, tracked rhythm grid.
+    /// Separate from sourceTime so the user's original performance is intact.
+    let quantizedSourceTime: TimeInterval?
+
+    init(id: UUID, padId: String, timestamp: TimeInterval,
+         velocity: Float, duration: TimeInterval, sourceTime: TimeInterval?,
+         musicalBeat: Double? = nil, musicalBar: Int? = nil,
+         bpmAtTrigger: Double? = nil, quantizedSourceTime: TimeInterval? = nil) {
+        self.id = id
+        self.padId = padId
+        self.timestamp = timestamp
+        self.velocity = velocity
+        self.duration = duration
+        self.sourceTime = sourceTime
+        self.musicalBeat = musicalBeat
+        self.musicalBar = musicalBar
+        self.bpmAtTrigger = bpmAtTrigger
+        self.quantizedSourceTime = quantizedSourceTime
+    }
 }
 
 struct PerformanceTimeline: Codable, Equatable, Sendable {
@@ -76,12 +101,16 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
     /// Optional v1 additive field, absent from older event-only recordings.
     /// No file path or original waveform is serialized.
     let sourceClip: PerformanceSourceClip?
+    /// 0 = original groove; 1 = full grid lock. Does not edit event timestamps.
+    let quantizeStrength: Float
 
     init(kitID: String, events: [PadEvent],
-         sourceClip: PerformanceSourceClip? = nil) {
+         sourceClip: PerformanceSourceClip? = nil,
+         quantizeStrength: Float = 0) {
         version = Self.schemaVersion
         self.kitID = kitID
         self.sourceClip = sourceClip
+        self.quantizeStrength = quantizeStrength
         self.events = events.sorted {
             $0.timestamp == $1.timestamp
                 ? $0.id.uuidString < $1.id.uuidString
@@ -92,17 +121,24 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
     var isValid: Bool {
         version == Self.schemaVersion &&
         (sourceClip?.isValid ?? true) &&
+        quantizeStrength.isFinite && (0...1).contains(quantizeStrength) &&
         events.count <= 4096 &&
         events.allSatisfy {
             $0.timestamp.isFinite && $0.timestamp >= 0 &&
             $0.velocity.isFinite && (0...1).contains($0.velocity) &&
             $0.duration.isFinite && $0.duration > 0 &&
-            ($0.sourceTime == nil || ($0.sourceTime!.isFinite && $0.sourceTime! >= 0))
+            ($0.sourceTime == nil || ($0.sourceTime!.isFinite && $0.sourceTime! >= 0)) &&
+            ($0.musicalBeat == nil || ($0.musicalBeat!.isFinite && $0.musicalBeat! >= 0)) &&
+            ($0.musicalBar == nil || $0.musicalBar! >= 1) &&
+            ($0.bpmAtTrigger == nil || ($0.bpmAtTrigger!.isFinite &&
+                                        $0.bpmAtTrigger! > 0)) &&
+            ($0.quantizedSourceTime == nil ||
+                ($0.quantizedSourceTime!.isFinite && $0.quantizedSourceTime! >= 0))
         }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, kitID, events, sourceClip
+        case version, kitID, events, sourceClip, quantizeStrength
     }
 
     init(from decoder: Decoder) throws {
@@ -110,6 +146,7 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
         version = try c.decode(Int.self, forKey: .version)
         kitID = try c.decode(String.self, forKey: .kitID)
         sourceClip = try c.decodeIfPresent(PerformanceSourceClip.self, forKey: .sourceClip)
+        quantizeStrength = try c.decodeIfPresent(Float.self, forKey: .quantizeStrength) ?? 0
         events = try c.decode([PadEvent].self, forKey: .events)
         guard isValid else {
             throw DecodingError.dataCorruptedError(
@@ -136,24 +173,39 @@ final class PerformanceRecorder {
     func stop() { isRecording = false }
 
     func append(_ sample: SampleDescriptor, velocity: Float, sourceTime: TimeInterval?,
-                at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+                at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                rhythm: RhythmAnalysisResult? = nil,
+                subdivision: PadMusicalGrid.Subdivision = .sixteenth) {
         guard isRecording, events.count < 4096, uptime.isFinite,
               uptime >= startUptime else { return }
         let velocity = min(max(velocity, 0), 1)
         guard velocity.isFinite else { return }
+        // Pure, binary-search metadata lookup. Rhythm decoding/FFT happened
+        // asynchronously before the recording touch.
+        let position = sourceTime.flatMap { time in
+            rhythm.flatMap { PadMusicalGrid.at(time, rhythm: $0,
+                                              subdivision: subdivision) }
+        }
         events.append(PadEvent(id: UUID(), padId: sample.id,
                                timestamp: uptime - startUptime, velocity: velocity,
-                               duration: sample.duration, sourceTime: sourceTime))
+                               duration: sample.duration, sourceTime: sourceTime,
+                               musicalBeat: position?.beat, musicalBar: position?.bar,
+                               bpmAtTrigger: position?.bpm,
+                               quantizedSourceTime: position?.nearestGridSourceTime))
     }
 
     func timeline(kit: PadKit = .starter,
-                  sourceClip: PerformanceSourceClip? = nil) -> PerformanceTimeline {
-        PerformanceTimeline(kitID: kit.id, events: events, sourceClip: sourceClip)
+                  sourceClip: PerformanceSourceClip? = nil,
+                  quantizeStrength: Float = 0) -> PerformanceTimeline {
+        PerformanceTimeline(kitID: kit.id, events: events,
+                            sourceClip: sourceClip, quantizeStrength: quantizeStrength)
     }
 
     func shareJSON(kit: PadKit = .starter,
-                   sourceClip: PerformanceSourceClip? = nil) -> String? {
-        let timeline = timeline(kit: kit, sourceClip: sourceClip)
+                   sourceClip: PerformanceSourceClip? = nil,
+                   quantizeStrength: Float = 0) -> String? {
+        let timeline = timeline(kit: kit, sourceClip: sourceClip,
+                                quantizeStrength: quantizeStrength)
         guard timeline.isValid,
               let data = try? JSONEncoder().encode(timeline) else { return nil }
         return String(data: data, encoding: .utf8)
