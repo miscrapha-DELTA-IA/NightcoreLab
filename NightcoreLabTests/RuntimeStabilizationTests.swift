@@ -7,6 +7,87 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
 
+    @MainActor
+    func testStage18C3VisibleMaterialBindingsAndCreatorNavigation() throws {
+        let expected: [(String, [String])] = [
+            ("neon-pulse", ["#040406", "#FF0088", "#00FF9D", "#00E5FF", "#F8FAFC"]),
+            ("agate-zebra", ["#FFFFFF", "#050507", "#6C7A9C", "#F28C28", "#FFFFFF"]),
+            ("void-gloss", ["#000000", "#00D2E6", "#00E5A3", "#F4DCE0", "#FF1A1A"]),
+            ("terrazzo-magma", ["#0B0D11", "#E87A1E", "#D91414", "#D8DEC8", "#081E4A"]),
+            ("airbrush-mirage", ["#121214", "#FF3B30", "#8E7CFF", "#FFB340", "#EBF2D5"]),
+            ("groove-ebru", ["#008B94", "#F5A623", "#EE4035", "#F8B195", "#26292C"]),
+            ("cymatic-rorschach", ["#050714", "#6699CC", "#F5F9FF", "#6699CC", "#050714"])
+        ]
+        let cyber = PlayerBackgroundView(style: .turbulent, imageURL: nil,
+                                         theme: .cyber,
+                                         material: CreativePresetCatalog.material(selection: "cyber-night"))
+            .renderedSurface
+        XCTAssertFalse(cyber.textured)
+        for (id, hex) in expected {
+            let card = PlayerBackgroundView(style: .blurred, imageURL: nil,
+                                            theme: .cyber,
+                                            material: CreativePresetCatalog.material(selection: id))
+            let actual = card.renderedSurface
+            XCTAssertEqual(actual.materialID, id)
+            XCTAssertEqual(actual.paletteHex, hex)
+            XCTAssertTrue(actual.textured)
+            XCTAssertEqual(card.effectiveStyle, .turbulent)
+            XCTAssertNotEqual(actual.parameters, cyber.parameters)
+            XCTAssertNotEqual(actual.paletteHex, cyber.paletteHex)
+            let shader = MarbleSurfaceBinding.resolve(material: card.resolvedMaterial)
+            XCTAssertEqual(shader, actual) // identical data bound by TurbulentMarbleView
+        }
+        var route = CreatorStudioRoute()
+        let selectedPreset = "void-gloss"
+        let theme: AppTheme = .ultraviolet
+        route.toggle()
+        XCTAssertTrue(route.isPresented)
+        XCTAssertEqual(selectedPreset, "void-gloss")
+        XCTAssertEqual(theme, .ultraviolet)
+        route.toggle()
+        XCTAssertFalse(route.isPresented)
+    }
+
+    @MainActor
+    func testStage18C3LivePCMMeterChangesOnScreenShaderWithModeGain() throws {
+        let meter = AudioVisualLiveMeter()
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 1024))
+        buffer.frameLength = 1024
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        for i in 0..<1024 {
+            channel[i] = 0.45 * sin(Float(i) * 2 * .pi * 120 / 48_000)
+        }
+        meter.consume(buffer)
+        let level = meter.snapshot()
+        XCTAssertGreaterThan(level.rms, 0)
+        XCTAssertGreaterThan(level.bass, 0)
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse,
+                                            timestamp: 2)
+        let off = MarbleLiveResponse.apply(base, levels: level, mode: .off)
+        let subtle = MarbleLiveResponse.apply(base, levels: level, mode: .subtle)
+        let reactive = MarbleLiveResponse.apply(base, levels: level, mode: .responsive)
+        XCTAssertEqual(off, base)
+        XCTAssertGreaterThan(subtle.parameters.distortion, off.parameters.distortion)
+        XCTAssertGreaterThan(reactive.parameters.distortion, subtle.parameters.distortion)
+        XCTAssertGreaterThan(reactive.parameters.brightnessBoost,
+                             subtle.parameters.brightnessBoost)
+        XCTAssertEqual(reactive.parameters.stripingFrequency,
+                       base.parameters.stripingFrequency)
+        var controls = CreatorControls()
+        controls.set(0.9, for: .brightness)
+        let edited = MarbleCreatorResponse.apply(reactive, controls: controls)
+        XCTAssertGreaterThan(edited.parameters.brightnessBoost,
+                             reactive.parameters.brightnessBoost)
+        XCTAssertEqual(edited.parameters.stripingMix, reactive.parameters.stripingMix)
+        meter.reset()
+        XCTAssertEqual(meter.snapshot(), .silence)
+    }
+
+
+
     func testExp7CuratedMaterialsHaveUniquePalettesAndTextureTopology() throws {
         let ids = ["neon-pulse", "agate-zebra", "void-gloss", "terrazzo-magma",
                    "airbrush-mirage", "groove-ebru", "cymatic-rorschach"]
