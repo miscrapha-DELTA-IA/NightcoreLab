@@ -7,6 +7,69 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
 
+    func testExp11FourVocalMacrosAndRouteSafety() throws {
+        for preset in VocalFXPreset.allCases {
+            let setting = VocalFXSetting(preset: preset, intensity: 0.8)
+            XCTAssertEqual(try JSONDecoder().decode(
+                VocalFXSetting.self, from: JSONEncoder().encode(setting)), setting)
+            let resolved = VocalFXParameters.resolve(setting)
+            XCTAssertTrue(resolved.pitchCents.isFinite)
+            XCTAssertTrue(resolved.eqPresenceDB.isFinite)
+            XCTAssertTrue((0...100).contains(resolved.reverbWetMix))
+            XCTAssertTrue((0...100).contains(resolved.delayWetMix))
+            XCTAssertGreaterThan(resolved.lowPassHz, 0)
+        }
+        XCTAssertEqual(VocalFXParameters.resolve(.init(preset: .studioClean, intensity: 1))
+            .pitchCents, 0)
+        XCTAssertGreaterThan(VocalFXParameters.resolve(.init(preset: .nightcore, intensity: 1))
+            .pitchCents, 0)
+        XCTAssertLessThan(VocalFXParameters.resolve(.init(preset: .dreamCloud, intensity: 1))
+            .pitchCents, 0)
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [.builtInSpeaker], latency: 0.008))
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [.bluetoothA2DP], latency: 0.120))
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [.headphones], latency: 0.045))
+        XCTAssertTrue(VocalMonitorSafety.allows(portTypes: [.headphones], latency: 0.018))
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [], latency: 0.018))
+    }
+
+    func testExp11CreatorVocalCodableKeepsLegacyPresets() throws {
+        var controls = CreatorControls()
+        controls.vocalFX = .init(preset: .cyberChoir, intensity: 0.62)
+        let encoded = try JSONEncoder().encode(controls)
+        let roundTrip = try JSONDecoder().decode(CreatorControls.self, from: encoded)
+        XCTAssertEqual(roundTrip, controls)
+        let legacy = try JSONDecoder().decode(CreatorControls.self,
+                                               from: Data(#"{"brightness":0.7}"#.utf8))
+        XCTAssertEqual(legacy.vocalFX.preset, .studioClean)
+        XCTAssertEqual(legacy.vocalFX.intensity, 0.5, accuracy: 0.0001)
+        XCTAssertTrue(legacy.isValid)
+    }
+
+    func testExp11TrackedBeatBarLoopLaunchAndNoFalseBPM() throws {
+        let grid = (0..<16).map { i in
+            RhythmAnalysisResult.BeatEvent(time: Double(i) * 0.5,
+                                           index: i, strength: 0.8,
+                                           isDownbeat: i.isMultiple(of: 4))
+        }
+        let rhythm = RhythmAnalysisResult(
+            onsetEvents: [],
+            bpmCandidates: [.init(bpm: 120, confidence: 0.85)],
+            beatGrid: grid, confidence: 0.9, downbeatConfidence: 0.75)
+        XCTAssertEqual(CreatorLoopGrid.tempo(rhythm), 120)
+        XCTAssertEqual(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: rhythm),
+                       2, accuracy: 0.00001)
+        XCTAssertEqual(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: rhythm,
+                                                     bar: false), 0.5, accuracy: 0.00001)
+        XCTAssertNil(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: nil))
+        XCTAssertNil(CreatorLoopGrid.tempo(nil))
+        let low = RhythmAnalysisResult(onsetEvents: [], bpmCandidates: [],
+                                      beatGrid: grid, confidence: 0.2)
+        XCTAssertNil(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: low))
+        XCTAssertNil(CreatorLoopGrid.tempo(low))
+    }
+
+
+
     @MainActor
     func testExp10LivePadImpulseIsBoundedAndMaterialAware() throws {
         let emitter = PadVisualAccentEmitter()
