@@ -49,6 +49,16 @@ struct PadLatencySummary: Equatable {
 final class PadLatencyProbe {
     static let maxSamples = 1_024
 
+    /// The endpoint is the instant the audio command returns, NOT when
+    /// unrelated idle-stop housekeeping or SwiftUI state updates complete.
+    /// This is still only a software marker, not the speaker's acoustic onset.
+    static func elapsedMilliseconds(from began: TimeInterval,
+                                    to commandCompleted: TimeInterval) -> Double {
+        guard began.isFinite, commandCompleted.isFinite,
+              commandCompleted >= began else { return .nan }
+        return (commandCompleted - began) * 1_000
+    }
+
     private(set) var isCapturing = false
     private var samples: [PadLatencySample] = []
     private var failed = 0
