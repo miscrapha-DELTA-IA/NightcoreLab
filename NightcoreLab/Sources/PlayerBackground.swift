@@ -56,6 +56,7 @@ struct PlayerBackgroundView: View {
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
     var creatorControls: CreatorControls = .neutral
+    var padAccentEmitter: PadVisualAccentEmitter? = nil
 
     /// The on-screen palette/uniform route is identical to full-screen
     /// TurbulentMarbleView, not an independent Cyber Night theme switch.
@@ -83,7 +84,8 @@ struct PlayerBackgroundView: View {
                     pulseDriver: frozenTime == nil ? pulseDriver : nil,
                     liveMeter: frozenTime == nil ? liveMeter : nil,
                     reactionMode: reactionMode,
-                    creatorControls: creatorControls
+                    creatorControls: creatorControls,
+                    padAccentEmitter: padAccentEmitter
                 )
                 // Preserve legacy readability while allowing authored
                 // high-contrast five-stop surfaces to remain recognizable.
