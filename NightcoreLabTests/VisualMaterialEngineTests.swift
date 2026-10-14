@@ -289,12 +289,28 @@ final class VisualMaterialEngineTests: XCTestCase {
         let used = Set(CreativePresetCatalog.experiencePresets.map { $0.visualMaterial.id })
             .union([VisualMaterialCatalog.originalMarble.id])
         XCTAssertTrue(VisualMaterialCatalog.all.allSatisfy { used.contains($0.id) })
-        // Stage 18C adds curated marble-type looks after the legacy prefix.
-        // Preserve every existing expanded type while recognizing that the
-        // newly authored procedural palettes also use the Marble renderer.
-        XCTAssertEqual(Set(VisualMaterialCatalog.all.suffix(from: 3).map(\.type)),
+        XCTAssertEqual(Array(VisualMaterialCatalog.all.prefix(3)).map(\.id),
+                       ["original-marble", "cyber-chrome", "neon-pulse"])
+        XCTAssertEqual(Set(VisualMaterialCatalog.all.map(\.id)).count,
+                       VisualMaterialCatalog.all.count, "Material IDs must remain unique")
+        // EXP-7 appends textured Marble recipes after the Stage 13B materials.
+        // Type coverage is a catalog-wide contract, not a non-Marble suffix.
+        XCTAssertEqual(Set(VisualMaterialCatalog.all.map(\.type)),
                        Set([.marble, .liquidGlass, .chrome, .organicNoise,
                             .atmosphericSmoke, .advancedMarble]))
+        let expandedTypes: [String: VisualMaterialType] = [
+            "liquid-glass": .liquidGlass, "chrome-night": .chrome,
+            "organic-pulse": .organicNoise, "atmospheric-smoke": .atmosphericSmoke,
+            "advanced-marble": .advancedMarble
+        ]
+        for (id, type) in expandedTypes {
+            XCTAssertEqual(VisualMaterialCatalog.all.first { $0.id == id }?.type,
+                           type, "Expanded material type changed for \(id)")
+        }
+        for id in VisualMaterialCatalog.curatedPalettes.keys {
+            XCTAssertEqual(VisualMaterialCatalog.all.first { $0.id == id }?.type,
+                           .marble, "Curated texture must remain a Marble recipe: \(id)")
+        }
         for type in VisualMaterialType.allCases where !type.isSupported {
             let reserved = VisualMaterial(id: "future", name: "Future", type: type)
             XCTAssertEqual(MaterialResolver.resolve(reserved, timestamp: 1),
