@@ -282,7 +282,8 @@ private struct CreatorStudioPanel: View {
                 if let descriptor {
                     let expression = await ExpressionCache().load(
                         for: descriptor,
-                        requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints)
+                        requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints.merging(
+                    [.melody: ExpressionFingerprint(algorithmVersion: 1)]) { current, _ in current })
                     if !Task.isCancelled, audio.playbackSourceRevision == revision {
                         harmonicKey = expression.key
                     }
@@ -672,7 +673,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             // algorithms from silently affecting the creative scene.
             let expression = await ExpressionCache().load(
                 for: descriptor,
-                requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints)
+                requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints.merging(
+                    [.melody: ExpressionFingerprint(algorithmVersion: 1)]) { current, _ in current })
             let saved = await songProfileStore.loadSongProfile(
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision)
