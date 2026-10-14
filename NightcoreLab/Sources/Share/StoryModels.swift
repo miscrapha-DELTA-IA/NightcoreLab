@@ -84,14 +84,11 @@ struct StoryVideoRequest: Sendable {
                        audioTimeline: AudioFeatureTimeline?,
                        rhythm: RhythmAnalysisResult?,
                        runtime: CompositionRuntime? = nil) -> ResolvedCompositionFrame? {
-        guard let base = (runtime ?? renderRuntime)?.frame(
+        (runtime ?? renderRuntime)?.frame(
             at: frame.elapsed, audioTimeline: audioTimeline,
             typography: typographyLayer(atLyricTime: frame.lyricTime),
-            rhythmAnalysis: rhythm) else { return nil }
-        guard let material = base.materialFrame else { return base }
-        let accent = frame.padAccent ?? PadVisualAccentResolver.at(
-            sourceTime: frame.sourceTime, timeline: padPerformance)
-        return base.withMaterial(PadVisualAccentResolver.apply(material, accent: accent))
+            rhythmAnalysis: rhythm, performance: padPerformance,
+            padAccent: frame.padAccent)
     }
 
     /// Source-compatible view of the frozen composition.
