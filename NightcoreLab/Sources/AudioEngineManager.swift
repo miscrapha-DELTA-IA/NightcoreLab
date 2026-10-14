@@ -1028,8 +1028,31 @@ final class AudioEngineManager {
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
         } catch {
+            #if DEBUG
             print("AudioEngineManager: falha ao configurar AVAudioSession – \(error)")
+            #endif
         }
+    }
+
+    /// Release transient voices at every hardware interruption/route loss.
+    /// Never query inputNode on a headless simulator: only disconnect a mic
+    /// node that was validated and attached during explicit opt-in capture.
+    private func suspendLivePerformanceForSystemEvent() {
+        stopPerformancePads()
+        stopAllCreatorLoops()
+        stopPadTake()
+        padAccentEmitter.clear()
+        vocalGate.outputVolume = 0
+        vocalMonitoringEnabled = false
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
+        microphoneCapture?.stop()
+        microphoneCapture = nil
+        vocalCaptureActive = false
+        karaokeCompletion = nil
     }
 
     private func observeInterruptions() {
@@ -1048,6 +1071,7 @@ final class AudioEngineManager {
                 case .began:
                     let wasPlaying = self.isPlaying
                     let source = self.sourceURL
+                    self.suspendLivePerformanceForSystemEvent()
                     self.pause()
                     // Pause invalidates any previous request. Capture *after*
                     // it so a later user pause or replacement cancels resumption.
@@ -1085,8 +1109,15 @@ final class AudioEngineManager {
                 guard let self else { return }
                 self.lyricsClock.refreshOutputLatency()
                 self.refreshPerformanceOutputLatency()
+                // Hardware input formats and scheduled voices may become
+                // invalid during route negotiation. The current song file is
+                // retained; no accidental auto-resume on unplug.
+                if self.vocalCaptureActive {
+                    self.suspendLivePerformanceForSystemEvent()
+                }
                 self.refreshVocalMonitorSafety()
                 if removed {
+                    self.suspendLivePerformanceForSystemEvent()
                     self.interruptedSourceURL = nil
                     self.pause()
                 }
