@@ -137,8 +137,8 @@ struct TurbulentMarbleView: View {
                 marbleFrame(time: frozenTime, resolved: resolvedFrame(live: false))
             } else {
                 TimelineView(.animation(
-                    minimumInterval: 1.0 / max(min(maxFPS, energyBudget.maxVisualFPS), 1.0),
-                    paused: isPaused || !energyBudget.allowsDecorativeMotion
+                    minimumInterval: 1.0 / max(min(maxFPS, energyBudget.shaderFPS), 1.0),
+                    paused: isPaused || energyBudget.pausesShader
                 )) { context in
                     // Pausing the TimelineView freezes its date; never replace
                     // the accumulated phase with zero on Notification Center
@@ -197,8 +197,9 @@ struct TurbulentMarbleView: View {
         let texture = binding.textured
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
-        let detailQuality: Float = energyBudget.thermal.rawValue >= 2 ? 0 :
-            (energyBudget.lowPower || energyBudget.thermal == .fair ? 0.25 : 1)
+        // Export paths are frozen and never inherit live thermal degradation.
+        let detailQuality: Float = frozenTime == nil
+            ? energyBudget.secondaryShaderQuality : 1
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
