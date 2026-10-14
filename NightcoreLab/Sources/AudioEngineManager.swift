@@ -336,6 +336,7 @@ final class AudioEngineManager {
         removeVisualMeterTap()
         engine.stop()
         let capture = KaraokeMicrophoneCapture()
+        var tapInstalled = false
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
@@ -353,6 +354,7 @@ final class AudioEngineManager {
                 // Captured clock is thread-safe; no MainActor hop on CoreAudio.
                 capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
+            tapInstalled = true
             microphoneCapture = capture
             vocalCaptureActive = true
             applyVocalFX(vocalSetting)
@@ -365,8 +367,15 @@ final class AudioEngineManager {
             return true
         } catch {
             capture.stop()
-            endVocalCapture()
-            if resume { play() }
+            if tapInstalled || vocalCaptureActive {
+                endVocalCapture()
+            } else {
+                engine.stop()
+                engine.disconnectNodeOutput(engine.inputNode)
+                configureSession()
+                lyricsClock.refreshOutputLatency()
+            }
+            if resume && !isPlaying { play() }
             return false
         }
     }
