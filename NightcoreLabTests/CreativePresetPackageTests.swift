@@ -412,4 +412,20 @@ final class CreativePresetPackageTests: XCTestCase {
         XCTAssertEqual(stale.visualPresetID, CreativePresetCatalog.defaultID)
     }
 
+
+    func testSongProfileUsesExistingStoreAndInvalidatesByRevision() async throws {
+        let profile = songFixture()
+        let first = CreativePresetPackageStore(directory: directory)
+        try await first.saveSongProfile(profile)
+        let reopened = CreativePresetPackageStore(directory: directory)
+        let loaded = await reopened.loadSongProfile(
+            assetID: profile.assetID, sourceRevision: profile.sourceRevision)
+        XCTAssertEqual(loaded, profile)
+        let stale = await reopened.loadSongProfile(
+            assetID: profile.assetID, sourceRevision: "changed-revision")
+        XCTAssertNil(stale)
+        // Song-specific JSON must not leak into the package listing.
+        XCTAssertTrue(await reopened.userPackages().isEmpty)
+    }
+
 }

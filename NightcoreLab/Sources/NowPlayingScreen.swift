@@ -100,6 +100,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var liveUniforms = CreativeLiveUniforms()
     @State private var suggestedSongProfile: SongCreativeProfile?
     @State private var activeSongProfile: SongCreativeProfile?
+    @State private var songProfileStore = CreativePresetPackageStore()
     @AppStorage("creativeReactionMode")
     private var reactionMode: CreativePreset.AudioReaction = .off
     @AppStorage(CreativePresetCatalog.storageKey)
@@ -360,12 +361,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 return
             }
             let analysis = await MusicAnalysisCache().load(for: descriptor)
-            // Expression engine exposes versioned cache contracts only; do
-            // not guess unregistered algorithm/dependency fingerprints.
+            // Exact audited v1 fingerprints prevent unknown/stale expression
+            // algorithms from silently affecting the creative scene.
             let expression = await ExpressionCache().load(
-                for: descriptor, requiring: [:])
+                for: descriptor,
+                requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints)
+            let saved = await songProfileStore.loadSongProfile(
+                assetID: descriptor.assetID,
+                sourceRevision: descriptor.sourceRevision)
             guard !Task.isCancelled, track.id == expectedTrack else { return }
-            suggestedSongProfile = SongCreativeProfileResolver.suggest(
+            suggestedSongProfile = saved ?? SongCreativeProfileResolver.suggest(
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision,
                 analysis: analysis, expression: expression)
@@ -404,6 +409,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         activeSongProfile = profile
         try? CreatorPresetStore.save(
             SongCreativeProfileResolver.creatorPreset(for: profile))
+        Task { try? await songProfileStore.saveSongProfile(profile) }
     }
 
     /// A antiga janela Reprodução agora é a metade inferior deste cartão.

@@ -72,6 +72,14 @@ enum CreativeExperienceResolver {
 /// It accepts only source-matched, available evidence; empty/unreliable caches
 /// keep the established Original recipe and the existing 7-sample drum kit.
 enum SongCreativeProfileResolver {
+    /// Only known v1 expression producers without dependency fingerprints can
+    /// contribute. Other versions remain unavailable until explicitly audited.
+    static let acceptedExpressionFingerprints: [ExpressionCapability: ExpressionFingerprint] = [
+        .key: .init(algorithmVersion: 1),
+        .sections: .init(algorithmVersion: 1),
+        .moodHints: .init(algorithmVersion: 1)
+    ]
+
     static func suggest(assetID: String, sourceRevision: String,
                         analysis: MusicAnalysisResult?,
                         expression: MusicExpressionResult?) -> SongCreativeProfile {
@@ -106,6 +114,11 @@ enum SongCreativeProfileResolver {
         }
         let density = hint(.rhythmicDensity)
         let brightness = hint(.spectralBrightness)
+        let expressiveSections = matched &&
+            expression?.capabilities[.sections] == .available &&
+            (expression?.sections?.sections.contains {
+                $0.label == .chorus && $0.confidence >= 0.75
+            } ?? false)
 
         let selection: String
         if (density ?? 0) >= 0.70 || (tempo ?? 0) >= 145 {
@@ -132,7 +145,8 @@ enum SongCreativeProfileResolver {
             materialID: CreativePresetCatalog.material(selection: selection).id,
             typographyPreset: typography, padMapping: mapping,
             vocalAndAudioFXMacro: brightness.map { 0.15 + (1 - $0) * 0.25 } ?? 0,
-            reactionProfile: (density ?? 0) > 0.65 ? .responsive : .subtle)
+            reactionProfile: (density ?? 0) > 0.65 || expressiveSections
+                ? .responsive : .subtle)
     }
 
     /// Frozen controls are chosen once when the user taps "Criar", not inside

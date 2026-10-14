@@ -82,6 +82,41 @@ actor CreativePresetPackageStore {
         return packages.sorted { $0.id < $1.id }
     }
 
+    /// Store a user's selected recipe per exact source revision in this same
+    /// store, separate from portable package JSON and cache eviction.
+    func saveSongProfile(_ profile: SongCreativeProfile) throws {
+        guard profile.isValid else { throw StoreError.invalidPackage }
+        let data = try JSONEncoder().encode(profile)
+        guard data.count <= maximumBytes else { throw StoreError.packageTooLarge }
+        let url = songURL(assetID: profile.assetID,
+                          sourceRevision: profile.sourceRevision)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// A changed song revision must not revive an old key/BPM guess.
+    func loadSongProfile(assetID: String,
+                         sourceRevision: String) -> SongCreativeProfile? {
+        let url = songURL(assetID: assetID, sourceRevision: sourceRevision)
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0, size <= maximumBytes,
+              let data = try? Data(contentsOf: url),
+              let profile = try? JSONDecoder().decode(
+                SongCreativeProfile.self, from: data),
+              profile.isValid, profile.assetID == assetID,
+              profile.sourceRevision == sourceRevision else { return nil }
+        return profile
+    }
+
+    private func songURL(assetID: String, sourceRevision: String) -> URL {
+        let identity = assetID + "\u{0}" + sourceRevision
+        let name = AudioAssetDescriptor.digest(Data(identity.utf8))
+        return directory.appendingPathComponent(
+            "SongProfiles", isDirectory: true)
+            .appendingPathComponent(name).appendingPathExtension("json")
+    }
+
     func delete(id: String) throws {
         guard !CreativePresetCatalog.all.contains(where: { $0.id == id }) else {
             throw StoreError.reservedID
