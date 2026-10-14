@@ -2,49 +2,149 @@ import SwiftUI
 import UIKit
 import AVFoundation
 
-/// UIKit touch-down events avoid a SwiftUI button's release-to-trigger delay.
-/// Distinct UIControls allow independent touches on different pads.
+/// Stable per-finger accounting: ending/cancelling one UITouch must not
+/// release the pressed appearance while another finger is still down.
+struct PadTouchState {
+    private(set) var active: Set<ObjectIdentifier> = []
+    var isPressed: Bool { !active.isEmpty }
+
+    mutating func begin(_ id: ObjectIdentifier) -> Bool {
+        active.insert(id).inserted
+    }
+    mutating func end(_ id: ObjectIdentifier) -> Bool {
+        active.remove(id) != nil
+    }
+    mutating func reset() { active.removeAll(keepingCapacity: true) }
+}
+
+/// A repeatable musical velocity curve: stable input → stable event velocity.
+/// Finger area/pressure is not guaranteed on iPhone, so use vertical zone.
+enum PadExpressiveness {
+    static func velocity(verticalZone: Float?, base: Float, hitIndex: Int) -> Float {
+        guard base.isFinite else { return 0.85 }
+        let normalized: Float
+        if let verticalZone, verticalZone.isFinite {
+            normalized = min(1, max(0, verticalZone))
+        } else {
+            return min(1, max(0.05, base))
+        }
+        // Fixed four-step gain alternation; no per-touch Array allocation.
+        let accent: Float
+        switch hitIndex % 4 {
+        case 1: accent = 0.982
+        case 2: accent = 1.014
+        case 3: accent = 0.994
+        default: accent = 1
+        }
+        let gain: Float = 0.60 + 0.40 * normalized
+        return min(1, max(0.05, base * gain * accent))
+    }
+}
+
+/// UIKit delivers each UITouch identity directly. No Button release-to-fire
+/// delay, SwiftUI DragGesture, gesture-disambiguation or async audio hop.
+private final class PadTouchControl: UIControl {
+    var onStrike: ((UITouch, UIView) -> Void)?
+    var onPressedChanged: ((Bool) -> Void)?
+    private var touchState = PadTouchState()
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        for touch in touches where touchState.begin(ObjectIdentifier(touch)) {
+            onStrike?(touch, self)
+        }
+        onPressedChanged?(touchState.isPressed)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        for touch in touches { _ = touchState.end(ObjectIdentifier(touch)) }
+        onPressedChanged?(touchState.isPressed)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        for touch in touches { _ = touchState.end(ObjectIdentifier(touch)) }
+        onPressedChanged?(touchState.isPressed)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            touchState.reset()
+            onPressedChanged?(false)
+        }
+    }
+}
+
 private struct PadTouchSurface: UIViewRepresentable {
     let name: String
-    let onDown: (TimeInterval) -> Void
-    let onUp: () -> Void
+    let onDown: (TimeInterval, Float) -> Bool
+    let onPressedChanged: (Bool) -> Void
+    let haptics: Bool
 
-    final class Coordinator: NSObject {
-        var onDown: (TimeInterval) -> Void
-        var onUp: () -> Void
-        init(_ onDown: @escaping (TimeInterval) -> Void,
-             _ onUp: @escaping () -> Void) {
+    final class Coordinator {
+        var onDown: (TimeInterval, Float) -> Bool
+        var onPressedChanged: (Bool) -> Void
+        var haptics: Bool
+        var hitIndex = 0
+        private let generator = UIImpactFeedbackGenerator(style: .rigid)
+
+        init(onDown: @escaping (TimeInterval, Float) -> Bool,
+             onPressedChanged: @escaping (Bool) -> Void, haptics: Bool) {
             self.onDown = onDown
-            self.onUp = onUp
+            self.onPressedChanged = onPressedChanged
+            self.haptics = haptics
+            if haptics { generator.prepare() }
         }
-        @objc func down(_ sender: UIControl, forEvent event: UIEvent) {
-            // Event time comes from UIKit's actual input event, not when
-            // SwiftUI eventually re-evaluates a view.
-            onDown(event.timestamp)
+
+        func updateHaptics(_ enabled: Bool) {
+            if enabled && !haptics { generator.prepare() }
+            haptics = enabled
         }
-        @objc func up() { onUp() }
+
+        func begin(_ touch: UITouch, in view: UIView) {
+            let vertical = view.bounds.height > 0
+                ? Float(1 - touch.location(in: view).y / view.bounds.height)
+                : Float.nan
+            let index = hitIndex
+            hitIndex &+= 1
+            // Audio submission returns before any SwiftUI heldPads mutation.
+            let played = onDown(touch.timestamp, PadExpressiveness.velocity(
+                verticalZone: vertical, base: 0.85, hitIndex: index))
+            if played && haptics {
+                generator.impactOccurred(intensity: 0.85)
+                generator.prepare()
+            }
+        }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onDown, onUp) }
-
-    func makeUIView(context: Context) -> UIControl {
-        let control = UIControl()
-        control.isExclusiveTouch = false
-        control.isMultipleTouchEnabled = true
-        control.isAccessibilityElement = true
-        control.accessibilityTraits = .button
-        control.accessibilityLabel = "Tocar \(name)"
-        control.addTarget(context.coordinator,
-                          action: #selector(Coordinator.down(_:forEvent:)), for: .touchDown)
-        control.addTarget(context.coordinator, action: #selector(Coordinator.up),
-                          for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
-        return control
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDown: onDown, onPressedChanged: onPressedChanged,
+                    haptics: haptics)
     }
 
-    func updateUIView(_ uiView: UIControl, context: Context) {
+    func makeUIView(context: Context) -> PadTouchControl {
+        let view = PadTouchControl()
+        view.isExclusiveTouch = false
+        view.isMultipleTouchEnabled = true
+        view.isAccessibilityElement = true
+        view.accessibilityTraits = .button
+        view.accessibilityLabel = "Tocar \(name)"
+        view.onStrike = { [weak coordinator = context.coordinator] touch, control in
+            coordinator?.begin(touch, in: control)
+        }
+        view.onPressedChanged = { [weak coordinator = context.coordinator] isPressed in
+            coordinator?.onPressedChanged(isPressed)
+        }
+        return view
+    }
+
+    func updateUIView(_ view: PadTouchControl, context: Context) {
         context.coordinator.onDown = onDown
-        context.coordinator.onUp = onUp
-        uiView.accessibilityLabel = "Tocar \(name)"
+        context.coordinator.onPressedChanged = onPressedChanged
+        context.coordinator.updateHaptics(haptics)
+        view.accessibilityLabel = "Tocar \(name)"
     }
 }
 
@@ -245,6 +345,7 @@ struct PerformanceModeView: View {
                 }
             }
         }
+        .defersSystemGestures(on: .all)
         .preferredColorScheme(.dark)
         .alert("Exportação da performance", isPresented: Binding(
             get: { renderError != nil },
@@ -400,26 +501,31 @@ struct PerformanceModeView: View {
         }
         .frame(height: 90)
         .overlay {
-            PadTouchSurface(name: sample.name, onDown: { touchTimestamp in
-                strike(sample, touchEventUptime: touchTimestamp)
-                heldPads.insert(sample.id)
-            }, onUp: {
-                heldPads.remove(sample.id)
-            })
+            PadTouchSurface(name: sample.name, onDown: { touchTimestamp, touchVelocity in
+                strike(sample, velocity: touchVelocity, touchEventUptime: touchTimestamp)
+            }, onPressedChanged: { isPressed in
+                if isPressed { heldPads.insert(sample.id) }
+                else { heldPads.remove(sample.id) }
+            }, haptics: haptics)
         }
         .accessibilityIdentifier("performance.pad.\(sample.id)")
     }
 
-    private func strike(_ sample: SampleDescriptor, touchEventUptime: TimeInterval) {
-        let velocity = sample.defaultVelocity
-        guard audio.triggerPad(sample.id, velocity: velocity,
-                               touchEventUptime: touchEventUptime) else { return }
-        recorder.append(sample, velocity: velocity,
-                        sourceTime: audio.isPlaying ? audio.playbackTime : nil)
-        exportedAudio = nil
-        if haptics {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    @discardableResult
+    private func strike(_ sample: SampleDescriptor, velocity: Float,
+                        touchEventUptime: TimeInterval) -> Bool {
+        let performedVelocity = min(1, max(0.05,
+            velocity / 0.85 * sample.defaultVelocity))
+        guard audio.triggerPad(sample.id, velocity: performedVelocity,
+                               touchEventUptime: touchEventUptime) else { return false }
+        // Output-latency compensation is evaluated only for a recorded hit,
+        // never in the sampler's scheduling path.
+        if recorder.isRecording {
+            recorder.append(sample, velocity: performedVelocity,
+                            sourceTime: audio.recordedPadSourceTime())
         }
+        exportedAudio = nil
+        return true
     }
 
     /// User-initiated: reads bounded results after a session, never on touch.
