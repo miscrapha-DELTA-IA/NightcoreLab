@@ -123,6 +123,7 @@ struct TurbulentMarbleView: View {
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
     var creatorControls: CreatorControls = .neutral
+    var padAccentEmitter: PadVisualAccentEmitter? = nil
 
     @State private var start = Date()
     @State private var motion = MarbleMotionState()
@@ -183,7 +184,9 @@ struct TurbulentMarbleView: View {
         let liveOutput = live && liveMeter != nil
             ? MarbleLiveResponse.apply(resolved, levels: levels, mode: reactionMode)
             : resolved
-        return MarbleCreatorResponse.apply(liveOutput, controls: creatorControls)
+        let edited = MarbleCreatorResponse.apply(liveOutput, controls: creatorControls)
+        return live ? PadVisualAccentResolver.apply(
+            edited, accent: padAccentEmitter?.accent()) : edited
     }
 
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
