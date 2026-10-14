@@ -56,10 +56,10 @@ final class RuntimeStabilizationTests: XCTestCase {
             bpmCandidates: [.init(bpm: 120, confidence: 0.85)],
             beatGrid: grid, confidence: 0.9, downbeatConfidence: 0.75)
         XCTAssertEqual(CreatorLoopGrid.tempo(rhythm), 120)
-        XCTAssertEqual(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: rhythm),
-                       2, accuracy: 0.00001)
-        XCTAssertEqual(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: rhythm,
-                                                     bar: false), 0.5, accuracy: 0.00001)
+        XCTAssertEqual(try XCTUnwrap(CreatorLoopGrid.nextBoundary(
+            after: 0.33, rhythm: rhythm)), 2, accuracy: 0.00001)
+        XCTAssertEqual(try XCTUnwrap(CreatorLoopGrid.nextBoundary(
+            after: 0.33, rhythm: rhythm, bar: false)), 0.5, accuracy: 0.00001)
         XCTAssertNil(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: nil))
         XCTAssertNil(CreatorLoopGrid.tempo(nil))
         let low = RhythmAnalysisResult(onsetEvents: [], bpmCandidates: [],
