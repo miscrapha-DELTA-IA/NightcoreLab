@@ -156,21 +156,77 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
     }
 }
 
-/// Stable, finite-size event capture. No microphone, analytics or file IO.
+/// Codable grouping of immutable pads recorded across multiple takes.
+/// A take is a set of original event IDs, not a new timing system.
+struct PerformanceTakeArchive: Codable, Equatable, Sendable {
+    let timeline: PerformanceTimeline
+    let takeEventIDs: [[UUID]]
+}
+
+/// Stable finite-size capture; the engine owns ONE shared recorder, reusable
+/// from the Player/Creator and the dedicated Performance view.
 @MainActor
 @Observable
 final class PerformanceRecorder {
     private(set) var isRecording = false
     private(set) var events: [PadEvent] = []
+    private(set) var takeEventIDs: [[UUID]] = []
+    private var currentTake: [UUID] = []
     private var startUptime: TimeInterval = 0
 
     func start(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        events.removeAll(keepingCapacity: true)
+        clearAll()
         startUptime = uptime
         isRecording = true
     }
 
-    func stop() { isRecording = false }
+    /// Overdub leaves earlier events/sourceTime/beat coordinates immutable.
+    /// Subsequent captures have a new relative uptime, but their independent
+    /// source-audio coordinates still schedule correctly into the Story.
+    func overdub(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard !isRecording else { return }
+        startUptime = uptime
+        currentTake.removeAll(keepingCapacity: true)
+        isRecording = true
+    }
+
+    func stop() {
+        guard isRecording else { return }
+        isRecording = false
+        if !currentTake.isEmpty { takeEventIDs.append(currentTake) }
+        currentTake.removeAll(keepingCapacity: true)
+    }
+
+    func clearLastTake() {
+        if isRecording { stop() }
+        guard let ids = takeEventIDs.popLast() else { return }
+        let selected = Set(ids)
+        events.removeAll { selected.contains($0.id) }
+    }
+
+    func clearAll() {
+        isRecording = false
+        events.removeAll(keepingCapacity: true)
+        takeEventIDs.removeAll(keepingCapacity: true)
+        currentTake.removeAll(keepingCapacity: true)
+    }
+
+    func archive(kit: PadKit = .starter,
+                 quantizeStrength: Float = 0) -> PerformanceTakeArchive {
+        let groups = takeEventIDs + (currentTake.isEmpty ? [] : [currentTake])
+        return PerformanceTakeArchive(
+            timeline: timeline(kit: kit, quantizeStrength: quantizeStrength),
+            takeEventIDs: groups)
+    }
+
+    func restore(_ archive: PerformanceTakeArchive) {
+        guard archive.timeline.isValid else { return }
+        let known = Set(archive.timeline.events.map(\.id))
+        guard archive.takeEventIDs.flatMap({ $0 }).allSatisfy(known.contains) else { return }
+        clearAll()
+        events = archive.timeline.events
+        takeEventIDs = archive.takeEventIDs
+    }
 
     func append(_ sample: SampleDescriptor, velocity: Float, sourceTime: TimeInterval?,
                 at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
@@ -186,7 +242,9 @@ final class PerformanceRecorder {
             rhythm.flatMap { PadMusicalGrid.at(time, rhythm: $0,
                                               subdivision: subdivision) }
         }
-        events.append(PadEvent(id: UUID(), padId: sample.id,
+        let eventID = UUID()
+        currentTake.append(eventID)
+        events.append(PadEvent(id: eventID, padId: sample.id,
                                timestamp: uptime - startUptime, velocity: velocity,
                                duration: sample.duration, sourceTime: sourceTime,
                                musicalBeat: position?.beat, musicalBar: position?.bar,
