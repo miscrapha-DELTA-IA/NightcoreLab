@@ -255,6 +255,9 @@ final class AudioEngineManager {
         var nodeTiming = PadNodeDispatchTiming(stopMS: 0, scheduleMS: 0, playMS: 0)
         cancelIdleStop()
         var played = false
+        // Capture the audio-command boundary BEFORE idle-stop task work.
+        // This timer is unrelated to when node.play() has been submitted.
+        var commandCompletedAt = began
         do {
             if wasCold {
                 let start = profiling ? ProcessInfo.processInfo.systemUptime : 0
@@ -270,22 +273,25 @@ final class AudioEngineManager {
             } else {
                 played = padRuntime.trigger(padID: padID, velocity: velocity)
             }
+            if profiling { commandCompletedAt = ProcessInfo.processInfo.systemUptime }
             if !isPlaying { scheduleIdleStop() }
         } catch {
+            if profiling { commandCompletedAt = ProcessInfo.processInfo.systemUptime }
             if !isPlaying { scheduleIdleStop() }
         }
         if profiling {
-            let done = ProcessInfo.processInfo.systemUptime
             let inputDelay = touchEventUptime.flatMap { event -> Double? in
                 let ms = (began - event) * 1_000
                 // OS event timestamps and uptime use the same monotonic origin.
                 // Drop obviously invalid/discontinuous observations.
                 return ms.isFinite && ms >= 0 && ms < 2_000 ? ms : nil
             }
+            let commandElapsedMS = PadLatencyProbe.elapsedMilliseconds(
+                from: began, to: commandCompletedAt)
             padLatencyProbe.record(.init(
                 touchToHandlerMS: inputDelay,
-                touchToCommandMS: inputDelay.map { $0 + (done - began) * 1_000 },
-                commandMS: max(0, done - began) * 1_000,
+                touchToCommandMS: inputDelay.map { $0 + commandElapsedMS },
+                commandMS: commandElapsedMS,
                 engineStartMS: engineStartMS,
                 nodeStopMS: nodeTiming.stopMS,
                 nodeScheduleMS: nodeTiming.scheduleMS,
