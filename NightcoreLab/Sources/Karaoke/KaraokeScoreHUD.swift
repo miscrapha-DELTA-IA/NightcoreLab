@@ -155,7 +155,7 @@ struct KaraokeScoringControls: View {
 /// a recorded microphone performance.
 enum KaraokeScoreShareComposer {
     static func text(_ snapshot: KaraokeScoreSnapshot, simulation: Bool) -> String {
-        let mode = simulation ? "Simulação de karaokê" : "Canto ao vivo"
+        let mode = simulation ? "SIMULAÇÃO de karaokê" : "Canto ao vivo"
         return [
             "NightcoreLab · \(mode)",
             "Nota \(snapshot.rank) · \(Int(snapshot.accuracyPercentage.rounded()))%",
