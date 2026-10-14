@@ -1,22 +1,82 @@
 name: Build Unsigned IPA (Free Route)
 
+# Exploration is chosen from the SOURCE branch (head_ref for PRs, ref_name for
+# pushes), never from the PR's target. Manual dispatch intentionally opts into
+# full validation even on exploration branches.
 on:
   workflow_dispatch:
-  # Full simulator test suite on every PR (Stage 10A proposal): the other PR
-  # workflows only build or run subsets.
   pull_request:
-    branches: [ "main" ]
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - '*-experiments*'
+      - 'exp/**'
+      - '*-final*'
+      - 'release/**'
     # Mudanças só no servidor Python (e no teste dele) não recompilam o app iOS
     paths-ignore:
       - 'backend/**'
       - '.github/workflows/backend-smoke.yml'
 
+# Cancel superseded pushes to the same branch and commits on the same PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
 jobs:
+  fast-check:
+    name: Fast Check — compile and two smoke suites
+    if: >-
+      ${{ github.event_name != 'workflow_dispatch' && (startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) }}
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Compile for testing (no full test execution)
+        shell: bash
+        run: |
+          set -o pipefail
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for devices in d["devices"].values() for v in devices if v["name"].startswith("iPhone")))')
+          echo "FAST_SIMULATOR_ID=$device_id" >> "$GITHUB_ENV"
+          xcodebuild \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$device_id" \
+            -derivedDataPath "$RUNNER_TEMP/NightcoreFastDerivedData" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+      - name: Run ONLY RuntimeStabilization and AudioQuality tests
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$FAST_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/NightcoreFastDerivedData" \
+            -parallel-testing-enabled NO \
+            -only-testing:NightcoreLabTests/RuntimeStabilizationTests \
+            -only-testing:NightcoreLabTests/AudioQualityTests \
+            CODE_SIGNING_ALLOWED=NO \
+            test-without-building
+
   build:
-    # "[skip ios]" na mensagem do commit pula o build e economiza minutos de macOS.
-    if: ${{ !contains(github.event.head_commit.message, '[skip ios]') }}
+    name: Delivery — full XCTest, Release and unsigned IPA
+    # Manual dispatch can force the entire delivery gate on any branch.
+    # Release/final PRs and pushes to main also retain the original pipeline.
+    if: >-
+      ${{ (github.event_name == 'workflow_dispatch' || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/'))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
     runs-on: macos-latest
     timeout-minutes: 30
 
