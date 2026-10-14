@@ -290,7 +290,7 @@ final class AudioEngineManager {
     private func refreshPerformanceOutputLatency() {
         let latency = AVAudioSession.sharedInstance().outputLatency
         performanceOutputLatency = latency.isFinite ?
-            min(0.35, max(0, latency)) : 0
+            min(0.200, max(0, latency)) : 0
     }
 
     /// Prepare at most five seconds from the currently loaded local source.
