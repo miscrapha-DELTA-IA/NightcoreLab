@@ -285,4 +285,131 @@ final class CreativePresetPackageTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil).isEmpty)
     }
+
+    private func songFixture() -> SongCreativeProfile {
+        SongCreativeProfile(
+            assetID: "fixture-asset", sourceRevision: "sha256-revision",
+            visualPresetID: "original", materialID: "original-marble",
+            typographyPreset: TypographyPreset(style: .neon),
+            padMapping: SongPadGuardrails(
+                bpm: 132, tonic: .a, scale: .minor, subdivision: 1,
+                melodicPadTuningActive: false),
+            vocalAndAudioFXMacro: 0.3, reactionProfile: .subtle)
+    }
+
+    func testSongProfileExtendsPackageV1AndLegacyPayloadStillDecodes() throws {
+        let initial = try package()
+        let profile = songFixture()
+        XCTAssertTrue(profile.isValid)
+        let authored = try CreativePresetPackage(
+            id: initial.id, name: initial.name, author: initial.author,
+            composition: initial.composition,
+            typographyPreset: initial.typographyPreset,
+            previewMetadata: initial.previewMetadata,
+            songProfile: profile)
+        XCTAssertEqual(try JSONDecoder().decode(
+            CreativePresetPackage.self, from: JSONEncoder().encode(authored)), authored)
+        var oldJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(authored))
+                as? [String: Any])
+        oldJSON.removeValue(forKey: "songProfile")
+        let legacy = try JSONDecoder().decode(
+            CreativePresetPackage.self,
+            from: JSONSerialization.data(withJSONObject: oldJSON))
+        XCTAssertNil(legacy.songProfile)
+        XCTAssertEqual(legacy.composition, initial.composition)
+        XCTAssertEqual(legacy.schemaVersion, 1)
+        XCTAssertEqual(CreativePresetPackage.supportedSchemaVersion, 1)
+    }
+
+    func testSongManifestIsPreservedThroughSnapshotCapture() throws {
+        let source = try package()
+        let profiled = try CreativePresetPackage(
+            id: source.id, name: source.name, author: source.author,
+            composition: source.composition, typographyPreset: source.typographyPreset,
+            previewMetadata: source.previewMetadata, songProfile: songFixture())
+        let state = CreativeSnapshot(
+            track: nil, theme: source.composition.program.preset.theme,
+            preset: source.composition.program.preset,
+            visualState: .init(playbackTime: 3, marblePhase: 0, isPlaying: true),
+            capturedAt: Date(timeIntervalSince1970: 0))
+        let captured = try CreativePresetPackageSnapshot.capture(
+            state, package: profiled, duration: 8)
+        XCTAssertEqual(captured.package.songProfile, songFixture())
+        XCTAssertEqual(captured.package.composition.program,
+                       profiled.composition.program)
+    }
+
+    func testInvalidAndUnknownSongProfileVersionsCannotLoad() throws {
+        let profile = songFixture()
+        var json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(profile))
+                as? [String: Any])
+        json["version"] = 99
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            SongCreativeProfile.self,
+            from: JSONSerialization.data(withJSONObject: json)))
+        json["version"] = 1
+        json["vocalAndAudioFXMacro"] = 1.5
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            SongCreativeProfile.self,
+            from: JSONSerialization.data(withJSONObject: json)))
+        XCTAssertFalse(SongPadGuardrails(
+            bpm: 140, tonic: .c, scale: .major, subdivision: 2,
+            melodicPadTuningActive: true).isValid)
+    }
+
+    func testProfileResolutionUsesOnlyMatchedHighConfidenceEvidence() {
+        let asset = AudioAssetDescriptor(
+            url: URL(fileURLWithPath: "/song-fixture.caf"),
+            assetID: "profile-asset", sourceRevision: "revision-a",
+            duration: 60, format: .init(
+                sampleRate: 16_000, channelCount: 1, formatID: 1))
+        let rhythm = RhythmAnalysisResult(
+            onsetEvents: [], bpmCandidates: [
+                .init(bpm: 168, confidence: 0.9)
+            ], beatGrid: [], confidence: 0.86)
+        let energy = AudioFeatureTimeline(
+            points: [.init(time: 0.0, features: .silent)], duration: 60)
+        let analysis = MusicAnalysisResult(
+            asset: asset, energy: .available, onsets: .notRequested,
+            timeline: energy, rhythm: .available, rhythmAnalysis: rhythm)
+        let provenance = ExpressionProvenance(
+            method: "fixture", fingerprint: .init(algorithmVersion: 1),
+            analyzedThrough: 60, confidence: 0.9)
+        let expression = MusicExpressionResult(
+            asset: asset, statuses: [.key: .available, .moodHints: .available],
+            key: KeyAnalysisResult(hypotheses: [
+                .init(tonic: .fSharp, scale: .minor, confidence: 0.91)
+            ], provenance: provenance),
+            moodHints: MoodHintsResult(hints: [
+                .init(dimension: .rhythmicDensity, normalizedValue: 0.9,
+                      confidence: 0.85, evidence: "test")
+            ], provenance: provenance))
+        XCTAssertTrue(analysis.isValid(for: asset))
+        XCTAssertTrue(expression.isValid(for: asset))
+        let selected = SongCreativeProfileResolver.suggest(
+            assetID: asset.assetID, sourceRevision: asset.sourceRevision,
+            analysis: analysis, expression: expression)
+        XCTAssertEqual(selected.visualPresetID, "neon-pulse")
+        XCTAssertEqual(selected.padMapping.bpm, 168)
+        XCTAssertEqual(selected.padMapping.tonic, .fSharp)
+        XCTAssertEqual(selected.padMapping.scale, .minor)
+        XCTAssertEqual(selected.padMapping.subdivision, 2)
+        XCTAssertFalse(selected.padMapping.melodicPadTuningActive)
+        XCTAssertEqual(selected.padKitID, PadKit.starter.id)
+        XCTAssertEqual(selected.reactionProfile, .responsive)
+        XCTAssertEqual(selected, SongCreativeProfileResolver.suggest(
+            assetID: asset.assetID, sourceRevision: asset.sourceRevision,
+            analysis: analysis, expression: expression))
+
+        // Stale revision must not reuse another song's rhythm or key.
+        let stale = SongCreativeProfileResolver.suggest(
+            assetID: asset.assetID, sourceRevision: "revision-b",
+            analysis: analysis, expression: expression)
+        XCTAssertNil(stale.padMapping.bpm)
+        XCTAssertNil(stale.padMapping.tonic)
+        XCTAssertEqual(stale.visualPresetID, CreativePresetCatalog.defaultID)
+    }
+
 }
