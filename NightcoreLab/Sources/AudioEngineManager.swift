@@ -111,6 +111,10 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    /// Shared with the Creator/Performance sheet and the Story snapshot.
+    @ObservationIgnored let performanceRecorder = PerformanceRecorder()
+    @ObservationIgnored let padAccentEmitter = PadVisualAccentEmitter()
+    @ObservationIgnored private(set) var performanceRecordingSourceRevision: Int?
     /// Read by the visible Player at visual FPS; published nowhere on the
     /// render/audio thread. Uses the existing main mixer output, not a second graph.
     @ObservationIgnored let liveVisualMeter = AudioVisualLiveMeter()
@@ -190,6 +194,9 @@ final class AudioEngineManager {
         audioFile = file
         sourceURL = url
         playbackSourceRevision &+= 1
+        performanceRecorder.clearAll()
+        performanceRecordingSourceRevision = nil
+        padAccentEmitter.clear()
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
@@ -221,6 +228,28 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+    }
+
+    /// One tap, no transport mutation and no AVAudioSession query.
+    func beginPadTake(overdub: Bool = false) {
+        if !overdub || performanceRecorder.events.isEmpty {
+            performanceRecordingSourceRevision = playbackSourceRevision
+            performanceRecorder.start()
+        } else if performanceRecordingSourceRevision == playbackSourceRevision {
+            performanceRecorder.overdub()
+        }
+    }
+
+    func stopPadTake() { performanceRecorder.stop() }
+    func clearLastPadTake() { performanceRecorder.clearLastTake() }
+
+    /// Frozen, source-identity-matched snapshot for Story preview/export.
+    func frozenPadPerformance(quantizeStrength: Float = 0) -> PerformanceTimeline? {
+        guard !performanceRecorder.isRecording,
+              performanceRecordingSourceRevision == playbackSourceRevision,
+              !performanceRecorder.events.isEmpty else { return nil }
+        let result = performanceRecorder.timeline(quantizeStrength: quantizeStrength)
+        return result.isValid ? result : nil
     }
 
     // MARK: Performance pads
@@ -355,6 +384,11 @@ final class AudioEngineManager {
                 nodeScheduleMS: nodeTiming.scheduleMS,
                 nodePlayMS: nodeTiming.playMS,
                 wasCold: wasCold, succeeded: played))
+        }
+        if played {
+            // AFTER the audio command; the shader samples this lock-free of
+            // any SwiftUI invalidation via its own TimelineView.
+            padAccentEmitter.trigger(padID, velocity: velocity)
         }
         return played
     }
