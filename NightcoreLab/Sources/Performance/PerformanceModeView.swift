@@ -157,7 +157,7 @@ struct PerformanceModeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var recorder: PerformanceRecorder { audio.performanceRecorder }
-    @State private var grooveStrength: Double = 0
+    @AppStorage("performance.grooveStrength") private var grooveStrength: Double = 0
     @State private var padRhythm: RhythmAnalysisResult?
     @State private var padRhythmTask: Task<Void, Never>?
     @State private var haptics = false
@@ -393,6 +393,9 @@ struct PerformanceModeView: View {
         } message: {
             Text(renderError ?? "")
         }
+        .onChange(of: grooveStrength) { _, next in
+            audio.padQuantizeStrength = Float(next)
+        }
         .onChange(of: audio.playbackSourceRevision) { _, _ in
             clipTask?.cancel()
             preparingClip = false
@@ -405,6 +408,7 @@ struct PerformanceModeView: View {
         }
         .onAppear {
             audio.beginPerformanceMode()
+            audio.padQuantizeStrength = Float(grooveStrength)
             prepareMusicalGrid()
         }
         .onDisappear {
