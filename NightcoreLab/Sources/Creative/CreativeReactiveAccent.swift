@@ -12,6 +12,7 @@ struct CreativeReactiveAccent: View {
     let theme: AppTheme
     let backgroundStyle: PlayerBackgroundStyle
     let featureEngine: AudioFeatureEngine
+    var padPulseSource: LivePadPulseSource? = nil
     let onParameters: (CreativeParameterFrame) -> Void
     /// Stage 12: hands the live Marble a render-rate beat pulse source
     /// (nil = no pulse: reaction off, no reliable rhythm, or run ended).
@@ -102,7 +103,8 @@ struct CreativeReactiveAccent: View {
             material: material, rhythm: rhythm, clock: clock, timeline: timeline,
             reactionGain: CreativeReactionProfile.gain(reaction),
             seed: CreativePresetCatalog.selectedExperience(id: selectedProgramID)?
-                .composition.deterministicSeed ?? 0))
+                .composition.deterministicSeed ?? 0,
+            padPulseSource: padPulseSource))
         while !Task.isCancelled && activeRunID == runID {
             let playing = clock.isPlaying
             let sourceTime = clock.lyricTime

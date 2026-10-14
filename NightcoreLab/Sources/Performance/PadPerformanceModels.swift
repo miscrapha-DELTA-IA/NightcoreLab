@@ -66,6 +66,124 @@ struct PadEvent: Codable, Equatable, Sendable, Identifiable {
     let velocity: Float
     let duration: TimeInterval
     let sourceTime: TimeInterval?
+    /// The original kit's choke identity is recorded, not inferred later.
+    let chokeGroup: String?
+
+    init(id: UUID, padId: String, timestamp: TimeInterval, velocity: Float,
+         duration: TimeInterval, sourceTime: TimeInterval?,
+         chokeGroup: String? = nil) {
+        self.id = id
+        self.padId = padId
+        self.timestamp = timestamp
+        self.velocity = velocity
+        self.duration = duration
+        self.sourceTime = sourceTime
+        self.chokeGroup = chokeGroup
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, padId, timestamp, velocity, duration, sourceTime, chokeGroup
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try c.decode(UUID.self, forKey: .id),
+                  padId: try c.decode(String.self, forKey: .padId),
+                  timestamp: try c.decode(Double.self, forKey: .timestamp),
+                  velocity: try c.decode(Float.self, forKey: .velocity),
+                  duration: try c.decode(Double.self, forKey: .duration),
+                  sourceTime: try c.decodeIfPresent(Double.self, forKey: .sourceTime),
+                  chokeGroup: try c.decodeIfPresent(String.self, forKey: .chokeGroup))
+    }
+}
+
+/// Opt-in groove correction: only snap within 45 ms of a reliable *existing*
+/// beat marker. Nothing touches the audio command sent on finger-down.
+enum PadGrooveMode: String, Codable, Sendable { case human, magnet }
+
+enum PadGrooveQuantizer {
+    static let maximumSourceSeconds: TimeInterval = 0.045
+
+    static func sourceTime(_ time: TimeInterval?, mode: PadGrooveMode,
+                           rhythm: RhythmAnalysisResult?) -> TimeInterval? {
+        guard let time, time.isFinite, time >= 0,
+              mode == .magnet, let rhythm,
+              rhythm.quality == .medium || rhythm.quality == .high,
+              !rhythm.beatGrid.isEmpty else { return time }
+        guard let nearest = rhythm.beatGrid.min(by: {
+            abs($0.time - time) < abs($1.time - time)
+        }), abs(nearest.time - time) <= maximumSourceSeconds
+        else { return time }
+        return nearest.time
+    }
+}
+
+/// Deterministic short pad accent. Used both for live source-time hits and
+/// the exact same frozen source-time events in Story / offline rendering.
+enum PadVisualPulseEnvelope {
+    static let window: TimeInterval = 0.18
+
+    static func sample(velocity: Float, age: TimeInterval) -> Double {
+        guard age.isFinite, age >= 0, age < window,
+              velocity.isFinite else { return 0 }
+        let decay = 1 - age / window
+        return min(1, max(0, Double(velocity))) * decay * decay
+    }
+
+    static func pulse(at sourceTime: TimeInterval, sortedEvents: [PadEvent]) -> Double {
+        guard sourceTime.isFinite, !sortedEvents.isEmpty else { return 0 }
+        // Binary search keeps 4096-hit sessions cheap even at video frame rate.
+        var lower = 0
+        var upper = sortedEvents.count
+        while lower < upper {
+            let mid = (lower + upper) / 2
+            if (sortedEvents[mid].sourceTime ?? -.infinity) <= sourceTime {
+                lower = mid + 1
+            } else { upper = mid }
+        }
+        var index = lower
+        var result = 0.0
+        while index > 0 {
+            index -= 1
+            guard let start = sortedEvents[index].sourceTime else { continue }
+            let age = sourceTime - start
+            if age >= window { break }
+            result = max(result, sample(velocity: sortedEvents[index].velocity, age: age))
+        }
+        return result
+    }
+}
+
+/// A tiny thread-safe source-time pulse buffer. A pad hit is published AFTER
+/// its audio command; shader frames read the last 24 hits without SwiftUI
+/// layout invalidation. This owns no clocks, audio nodes or timers.
+final class LivePadPulseSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hits: [(time: TimeInterval, velocity: Float)] = []
+
+    func record(at time: TimeInterval?, velocity: Float) {
+        guard let time, time.isFinite, time >= 0, velocity.isFinite else { return }
+        lock.lock()
+        hits.append((time, velocity))
+        if hits.count > 24 { hits.removeFirst(hits.count - 24) }
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        hits.removeAll(keepingCapacity: true)
+        lock.unlock()
+    }
+
+    func pulse(at sourceTime: TimeInterval) -> Double {
+        lock.lock()
+        let result = hits.reduce(0.0) { current, hit in
+            max(current, PadVisualPulseEnvelope.sample(
+                velocity: hit.velocity, age: sourceTime - hit.time))
+        }
+        lock.unlock()
+        return result
+    }
 }
 
 struct PerformanceTimeline: Codable, Equatable, Sendable {
@@ -97,6 +215,8 @@ struct PerformanceTimeline: Codable, Equatable, Sendable {
             $0.timestamp.isFinite && $0.timestamp >= 0 &&
             $0.velocity.isFinite && (0...1).contains($0.velocity) &&
             $0.duration.isFinite && $0.duration > 0 &&
+            ($0.chokeGroup == nil || (
+                !$0.chokeGroup!.isEmpty && $0.chokeGroup!.count <= 64)) &&
             ($0.sourceTime == nil || ($0.sourceTime!.isFinite && $0.sourceTime! >= 0))
         }
     }
@@ -136,6 +256,8 @@ final class PerformanceRecorder {
     func stop() { isRecording = false }
 
     func append(_ sample: SampleDescriptor, velocity: Float, sourceTime: TimeInterval?,
+                groove: PadGrooveMode = .human,
+                rhythm: RhythmAnalysisResult? = nil,
                 at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard isRecording, events.count < 4096, uptime.isFinite,
               uptime >= startUptime else { return }
@@ -143,7 +265,10 @@ final class PerformanceRecorder {
         guard velocity.isFinite else { return }
         events.append(PadEvent(id: UUID(), padId: sample.id,
                                timestamp: uptime - startUptime, velocity: velocity,
-                               duration: sample.duration, sourceTime: sourceTime))
+                               duration: sample.duration,
+                               sourceTime: PadGrooveQuantizer.sourceTime(
+                                   sourceTime, mode: groove, rhythm: rhythm),
+                               chokeGroup: sample.chokeGroup))
     }
 
     func timeline(kit: PadKit = .starter,
