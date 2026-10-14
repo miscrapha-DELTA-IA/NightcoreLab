@@ -289,6 +289,10 @@ final class AudioEngineManager {
               padRuntime.installSourceClip(clip, pcm: pcm) else {
             throw AudioEngineError.unsupportedAudio
         }
+        // installSourceClip calls stopAll() to flush the old sample. While the
+        // instrument is foregrounded, re-prime its existing, connected voices
+        // now rather than paying node.play() latency on the next finger tap.
+        if performanceModePresented && engine.isRunning { padRuntime.primeVoices() }
         return clip
     }
 
@@ -365,6 +369,8 @@ final class AudioEngineManager {
 
     func stopPerformancePads() {
         padRuntime.stopAll()
+        // Preserve the foreground hot-start lease after a manual pad stop.
+        if performanceModePresented && engine.isRunning { padRuntime.primeVoices() }
         if !isPlaying && !performanceModePresented { scheduleIdleStop() }
     }
 

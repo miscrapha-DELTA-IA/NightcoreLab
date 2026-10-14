@@ -133,16 +133,31 @@ final class AudioQualityTests: XCTestCase {
         let overflow = pool.allocate(
             id: "kick", chokeGroup: nil, duration: 1, at: 0.20)!
         XCTAssertTrue(overflow.stoleVoice)
+        XCTAssertEqual(overflow.interrupted.count, 1)
+        XCTAssertEqual(overflow.interrupted.first?.voiceIndex, overflow.voiceIndex)
+        XCTAssertEqual(overflow.interrupted.first?.previous.id, "kick")
+        XCTAssertEqual(overflow.interrupted.first?.previous.began, 0)
+        // A stolen voice retains its old lease for the 8ms release buffer.
 
-        var hats = PadVoiceAllocator(capacity: 4)
+        var hats = PadVoiceAllocator(capacity: 8)
         let kick = hats.allocate(
             id: "kick", chokeGroup: nil, duration: 1, at: 0)!
+        let snare = hats.allocate(
+            id: "snare", chokeGroup: nil, duration: 1, at: 0.002)!
+        let clap = hats.allocate(
+            id: "clap", chokeGroup: nil, duration: 1, at: 0.004)!
         let opened = hats.allocate(
             id: "open-hat", chokeGroup: "hat", duration: 0.54, at: 0.01)!
         let closed = hats.allocate(
             id: "closed-hat", chokeGroup: "hat", duration: 0.12, at: 0.04)!
-        XCTAssertTrue(closed.chokeIndices.contains(opened.voiceIndex))
+        XCTAssertEqual(closed.chokeIndices, [opened.voiceIndex])
+        XCTAssertEqual(closed.interrupted.count, 1)
+        XCTAssertEqual(closed.interrupted.first?.previous.id, "open-hat")
+        XCTAssertEqual(closed.interrupted.first?.previous.chokeGroup, "hat")
+        XCTAssertNil(hats.leases[opened.voiceIndex].id)
         XCTAssertEqual(hats.leases[kick.voiceIndex].id, "kick")
+        XCTAssertEqual(hats.leases[snare.voiceIndex].id, "snare")
+        XCTAssertEqual(hats.leases[clap.voiceIndex].id, "clap")
 
         var dynamics = PadHitMicroVariation()
         let a = dynamics.velocity(for: "kick", requested: 0.75, at: 1)
