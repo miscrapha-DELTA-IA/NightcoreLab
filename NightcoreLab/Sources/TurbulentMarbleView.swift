@@ -144,10 +144,9 @@ struct TurbulentMarbleView: View {
                     // the accumulated phase with zero on Notification Center
                     // transitions, or the procedural flow visibly restarts.
                     let levels = liveMeter?.snapshot() ?? .silence
-                    let gain = MarbleLiveResponse.gain(reactionMode)
                     let now = motion.advance(
                         date: context.date, start: startedAt ?? start,
-                        baseSpeed: speed, bass: levels.bass * gain)
+                        baseSpeed: speed)
                     marbleFrame(
                         time: now,
                         resolved: resolvedFrame(live: true, levels: levels))
@@ -173,7 +172,8 @@ struct TurbulentMarbleView: View {
             playerGlow: 0, marbleDistortion: reactiveDistortion,
             lyricKinetics: 0, particleEmission: 0)
         let resolved: MaterialFrame
-        if live, let pulseDriver {
+        if live, reactionMode != .off, let pulseDriver {
+            // Preserve source-time beat grid fallback during quiet PCM/warm-up.
             resolved = pulseDriver.frame(parameters: parameters)
         } else {
             // Still images and non-reactive callers: same resolver. MaterialFrame
@@ -193,7 +193,12 @@ struct TurbulentMarbleView: View {
         let palette = theme.palette
         let uniforms = resolved.marbleUniforms
         let binding = MarbleSurfaceBinding.resolve(frame: resolved)
-        let colors = binding.paletteHex?.map { Color(materialHex: $0) }
+        // Neon Pulse is the only textured live experience. Retain texture
+        // topology while feeding it the active lightning-bolt palette.
+        let colors: [Color]? = resolved.materialID == "neon-pulse"
+            ? [palette.deep, palette.body, palette.glow,
+               palette.body, palette.glow]
+            : binding.paletteHex?.map { Color(materialHex: $0) }
         let texture = binding.textured
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
@@ -291,8 +296,8 @@ enum MarbleLiveResponse {
     static func gain(_ mode: CreativePreset.AudioReaction) -> Double {
         switch mode {
         case .off: return 0
-        case .subtle: return 0.25
-        case .responsive: return 0.55
+        case .subtle: return 0.40
+        case .responsive: return 0.85
         }
     }
 
@@ -301,25 +306,34 @@ enum MarbleLiveResponse {
         let gain = gain(mode)
         guard gain > 0 else { return frame }
         let low = materialBound(levels.bass, 0...1)
-        let loud = materialBound(levels.rms, 0...1)
-        let beat = materialBound(levels.onset, 0...1)
+        let groove = materialBound(levels.songEnergy, 0...1)
+        // Grid pulse is already source-time aligned by MarblePulseDriver.
+        // Prefer sharper tap transients when available; never throttle time.
+        let beat = max(frame.parameters.beatPulse,
+                       gain * materialBound(max(levels.beatPulse, levels.onset), 0...1))
         let p = frame.parameters
         let adjusted = VisualParameterSet(
-            distortion: p.distortion + gain * low * 0.22,
-            beatPulse: max(p.beatPulse, gain * (beat * 0.58 + low * 0.32)),
+            distortion: p.distortion + gain * (low * 0.16 + groove * 0.045),
+            beatPulse: beat,
             pulseDecay: p.pulseDecay, offbeatScale: p.offbeatScale,
-            warpAmount: p.warpAmount,
-            brightnessBoost: p.brightnessBoost + gain * (loud * 0.10 + beat * 0.045),
+            warpAmount: p.warpAmount + beat * 0.13,
+            brightnessBoost: p.brightnessBoost + beat * 0.19 + gain * groove * 0.07,
             stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
             speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
             scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
             voidThreshold: p.voidThreshold, combStretch: p.combStretch,
             bilateralSymmetry: p.bilateralSymmetry, halftoneGrating: p.halftoneGrating)
+        let previous = frame.signals
+        let signals = MaterialReactiveSignals(
+            energy: max(previous.energy, groove * gain),
+            bass: max(previous.bass, low * gain),
+            movement: max(previous.movement, groove * gain * 0.65),
+            brightness: max(previous.brightness, beat * 0.80))
         return MaterialFrame(materialID: frame.materialID, type: frame.type,
                              parameters: adjusted, intensity: frame.intensity,
                              audioResponse: frame.audioResponse, timestamp: frame.timestamp,
                              seed: frame.seed, controls: frame.controls,
-                             signals: frame.signals, viewport: frame.viewport)
+                             signals: signals, viewport: frame.viewport)
     }
 }
 
@@ -329,17 +343,13 @@ enum MarbleLiveResponse {
 private final class MarbleMotionState {
     private var phase: Double = 0
     private var lastDate: Date?
-    private var smoothedBass = 0.0
-    func advance(date: Date, start: Date, baseSpeed: Double,
-                 bass: Double) -> Float {
+    func advance(date: Date, start: Date, baseSpeed: Double) -> Float {
         if let lastDate {
-            // Paused/inactive periods do not integrate a jump on foreground.
+            // Beat release never slows or reverses the animation clock.
             let dt = min(0.1, max(0, date.timeIntervalSince(lastDate)))
-            let target = materialBound(bass, 0...1)
-            smoothedBass += (target - smoothedBass) * min(1, dt * 11)
-            phase += dt * baseSpeed * (1 + 0.38 * smoothedBass)
+            phase += dt * max(0, baseSpeed)
         } else {
-            phase = max(0, date.timeIntervalSince(start)) * baseSpeed
+            phase = max(0, date.timeIntervalSince(start)) * max(0, baseSpeed)
         }
         lastDate = date
         return Float(phase)
