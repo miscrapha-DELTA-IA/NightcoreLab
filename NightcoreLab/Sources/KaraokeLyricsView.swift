@@ -326,6 +326,9 @@ struct KaraokeLyricsView: View {
                 }
             }
         }
+        .overlay(alignment: .top) {
+            KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill)
+        }
         .onAppear { store.startTracking() }
         .onChange(of: store.isPlaying) { _, playing in
             if !playing { KaraokePerformanceProbe.shared.timelineSuspended() }

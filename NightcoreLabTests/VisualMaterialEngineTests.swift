@@ -289,8 +289,11 @@ final class VisualMaterialEngineTests: XCTestCase {
         let used = Set(CreativePresetCatalog.experiencePresets.map { $0.visualMaterial.id })
             .union([VisualMaterialCatalog.originalMarble.id])
         XCTAssertTrue(VisualMaterialCatalog.all.allSatisfy { used.contains($0.id) })
+        // Stage 18C adds curated marble-type looks after the legacy prefix.
+        // Preserve every existing expanded type while recognizing that the
+        // newly authored procedural palettes also use the Marble renderer.
         XCTAssertEqual(Set(VisualMaterialCatalog.all.suffix(from: 3).map(\.type)),
-                       Set([.liquidGlass, .chrome, .organicNoise,
+                       Set([.marble, .liquidGlass, .chrome, .organicNoise,
                             .atmosphericSmoke, .advancedMarble]))
         for type in VisualMaterialType.allCases where !type.isSupported {
             let reserved = VisualMaterial(id: "future", name: "Future", type: type)

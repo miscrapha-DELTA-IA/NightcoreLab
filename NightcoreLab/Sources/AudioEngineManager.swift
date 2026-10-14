@@ -121,6 +121,25 @@ final class AudioEngineManager {
     @ObservationIgnored let liveVisualMeter = AudioVisualLiveMeter()
     @ObservationIgnored private var liveMeterTapInstalled = false
 
+    /// The *same* live AVAudioEngine houses all four loop voices and native
+    /// vocal units. Mic monitoring is gated after processing, before limiter.
+    @ObservationIgnored let creatorLoops = CreatorLoopEngine()
+    private(set) var activeCreatorLoops: Set<CreatorLoopSlot> = []
+    private(set) var vocalCaptureActive = false
+    private(set) var vocalMonitoringEnabled = false
+    private(set) var vocalSetting = VocalFXSetting()
+    @ObservationIgnored private let vocalPitch = AVAudioUnitTimePitch()
+    @ObservationIgnored private let vocalEQ = AVAudioUnitEQ(numberOfBands: 2)
+    @ObservationIgnored private let vocalDelay = AVAudioUnitDelay()
+    @ObservationIgnored private let vocalReverb = AVAudioUnitReverb()
+    @ObservationIgnored private let vocalGate = AVAudioMixerNode()
+    @ObservationIgnored private var microphoneCapture: KaraokeMicrophoneCapture?
+    /// Never read engine.inputNode just to initialize the engine or clean up
+    /// headless CI; retained only after a hardware-format validation.
+    @ObservationIgnored private var connectedVocalInput: AVAudioInputNode?
+    @ObservationIgnored private var vocalGeneration = 0
+    @ObservationIgnored var karaokeCompletion: (() -> Void)?
+
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
     var performancePadsReady: Bool { padRuntime.isReady }
@@ -166,6 +185,8 @@ final class AudioEngineManager {
     /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
+        // Microphone DSP units are attached only after permission and a
+        // valid hardware input format. The simulator needs no input graph.
         padRuntime.attach(to: engine)
         // Pads can sound before a song has been selected.
         let standaloneFormat = AVAudioFormat(
@@ -173,6 +194,8 @@ final class AudioEngineManager {
         engine.connect(performanceMixer, to: limiter, format: standaloneFormat)
         engine.connect(limiter, to: engine.mainMixerNode, format: standaloneFormat)
         padRuntime.connect(to: engine, mixer: performanceMixer)
+        creatorLoops.attach(to: engine, output: performanceMixer,
+                            format: standaloneFormat)
         engine.mainMixerNode.outputVolume = pow(10, Self.outputHeadroomDB / 20)
         engine.prepare()
 
@@ -191,6 +214,8 @@ final class AudioEngineManager {
               (1...2).contains(file.processingFormat.channelCount) else {
             throw AudioEngineError.unsupportedAudio
         }
+        endVocalCapture()
+        stopAllCreatorLoops()
         stopPlayback()
         audioFile = file
         sourceURL = url
@@ -216,6 +241,9 @@ final class AudioEngineManager {
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
                           performanceMixer: performanceMixer)
         padRuntime.connect(to: engine, mixer: performanceMixer)
+        // No mic FX wiring during load/prepare/offline tests. It is done on
+        // opt-in activation, after validating actual hardware input.
+        creatorLoops.attach(to: engine, output: performanceMixer, format: graphFormat)
         engine.prepare()
         if performanceModePresented {
             do {
@@ -253,6 +281,182 @@ final class AudioEngineManager {
             sourceClip: padRuntime.sourceClip,
             quantizeStrength: quantizeStrength ?? padQuantizeStrength)
         return result.isValid ? result : nil
+    }
+
+    // MARK: Mic and Creator loops (one pre-existing audio graph)
+
+    func applyVocalFX(_ settings: VocalFXSetting) {
+        guard settings.isValid else { return }
+        vocalSetting = settings
+        guard vocalPitch.engine != nil else { return }
+        let m = VocalFXParameters.resolve(settings)
+        vocalPitch.rate = 1
+        vocalPitch.pitch = m.pitchCents
+        vocalEQ.bands[0].filterType = .parametric
+        vocalEQ.bands[0].frequency = 3300
+        vocalEQ.bands[0].bandwidth = 1.2
+        vocalEQ.bands[0].gain = m.eqPresenceDB
+        vocalEQ.bands[0].bypass = false
+        vocalEQ.bands[1].filterType = .lowPass
+        vocalEQ.bands[1].frequency = m.lowPassHz
+        vocalEQ.bands[1].bypass = m.lowPassHz >= 17_999
+        vocalDelay.delayTime = m.delaySeconds
+        vocalDelay.feedback = 4
+        vocalDelay.wetDryMix = m.delayWetMix
+        vocalReverb.loadFactoryPreset(m.reverbPreset)
+        vocalReverb.wetDryMix = m.reverbWetMix
+        refreshVocalMonitorSafety()
+    }
+
+    /// Only after the AVAudioSession reports input hardware and a valid
+    /// nonzero input bus format. Nil formats let native units negotiate
+    /// their own processing sample rate rather than forcing the song rate
+    /// (or a stale 48-kHz standalone rate) onto the microphone path.
+    private func connectVocalChain(input: AVAudioInputNode,
+                                   format: AVAudioFormat) {
+        if vocalPitch.engine == nil {
+            [vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
+                .forEach { engine.attach($0) }
+        }
+        vocalGate.outputVolume = 0 // before *any* input edge is attached
+        engine.connect(input, to: vocalPitch, format: format)
+        engine.connect(vocalPitch, to: vocalEQ, format: nil)
+        engine.connect(vocalEQ, to: vocalDelay, format: nil)
+        engine.connect(vocalDelay, to: vocalReverb, format: nil)
+        engine.connect(vocalReverb, to: vocalGate, format: nil)
+        engine.connect(vocalGate, to: performanceMixer, format: nil)
+        connectedVocalInput = input
+    }
+
+    private func refreshVocalMonitorSafety() {
+        let session = AVAudioSession.sharedInstance()
+        let safe = vocalCaptureActive &&
+            VocalMonitorSafety.allows(session.currentRoute.outputs,
+                                      latency: session.outputLatency)
+        vocalMonitoringEnabled = safe
+        // Avoid feedback and A2DP delay. Capture/scoring remain active.
+        vocalGate.outputVolume = safe ? min(0.5, vocalSetting.intensity * 0.42) : 0
+    }
+
+    func beginVocalCapture() async -> Bool {
+        if vocalCaptureActive { return true }
+        vocalGeneration &+= 1
+        let requested = vocalGeneration
+        let allowed = await AVAudioApplication.requestRecordPermission()
+        guard allowed, requested == vocalGeneration, !Task.isCancelled else {
+            return false
+        }
+        let resume = isPlaying
+        if resume { pause() }
+        removeVisualMeterTap()
+        engine.stop()
+        let capture = KaraokeMicrophoneCapture()
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.allowBluetoothA2DP, .defaultToSpeaker])
+            try session.setActive(true)
+            // isInputAvailable is safe on headless macOS/simulators. Avoid
+            // engine.inputNode entirely when no physical microphone exists.
+            guard session.isInputAvailable else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            let input = engine.inputNode
+            let hardwareFormat = input.inputFormat(forBus: 0)
+            let format = input.outputFormat(forBus: 0)
+            guard hardwareFormat.channelCount > 0,
+                  hardwareFormat.sampleRate.isFinite,
+                  hardwareFormat.sampleRate > 0,
+                  format.channelCount > 0,
+                  format.sampleRate.isFinite,
+                  format.sampleRate > 0 else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            connectVocalChain(input: input, format: format)
+            let scoringClock = lyricsClock
+            input.installTap(onBus: 0, bufferSize: 2048, format: format) {
+                buffer, _ in
+                // Captured clock is thread-safe; no MainActor hop on CoreAudio.
+                capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+            }
+            microphoneCapture = capture
+            vocalCaptureActive = true
+            applyVocalFX(vocalSetting)
+            cancelIdleStop()
+            try engine.start()
+            installVisualMeterTap()
+            lyricsClock.refreshOutputLatency()
+            refreshVocalMonitorSafety()
+            if resume { play() }
+            return true
+        } catch {
+            capture.stop()
+            if connectedVocalInput != nil || vocalCaptureActive {
+                endVocalCapture()
+            } else {
+                // No valid input was attached. Never query engine.inputNode
+                // while recovering from a simulator/no-mic failure.
+                engine.stop()
+                vocalGate.outputVolume = 0
+                vocalMonitoringEnabled = false
+                configureSession()
+                lyricsClock.refreshOutputLatency()
+            }
+            if resume && !isPlaying { play() }
+            return false
+        }
+    }
+
+    // Compatibility with the already-merged KaraokeScoringControls surface.
+    var karaokeMicrophoneActive: Bool { vocalCaptureActive }
+    func beginKaraokeMicrophone() async -> Bool { await beginVocalCapture() }
+    func endKaraokeMicrophone() { endVocalCapture() }
+
+    func karaokeVoiceFrame() -> KaraokeVoiceFrame {
+        microphoneCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
+    }
+
+    func endVocalCapture() {
+        vocalGeneration &+= 1
+        karaokeCompletion = nil
+        guard vocalCaptureActive || microphoneCapture != nil ||
+              connectedVocalInput != nil else { return }
+        let resume = isPlaying
+        if resume { pause() }
+        removeVisualMeterTap()
+        engine.stop()
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
+        microphoneCapture?.stop()
+        microphoneCapture = nil
+        vocalCaptureActive = false
+        vocalGate.outputVolume = 0
+        vocalMonitoringEnabled = false
+        configureSession()
+        lyricsClock.refreshOutputLatency()
+        if resume { play() }
+        else if performanceModePresented { try? engine.start() }
+        else { scheduleIdleStop() }
+    }
+
+    func toggleCreatorLoop(_ slot: CreatorLoopSlot, rhythm: RhythmAnalysisResult?,
+                           key: KeyAnalysisResult?) -> Bool {
+        let launched = creatorLoops.toggle(
+            slot, sourceTime: currentTime, speed: speed,
+            rhythm: rhythm, key: key, engine: engine,
+            onStopped: { [weak self] slot in
+                _ = self?.activeCreatorLoops.remove(slot)
+            })
+        if launched { activeCreatorLoops = creatorLoops.active }
+        return launched
+    }
+
+    func stopAllCreatorLoops() {
+        creatorLoops.stopAll()
+        activeCreatorLoops = []
     }
 
     // MARK: Performance pads
@@ -881,6 +1085,7 @@ final class AudioEngineManager {
                 guard let self else { return }
                 self.lyricsClock.refreshOutputLatency()
                 self.refreshPerformanceOutputLatency()
+                self.refreshVocalMonitorSafety()
                 if removed {
                     self.interruptedSourceURL = nil
                     self.pause()
