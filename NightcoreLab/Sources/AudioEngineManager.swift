@@ -347,11 +347,11 @@ final class AudioEngineManager {
                 throw AudioEngineError.unsupportedAudio
             }
             engine.connect(input, to: vocalPitch, format: format)
+            let scoringClock = lyricsClock
             input.installTap(onBus: 0, bufferSize: 2048, format: format) {
-                [weak self] buffer, _ in
-                // Never mutate the UI or touch the PCM graph on the callback.
-                guard let self else { return }
-                capture.capture(buffer, sourceTime: self.lyricsClock.lyricTime)
+                buffer, _ in
+                // Captured clock is thread-safe; no MainActor hop on CoreAudio.
+                capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
             microphoneCapture = capture
             vocalCaptureActive = true
