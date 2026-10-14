@@ -70,7 +70,10 @@ struct PlayerBackgroundView: View {
 
                     pulseDriver: frozenTime == nil ? pulseDriver : nil
                 )
-                .overlay(Color.black.opacity(0.4))
+                // Preserve legacy readability while allowing authored
+                // high-contrast five-stop surfaces to remain recognizable.
+                .overlay(Color.black.opacity(
+                    material.parameters.usesProceduralTexture ? 0.30 : 0.4))
             } else if let imageURL {
                 switch style {
                 case .blurred:
