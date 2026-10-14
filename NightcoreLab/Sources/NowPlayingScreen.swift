@@ -706,6 +706,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 typographyPreset: selected.typographyPreset,
                 padMapping: base.padMapping,
                 vocalAndAudioFXMacro: base.vocalAndAudioFXMacro,
+                vocalFX: base.vocalFX,
                 reactionProfile: base.reactionProfile)
         } else {
             profile = base
@@ -719,6 +720,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         storyTypography = profile.typographyPreset.font
         reactionMode = profile.reactionProfile
         audio.setReverb(Float(profile.vocalAndAudioFXMacro * 35))
+        creatorControls.vocalFX = profile.vocalFX
+        audio.applyVocalFX(profile.vocalFX)
         activeSongProfile = profile
         try? CreatorPresetStore.save(
             SongCreativeProfileResolver.creatorPreset(for: profile))
