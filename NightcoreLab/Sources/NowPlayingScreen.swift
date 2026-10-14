@@ -374,6 +374,11 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 assetID: descriptor.assetID,
                 sourceRevision: descriptor.sourceRevision,
                 analysis: analysis, expression: expression)
+            // A previous explicit choice belongs to this exact source and can
+            // be restored automatically. Do not override a newer user tap.
+            if saved != nil && activeSongProfile == nil {
+                applySuggestedSongProfile()
+            }
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
     }
@@ -403,7 +408,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         // Existing AppStorage keys are the source of truth for visual and
         // typography consumers, including frozen Story requests.
         creativePresetID = profile.visualPresetID
+        appTheme = CreativePresetCatalog.recipe(for: profile.visualPresetID).preset.theme
         karaokeTypography = profile.typographyPreset.style
+        storyTypography = profile.typographyPreset.font
         reactionMode = profile.reactionProfile
         audio.setReverb(Float(profile.vocalAndAudioFXMacro * 35))
         activeSongProfile = profile
