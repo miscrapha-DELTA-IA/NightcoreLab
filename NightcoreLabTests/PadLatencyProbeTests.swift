@@ -62,6 +62,23 @@ final class PadLatencyProbeTests: XCTestCase {
         XCTAssertEqual(probe.finish().accepted, 0)
     }
 
+    func testCommandBoundaryDoesNotIncludePostAudioBookkeeping() {
+        let began = 10.0
+        let nodePlayReturned = 10.002
+        let idleBookkeepingFinished = 10.085
+
+        let duration = PadLatencyProbe.elapsedMilliseconds(
+            from: began, to: nodePlayReturned)
+        XCTAssertEqual(duration, 2.0, accuracy: 0.000001)
+        XCTAssertLessThan(duration, PadLatencyProbe.elapsedMilliseconds(
+            from: began, to: idleBookkeepingFinished))
+
+        XCTAssertTrue(PadLatencyProbe.elapsedMilliseconds(
+            from: .nan, to: nodePlayReturned).isNaN)
+        XCTAssertTrue(PadLatencyProbe.elapsedMilliseconds(
+            from: nodePlayReturned, to: began).isNaN)
+    }
+
     func testInvalidDurationsExcludedFromPercentiles() {
         let probe = PadLatencyProbe()
         probe.start()
