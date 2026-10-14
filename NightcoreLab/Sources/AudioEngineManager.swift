@@ -128,6 +128,7 @@ final class AudioEngineManager {
     private(set) var vocalCaptureActive = false
     private(set) var vocalMonitoringEnabled = false
     private(set) var vocalSetting = VocalFXSetting()
+    @ObservationIgnored private let vocalInputAdapter = AVAudioMixerNode()
     @ObservationIgnored private let vocalPitch = AVAudioUnitTimePitch()
     @ObservationIgnored private let vocalEQ = AVAudioUnitEQ(numberOfBands: 2)
     @ObservationIgnored private let vocalDelay = AVAudioUnitDelay()
@@ -314,33 +315,33 @@ final class AudioEngineManager {
         refreshVocalMonitorSafety()
     }
 
-    /// Only after the AVAudioSession reports input hardware and a valid
-    /// nonzero input bus format. Nil formats let native units negotiate
-    /// their own processing sample rate rather than forcing the song rate
-    /// (or a stale 48-kHz standalone rate) onto the microphone path.
-    private func connectVocalChain(input: AVAudioInputNode,
-                                   format: AVAudioFormat) {
+    /// The adapter mixer owns sample-rate/channel conversion. Never force the
+    /// song format onto the hardware input bus (e.g. 48k mono -> 44.1k stereo).
+    private func connectVocalChain(input: AVAudioInputNode, format: AVAudioFormat) {
         if vocalPitch.engine == nil {
-            [vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
+            [vocalInputAdapter, vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
                 .forEach { engine.attach($0) }
         }
-        vocalGate.outputVolume = 0 // before *any* input edge is attached
-        engine.connect(input, to: vocalPitch, format: format)
-        engine.connect(vocalPitch, to: vocalEQ, format: nil)
-        engine.connect(vocalEQ, to: vocalDelay, format: nil)
-        engine.connect(vocalDelay, to: vocalReverb, format: nil)
-        engine.connect(vocalReverb, to: vocalGate, format: nil)
-        engine.connect(vocalGate, to: performanceMixer, format: nil)
-        connectedVocalInput = input
+        vocalGate.outputVolume = 0
+        let songFormat = performanceMixer.outputFormat(forBus: 0)
+        engine.connect(input, to: vocalInputAdapter, format: format)
+        engine.connect(vocalInputAdapter, to: vocalPitch, format: songFormat)
+        engine.connect(vocalPitch, to: vocalEQ, format: songFormat)
+        engine.connect(vocalEQ, to: vocalDelay, format: songFormat)
+        engine.connect(vocalDelay, to: vocalReverb, format: songFormat)
+        engine.connect(vocalReverb, to: vocalGate, format: songFormat)
+        engine.connect(vocalGate, to: performanceMixer, format: songFormat)
     }
 
     private func refreshVocalMonitorSafety() {
-        vocalMonitoringEnabled = false
-        vocalGate.outputVolume = 0
+        let session = AVAudioSession.sharedInstance()
+        let safe = vocalCaptureActive && VocalMonitorSafety.allows(
+            session.currentRoute.outputs, latency: session.outputLatency)
+        vocalMonitoringEnabled = safe
+        vocalGate.outputVolume = safe ? min(0.5, vocalSetting.intensity * 0.42) : 0
     }
 
     /// Explicit opt-in only. Opening lyrics never calls this method.
-
     func beginVocalCapture() async -> Bool {
         if vocalCaptureActive { return true }
         vocalGeneration &+= 1
@@ -365,22 +366,28 @@ final class AudioEngineManager {
             guard native.channelCount > 0, native.sampleRate.isFinite,
                   native.sampleRate > 0 else { throw AudioEngineError.unsupportedAudio }
             let scoringClock = lyricsClock
-            // Capture has no connection to the song's 44.1/48kHz mixer buses.
+            // Analysis reads native PCM; the separate adapter converts monitor audio.
             input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
                 capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
             connectedVocalInput = input
+            connectVocalChain(input: input, format: native)
             microphoneCapture = capture
             vocalCaptureActive = true
+            applyVocalFX(vocalSetting)
             try engine.start()
             installVisualMeterTap()
             return true
         } catch {
-            if let input = connectedVocalInput { input.removeTap(onBus: 0) }
+            if let input = connectedVocalInput {
+                input.removeTap(onBus: 0)
+                engine.disconnectNodeOutput(input)
+            }
             connectedVocalInput = nil
             capture.stop()
             microphoneCapture = nil
             vocalCaptureActive = false
+            refreshVocalMonitorSafety()
             configureSession()
             return false // Busy hardware keeps passive scoring; not a permission error.
         }
@@ -430,6 +437,7 @@ final class AudioEngineManager {
         defer { finishGraphReconfiguration(resume: resume) }
         if let input = connectedVocalInput {
             input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
             connectedVocalInput = nil
         }
         microphoneCapture?.stop()
@@ -1045,6 +1053,7 @@ final class AudioEngineManager {
         vocalMonitoringEnabled = false
         if let input = connectedVocalInput {
             input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
             connectedVocalInput = nil
         }
         microphoneCapture?.stop()

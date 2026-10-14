@@ -52,6 +52,40 @@ final class RuntimeStabilizationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(audio.lyricsClock.lyricTime, 1.8)
     }
 
+    func testVocalAdapterConvertsNative48kMonoToSong44100Stereo() throws {
+        // Offline fixture models the hardware bus without requesting a mic.
+        let graph = AVAudioEngine()
+        let input = AVAudioPlayerNode(), adapter = AVAudioMixerNode()
+        let pitch = AVAudioUnitTimePitch()
+        [input, adapter, pitch].forEach { graph.attach($0) }
+        let native = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
+        let song = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        graph.connect(input, to: adapter, format: native)
+        graph.connect(adapter, to: pitch, format: song)
+        graph.connect(pitch, to: graph.mainMixerNode, format: song)
+        try graph.enableManualRenderingMode(.offline, format: song, maximumFrameCount: 1024)
+        let source = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: native, frameCapacity: 48000))
+        source.frameLength = 48000
+        for i in 0..<48000 { source.floatChannelData![0][i] = 0.1 * sin(Float(i) * 2 * .pi * 220 / 48000) }
+        input.scheduleBuffer(source)
+        try graph.start()
+        input.play()
+        defer { graph.stop() }
+        let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: song, frameCapacity: 1024))
+        var peak: Float = 0
+        for _ in 0..<20 {
+            let status = try graph.renderOffline(1024, to: output)
+            if status == .success {
+                for i in 0..<Int(output.frameLength) {
+                    let sample = output.floatChannelData![0][i]
+                    XCTAssertTrue(sample.isFinite)
+                    peak = max(peak, abs(sample))
+                }
+            }
+        }
+        XCTAssertGreaterThan(peak, 0.01)
+    }
+
     func testGrantedMicrophonePermissionNeverRequestsErrorBanner() {
         XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.granted))
         XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.undetermined))
