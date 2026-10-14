@@ -8,8 +8,12 @@ on:
       - 'backend/**'
   workflow_dispatch:
 
+# The Fast Check in ios.yml already compiles experiments; avoid a duplicate
+# simulator build on experimental PRs. Manual runs remain available.
 jobs:
   build:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' || !(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) }}
     runs-on: macos-15
     timeout-minutes: 30
 
