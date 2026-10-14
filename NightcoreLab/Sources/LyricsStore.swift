@@ -19,10 +19,11 @@ protocol PlaybackClock: AnyObject, Sendable {
 enum KaraokeEntryAnchor {
     static func activeLineID(in lines: [TimedLyricLine],
                              sourceTime: TimeInterval,
-                             userOffset: TimeInterval) -> Int? {
-        let time = sourceTime + userOffset
-        guard time.isFinite else { return nil }
-        return lines.activeIndex(at: time)
+                             userOffset: TimeInterval,
+                             visualLead: TimeInterval = 0) -> Int? {
+        guard sourceTime.isFinite, userOffset.isFinite,
+              visualLead.isFinite, visualLead >= 0 else { return nil }
+        return lines.activeIndex(at: sourceTime + userOffset + visualLead)
     }
 }
 
@@ -66,7 +67,9 @@ final class LyricsStore {
     @discardableResult
     func synchronizeForEntry(using currentClock: PlaybackClock) -> Int? {
         clock = currentClock
-        syncNow()
+        // Use the same visual lead as the display-link BEFORE showing frame 0.
+        // A later tracking tick must not snap the opening verse forward.
+        syncNow(visualLeadEnabled: true)
         return activeLineIndex
     }
 
@@ -143,13 +146,17 @@ final class LyricsStore {
 
     // MARK: Tick (≤ 30 Hz, só escreve quando algo muda)
 
-    private func syncNow() {
+    private func syncNow(visualLeadEnabled: Bool? = nil) {
         guard let clock else { return }
         let playing = clock.isPlaying
         if playing != isPlaying { isPlaying = playing }
 
+        // Only active Karaoke tracking gets look-ahead. Background loading
+        // and non-Karaoke readers continue to use exact source time.
+        let useLead = (visualLeadEnabled ?? (driver != nil)) && playing
         let idx = KaraokeEntryAnchor.activeLineID(
-            in: lines, sourceTime: clock.lyricTime, userOffset: userOffset)
+            in: lines, sourceTime: clock.lyricTime, userOffset: userOffset,
+            visualLead: useLead ? KaraokeScrollPolicy.visualLead : 0)
         if idx != activeLineIndex {
             KaraokePerformanceProbe.shared.activeLineChanged()
             activeLineIndex = idx
