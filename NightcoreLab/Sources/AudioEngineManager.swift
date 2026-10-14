@@ -845,6 +845,7 @@ final class AudioEngineManager {
     private func playbackFinished(generation: Int) {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
         guard generation == scheduleGeneration else { return }
+        karaokeCompletion?()
         player.stop()
         // Pads are an independent performance surface: ending the song must
         // not choke a cymbal or 808 that the user is still hearing.
