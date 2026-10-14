@@ -107,6 +107,8 @@ final class AudioEngineManager {
     /// A bounded foreground lease: while the playable pad deck is visible,
     /// do not cold-stop the sole AVAudioEngine between fingerdrumming hits.
     @ObservationIgnored private var performanceModePresented = false
+    /// Cached per audio route; never query AVAudioSession on a pad trigger.
+    @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
 
@@ -190,7 +192,9 @@ final class AudioEngineManager {
         engine.stop()
         padRuntime.clearSourceClip()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
-        padRuntime.nodes.forEach { engine.disconnectNodeOutput($0) }
+        (padRuntime.nodes + padRuntime.releaseNodes).forEach {
+            engine.disconnectNodeOutput($0)
+        }
 
         let graphFormat = AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate,
                                         channels: 2)!
@@ -215,6 +219,7 @@ final class AudioEngineManager {
     func beginPerformanceMode() {
         guard !performanceModePresented else { return }
         performanceModePresented = true
+        refreshPerformanceOutputLatency()
         cancelIdleStop()
         if !engine.isRunning { try? engine.start() }
     }
@@ -226,6 +231,22 @@ final class AudioEngineManager {
         performanceModePresented = false
         padRuntime.stopAll()
         if !isPlaying { scheduleIdleStop() }
+    }
+
+    /// Cached, bounded source-time for recorded pads. The rendered music
+    /// time leads what the user hears by output latency; speed converts the
+    /// latency back to original song seconds. This is NOT EnginePlaybackClock
+    /// lyricTime (which already compensates independently).
+    func recordedPadSourceTime() -> TimeInterval? {
+        guard isPlaying else { return nil }
+        let compensation = performanceOutputLatency * Double(speed)
+        return min(duration, max(0, currentTime - compensation))
+    }
+
+    private func refreshPerformanceOutputLatency() {
+        let latency = AVAudioSession.sharedInstance().outputLatency
+        performanceOutputLatency = latency.isFinite ?
+            min(0.35, max(0, latency)) : 0
     }
 
     /// Prepare at most five seconds from the currently loaded local source.
@@ -786,6 +807,7 @@ final class AudioEngineManager {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lyricsClock.refreshOutputLatency()
+                self.refreshPerformanceOutputLatency()
                 if removed {
                     self.interruptedSourceURL = nil
                     self.pause()
