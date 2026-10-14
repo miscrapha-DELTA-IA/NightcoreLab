@@ -74,6 +74,18 @@ struct TrackAudioCache {
         try? persist()
     }
 
+    /// Reclaim disposable downloaded tracks on memory pressure while retaining
+    /// the playing, selected and in-flight queue members. Never touches an
+    /// AVAudioPlayerNode buffer or the current song file.
+    mutating func evictUnprotected(protecting ids: Set<String>) {
+        for (id, entry) in entries where !ids.contains(id) {
+            let url = folder.appendingPathComponent(entry.relativePath)
+            try? FileManager.default.removeItem(at: url)
+            entries[id] = nil
+        }
+        try? persist()
+    }
+
     private func persist() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try JSONEncoder().encode(entries).write(to: folder.appendingPathComponent("index.json"), options: .atomic)

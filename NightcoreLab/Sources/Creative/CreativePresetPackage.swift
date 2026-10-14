@@ -86,6 +86,7 @@ struct SongCreativeProfile: Codable, Equatable, Sendable {
     /// 0...1; mapped to the existing reverb wet/dry parameter on explicit apply.
     /// No vocal isolation or independent vocal track is implied.
     let vocalAndAudioFXMacro: Double
+    let vocalFX: VocalFXSetting
     let reactionProfile: CreativePreset.AudioReaction
 
     init(assetID: String, sourceRevision: String,
@@ -93,6 +94,7 @@ struct SongCreativeProfile: Codable, Equatable, Sendable {
          typographyPreset: TypographyPreset, padKitID: String = PadKit.starter.id,
          padMapping: SongPadGuardrails,
          vocalAndAudioFXMacro: Double = 0,
+          vocalFX: VocalFXSetting = .init(),
          reactionProfile: CreativePreset.AudioReaction = .subtle) {
         version = Self.schemaVersion
         self.assetID = assetID
@@ -103,6 +105,7 @@ struct SongCreativeProfile: Codable, Equatable, Sendable {
         self.padKitID = padKitID
         self.padMapping = padMapping
         self.vocalAndAudioFXMacro = vocalAndAudioFXMacro
+        self.vocalFX = vocalFX
         self.reactionProfile = reactionProfile
     }
 
@@ -114,13 +117,14 @@ struct SongCreativeProfile: Codable, Equatable, Sendable {
         !materialID.isEmpty && materialID.count <= 128 &&
         padKitID == PadKit.starter.id &&
         padMapping.isValid &&
-        vocalAndAudioFXMacro.isFinite && (0...1).contains(vocalAndAudioFXMacro)
+        vocalAndAudioFXMacro.isFinite && (0...1).contains(vocalAndAudioFXMacro) &&
+        vocalFX.isValid
     }
 
     private enum CodingKeys: String, CodingKey {
         case version, assetID, sourceRevision, visualPresetID, materialID
         case typographyPreset, padKitID, padMapping
-        case vocalAndAudioFXMacro, reactionProfile
+        case vocalAndAudioFXMacro, vocalFX, reactionProfile
     }
 
     init(from decoder: Decoder) throws {
@@ -140,6 +144,7 @@ struct SongCreativeProfile: Codable, Equatable, Sendable {
             padKitID: try c.decode(String.self, forKey: .padKitID),
             padMapping: try c.decode(SongPadGuardrails.self, forKey: .padMapping),
             vocalAndAudioFXMacro: try c.decode(Double.self, forKey: .vocalAndAudioFXMacro),
+            vocalFX: try c.decodeIfPresent(VocalFXSetting.self, forKey: .vocalFX) ?? .init(),
             reactionProfile: try c.decode(CreativePreset.AudioReaction.self, forKey: .reactionProfile))
         guard isValid else {
             throw DecodingError.dataCorrupted(.init(

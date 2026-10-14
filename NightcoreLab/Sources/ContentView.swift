@@ -358,7 +358,7 @@ struct ContentView: View {
                 Text("Nightcore Lab")
                     .font(DS.Typography.display)
                     .foregroundStyle(DS.Ink.primary)
-                Text(currentTheme.displayName.uppercased())
+                Text("v23.1 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)

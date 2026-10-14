@@ -55,7 +55,6 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             build-for-testing
-      # Reuse the compiled test bundle; no rendering/pixel tests in the fast lane.
       - name: Run smoke suites and fast visual catalog contract
         shell: bash
         run: |
@@ -76,9 +75,12 @@ jobs:
   build:
     name: build
     # Manual dispatch can force the entire delivery gate on any branch.
-    # Release/final PRs and pushes to main also retain the original pipeline.
+    # Explicit Stage 20B.1 recovery push also runs the full iPhoneOS IPA gate,
+    # rather than hiding it behind the exploration-only fast lane.
+    # Remove this one-branch recovery opt-in after PR #70 is merged.
+    # Release/final PRs and pushes to main retain the original pipeline.
     if: >-
-      ${{ (github.event_name == 'workflow_dispatch' || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
+      ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_name == 'stage-20b-vocal-fx-loops-experiments') || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
     runs-on: macos-latest
     timeout-minutes: 30
 

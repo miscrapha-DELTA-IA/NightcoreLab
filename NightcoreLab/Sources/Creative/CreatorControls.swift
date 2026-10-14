@@ -36,6 +36,7 @@ struct CreatorControls: Codable, Equatable, Sendable {
     var kineticAmount: Double = 0.5
     var beatSensitivity: Double = 0.5
     var energyResponse: Double = 0.5
+    var vocalFX: VocalFXSetting = .init()
 
     func value(for control: CreatorControl) -> Double {
         switch control {
@@ -69,7 +70,7 @@ struct CreatorControls: Codable, Equatable, Sendable {
     var isNeutral: Bool { self == .neutral }
 
     var isValid: Bool {
-        CreatorControl.allCases.allSatisfy {
+        vocalFX.isValid && CreatorControl.allCases.allSatisfy {
             let value = self.value(for: $0)
             return value.isFinite && (0...1).contains(value)
         }
@@ -78,13 +79,19 @@ struct CreatorControls: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case materialIntensity, distortion, brightness, movement
         case typographyScale, glow, kineticAmount, beatSensitivity, energyResponse
+        case vocalFX
     }
 
     init() {}
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        for key in CodingKeys.allCases {
+        vocalFX = try c.decodeIfPresent(VocalFXSetting.self, forKey: .vocalFX) ?? .init()
+        guard vocalFX.isValid else {
+            throw DecodingError.dataCorruptedError(forKey: .vocalFX, in: c,
+                debugDescription: "Invalid vocal FX intensity")
+        }
+        for key in CodingKeys.allCases where key != .vocalFX {
             let value = try c.decodeIfPresent(Double.self, forKey: key) ?? 0.5
             guard value.isFinite && (0...1).contains(value) else {
                 throw DecodingError.dataCorruptedError(
@@ -100,6 +107,7 @@ struct CreatorControls: Codable, Equatable, Sendable {
             case .kineticAmount: kineticAmount = value
             case .beatSensitivity: beatSensitivity = value
             case .energyResponse: energyResponse = value
+            case .vocalFX: break
             }
         }
     }
@@ -156,7 +164,14 @@ enum ControlMapping {
                 warpAmount: base.warpAmount * parameters.intensity + parameters.movement,
                 brightnessBoost: base.brightnessBoost * parameters.intensity +
                     parameters.brightness +
-                    (parameters.energyResponse - 1) * material.audioResponse.brightness)
+                    (parameters.energyResponse - 1) * material.audioResponse.brightness,
+                stripingFrequency: base.stripingFrequency, stripingMix: base.stripingMix,
+                speckleIntensity: base.speckleIntensity, embossStrength: base.embossStrength,
+                scanlineDensity: base.scanlineDensity,
+                diffusionSoftness: base.diffusionSoftness,
+                voidThreshold: base.voidThreshold, combStretch: base.combStretch,
+                bilateralSymmetry: base.bilateralSymmetry,
+                halftoneGrating: base.halftoneGrating)
             let signal = material.signals
             let signals = MaterialReactiveSignals(
                 energy: materialBound(signal.energy * parameters.energyResponse *

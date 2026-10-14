@@ -196,6 +196,13 @@ half4 texturedMarble(float2 position, half4 currentColor,
     float comp = max(0.0f, combStretch);
     float2 stretched = uv * float2(1.0f + 0.24f * comp,
                                  1.0f / (1.0f + 0.18f * comp));
+    // A typed pad impulse reaches beatPulse via the SAME CPU resolver in
+    // live preview and Story frames. A single bounded radial wave distorts
+    // contours without re-seeding noise or producing flashes.
+    float radius = length(uv);
+    float radialWave = sin(radius * 15.0f - t * 0.7f);
+    stretched += (uv / max(radius, 0.025f)) *
+                 (0.032f * saturate(beatPulse) * radialWave);
     float2 q = float2(fbm<2>(stretched * 1.2f + float2(t, 1.4f)),
                       fbm<2>(stretched * 1.2f + float2(7.2f, -t)));
     float warp = 0.42f + 0.16f * saturate(reactiveDistortion) +
@@ -259,14 +266,23 @@ half4 texturedMarble(float2 position, half4 currentColor,
     }
     if (halftoneGrating > 0.001f) {
         // Bilateral guilloché rings; highlight width tracks luminance.
-        float radius = length(uv * float2(1.0f, 0.85f) + 0.05f * q);
-        float wave = abs(sin(radius * halftoneGrating * 3.14159265f +
+        float engravingRadius = length(uv * float2(1.0f, 0.85f) + 0.05f * q);
+        float wave = abs(sin(engravingRadius * halftoneGrating * 3.14159265f +
                              flow * 4.2f));
         float luminance = dot(col, float3(0.2126f, 0.7152f, 0.0722f));
         float width = mix(0.07f, 0.27f, saturate(luminance));
         float engraving = 1.0f - smoothstep(width, width + 0.12f, wave);
         col = mix(col, c0, engraving * 0.63f);
     }
-    col += c4 * (saturate(beatPulse) * clamp(pulseGlow, 0.0f, 0.3f) * 0.18f);
+    // Smooth contour glints are visible when a Kick or Snare lands.
+    // Void Gloss keeps black pools black even at maximum accent.
+    float voidMask = voidThreshold > 0.001f
+        ? smoothstep(voidThreshold - 0.10f, voidThreshold + 0.08f, v)
+        : 1.0f;
+    float accentGlow = saturate(beatPulse) *
+        (0.055f + 0.075f * smoothstep(0.3f, 0.9f, abs(ribs)));
+    col += c4 * voidMask *
+        (accentGlow + saturate(beatPulse) *
+         clamp(pulseGlow, 0.0f, 0.3f) * 0.18f);
     return half4(half3(saturate(col)), 1.0h);
 }

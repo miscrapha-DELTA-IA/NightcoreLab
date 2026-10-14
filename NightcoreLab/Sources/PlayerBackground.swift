@@ -53,10 +53,24 @@ struct PlayerBackgroundView: View {
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
+    var liveMeter: AudioVisualLiveMeter? = nil
+    var reactionMode: CreativePreset.AudioReaction = .off
+    var creatorControls: CreatorControls = .neutral
+    var padAccentEmitter: PadVisualAccentEmitter? = nil
+
+    /// The on-screen palette/uniform route is identical to full-screen
+    /// TurbulentMarbleView, not an independent Cyber Night theme switch.
+    var resolvedMaterial: VisualMaterial { material }
+    var renderedSurface: MarbleSurfaceBinding {
+        MarbleSurfaceBinding.resolve(material: resolvedMaterial)
+    }
+    var effectiveStyle: PlayerBackgroundStyle {
+        renderedSurface.textured ? .turbulent : style
+    }
 
     var body: some View {
         ZStack {
-            if style == .turbulent {
+            if effectiveStyle == .turbulent {
                 // O modo fluido do cartão usa o mesmo shader Metal do fundo
                 // principal; 30 fps e scrim escuro preservam os controles.
                 TurbulentMarbleView(
@@ -66,16 +80,19 @@ struct PlayerBackgroundView: View {
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
                     reactiveDistortion: reactiveDistortion,
-                    material: material,
-
-                    pulseDriver: frozenTime == nil ? pulseDriver : nil
+                    material: resolvedMaterial,
+                    pulseDriver: frozenTime == nil ? pulseDriver : nil,
+                    liveMeter: frozenTime == nil ? liveMeter : nil,
+                    reactionMode: reactionMode,
+                    creatorControls: creatorControls,
+                    padAccentEmitter: padAccentEmitter
                 )
                 // Preserve legacy readability while allowing authored
                 // high-contrast five-stop surfaces to remain recognizable.
                 .overlay(Color.black.opacity(
                     material.parameters.usesProceduralTexture ? 0.30 : 0.4))
             } else if let imageURL {
-                switch style {
+                switch effectiveStyle {
                 case .blurred:
                 ZStack {
                     CoverFill(url: imageURL)
