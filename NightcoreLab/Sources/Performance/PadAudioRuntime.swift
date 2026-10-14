@@ -62,28 +62,49 @@ enum PadSampleSynthesizer {
     }
 }
 
-/// Fixed polyphony; 12 AVAudioPlayerNodes are attached to the existing
-/// AudioEngineManager's graph. Never owns or instantiates an AVAudioEngine.
-/// No sample generation, file operations or dependency resolution on touch.
+/// Fixed polyphony inside AudioEngineManager's ONE live AVAudioEngine.
+/// Voices and tiny emergency release buffers are allocated/attached at setup.
+/// A normal retrigger obtains another free voice so earlier tails overlap.
 @MainActor
 final class PadAudioRuntime {
+    static let releaseSeconds: Double = 0.008
+    static let releaseFrameCount = 384 // 8ms at 48k
+    private static let format = AVAudioFormat(
+        standardFormatWithSampleRate: PadSampleSynthesizer.sampleRate, channels: 2)!
+
     let kit: PadKit
     let nodes: [AVAudioPlayerNode]
+    /// Emergency release-only nodes: never consume the 12 musical voices.
+    /// Their PCM buffers are allocated once before any touch events.
+    let releaseNodes: [AVAudioPlayerNode]
+    private let releaseBuffers: [AVAudioPCMBuffer]
+    private var releaseExpires: [TimeInterval]
+    private var voiceGains: [Float]
     private(set) var prepared: [String: AVAudioPCMBuffer] = [:]
     private(set) var sourceClip: PerformanceSourceClip?
     private var allocator: PadVoiceAllocator
 
     init(kit: PadKit = .starter, polyphony: Int = 12) {
         self.kit = kit
-        self.nodes = (0..<max(1, polyphony)).map { _ in AVAudioPlayerNode() }
-        allocator = PadVoiceAllocator(capacity: nodes.count)
+        let capacity = max(1, polyphony)
+        nodes = (0..<capacity).map { _ in AVAudioPlayerNode() }
+        let releaseCapacity = min(8, capacity)
+        releaseNodes = (0..<releaseCapacity).map { _ in AVAudioPlayerNode() }
+        releaseBuffers = (0..<releaseCapacity).compactMap { _ in
+            AVAudioPCMBuffer(pcmFormat: Self.format,
+                              frameCapacity: AVAudioFrameCount(Self.releaseFrameCount))
+        }
+        releaseExpires = Array(repeating: 0, count: releaseCapacity)
+        voiceGains = Array(repeating: 0, count: capacity)
+        allocator = PadVoiceAllocator(capacity: capacity)
         for sample in kit.samples {
             prepared[sample.id] = PadSampleSynthesizer.make(sample)
         }
     }
 
     var isReady: Bool {
-        kit.isValid && kit.samples.allSatisfy { prepared[$0.id] != nil }
+        releaseBuffers.count == releaseNodes.count &&
+            kit.isValid && kit.samples.allSatisfy { prepared[$0.id] != nil }
     }
 
     func descriptor(for padID: String) -> SampleDescriptor? {
@@ -92,8 +113,6 @@ final class PadAudioRuntime {
              ? sourceClip?.descriptor : nil)
     }
 
-    /// Main-actor installation of already decoded/prepared data.
-    /// The expensive read/resample runs in a detached task before this call.
     func installSourceClip(_ clip: PerformanceSourceClip, pcm: PerformanceClipPCM) -> Bool {
         guard clip.isValid, let buffer = pcm.makeBuffer() else { return false }
         stopAll()
@@ -109,15 +128,47 @@ final class PadAudioRuntime {
     }
 
     func attach(to engine: AVAudioEngine) {
-        nodes.forEach { engine.attach($0) }
+        (nodes + releaseNodes).forEach { engine.attach($0) }
     }
 
     func connect(to engine: AVAudioEngine, mixer: AVAudioMixerNode) {
-        for node in nodes {
-            engine.connect(node, to: mixer,
-                           format: AVAudioFormat(standardFormatWithSampleRate:
-                                PadSampleSynthesizer.sampleRate, channels: 2)!)
+        for node in nodes + releaseNodes {
+            engine.connect(node, to: mixer, format: Self.format)
         }
+    }
+
+    /// Continue a stolen/choked voice in a short preallocated release channel.
+    /// Only 384 stereo frames are copied; no allocation or I/O on touch.
+    /// A very dense cluster exhausting release channels falls back to oldest
+    /// channel reuse, a bounded 8ms exception rather than unbounded polyphony.
+    private func release(_ item: PadVoiceAllocator.InterruptedLease,
+                         at now: TimeInterval) {
+        guard let id = item.previous.id, let source = prepared[id],
+              let srcL = source.floatChannelData?[0],
+              let srcR = source.floatChannelData?[1],
+              let slot = releaseExpires.indices.first(where: { releaseExpires[$0] <= now })
+                    ?? releaseExpires.indices.min(by: { releaseExpires[$0] < releaseExpires[$1] }),
+              slot < releaseBuffers.count,
+              let destL = releaseBuffers[slot].floatChannelData?[0],
+              let destR = releaseBuffers[slot].floatChannelData?[1] else { return }
+        let elapsed = max(0, now - item.previous.began)
+        let sourceIndex = min(Int(elapsed * PadSampleSynthesizer.sampleRate),
+                              Int(source.frameLength))
+        let length = Self.releaseFrameCount
+        for i in 0..<length {
+            let index = sourceIndex + i
+            let fade = Float(length - 1 - i) / Float(max(1, length - 1))
+            let envelope = fade * fade
+            destL[i] = index < Int(source.frameLength) ? srcL[index] * envelope : 0
+            destR[i] = index < Int(source.frameLength) ? srcR[index] * envelope : 0
+        }
+        let node = releaseNodes[slot]
+        node.stop()
+        node.volume = voiceGains[item.voiceIndex]
+        releaseBuffers[slot].frameLength = AVAudioFrameCount(length)
+        node.scheduleBuffer(releaseBuffers[slot], at: nil, options: .interrupts)
+        node.play()
+        releaseExpires[slot] = now + Self.releaseSeconds
     }
 
     func trigger(padID: String, velocity: Float,
@@ -131,11 +182,19 @@ final class PadAudioRuntime {
             duration: sample.duration, at: now) else { return false }
         let measuring = timing != nil
         let started = measuring ? ProcessInfo.processInfo.systemUptime : 0
+        for interrupted in selection.interrupted {
+            release(interrupted, at: now)
+        }
+        // Choked voices are intentionally stopped after scheduling the release.
         for index in selection.chokeIndices { nodes[index].stop() }
         let node = nodes[selection.voiceIndex]
-        node.stop()
+        // Reusing an idle voice must NOT stop another sounding voice.
+        // An exhausted pool steals the oldest voice, but its outgoing signal
+        // is already declicked on a dedicated preconnected release node.
+        if selection.stoleVoice { node.stop() }
         let stopped = measuring ? ProcessInfo.processInfo.systemUptime : 0
-        node.volume = sample.gain * vel
+        voiceGains[selection.voiceIndex] = sample.gain * vel
+        node.volume = voiceGains[selection.voiceIndex]
         node.scheduleBuffer(buffer, at: nil, options: .interrupts)
         let scheduled = measuring ? ProcessInfo.processInfo.systemUptime : 0
         node.play()
@@ -149,7 +208,9 @@ final class PadAudioRuntime {
     }
 
     func stopAll() {
-        nodes.forEach { $0.stop() }
+        (nodes + releaseNodes).forEach { $0.stop() }
+        releaseExpires = Array(repeating: 0, count: releaseExpires.count)
+        voiceGains = Array(repeating: 0, count: voiceGains.count)
         allocator.reset()
     }
 }
