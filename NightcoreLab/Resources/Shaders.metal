@@ -69,6 +69,8 @@ half4 liquidMarble(float2 position, half4 currentColor,
 
     // Coordenadas normalizadas pela menor dimensão (sem esticar em telas altas).
     float2 uv = (position - 0.5 * size) / min(size.x, size.y) * 1.9;
+    // Elastic 3.5% radial expansion on kicks, with no time-clock slowdown.
+    uv /= (1.0f + 0.035f * pulse);
 
     // Redemoinho global: gira o domínio mais perto do centro -> espirais.
     float ang = exp(-0.5 * dot(uv, uv)) * (1.1 * sin(time * 0.2) + 0.9)
@@ -119,11 +121,15 @@ half4 proceduralMaterial(float2 position, half4 currentColor,
 {
     float3 A = float3(color1.rgb), B = float3(color2.rgb), C = float3(color3.rgb);
     float2 uv = (position - 0.5f * size) / max(min(size.x, size.y), 1.0f);
+    float kick = saturate(beat);
+    float groove = saturate(energy);
+    uv /= (1.0f + 0.035f * kick);
     float t = time * (0.08f + 0.32f * p2);
     float2 shift = float2(fract(seed * 0.000137f), fract(seed * 0.000271f)) * 9.0f;
     float2 coord = uv * (2.0f + 4.0f * p0) + shift;
     float n = fbm<4>(coord + float2(t, -t * 0.7f));
-    float swirl = fbm<3>(coord * 1.4f + float2(-t, t) + n * (1.0f + p1 * 2.0f));
+    // Slow song energy curls the smoke/vortex, not the animation clock.
+    float swirl = fbm<3>(coord * 1.4f + float2(-t, t) + n * (1.0f + p1 * 2.0f + groove * 0.95f));
     float3 col = B;
     float alpha = 1.0f;
     if (kind < 1.5f) {
@@ -163,6 +169,10 @@ half4 proceduralMaterial(float2 position, half4 currentColor,
         col = mix(col, A, vein * 0.85f);
         col += C * (0.08f * beat) * (1.0f - vein);
     }
+    // Shared theme-accent vein bloom for Glass, Chrome, Organic, Smoke and
+    // Advanced Marble. All these colors come from the lightning-bolt theme.
+    float accentVein = smoothstep(0.48f, 0.90f, swirl);
+    col += C * kick * (0.065f + 0.12f * accentVein);
     return half4(half3(saturate(col)), half(saturate(alpha)));
 }
 
@@ -190,6 +200,7 @@ half4 texturedMarble(float2 position, half4 currentColor,
     float3 c3 = float3(color3.rgb);
     float3 c4 = float3(color4.rgb);
     float2 uv = (position - 0.5f * size) / max(min(size.x, size.y), 1.0f) * 1.85f;
+    uv /= (1.0f + 0.035f * saturate(beatPulse));
     // Mirroring is centered on x=0 and the domain remains continuous.
     uv.x = mix(uv.x, abs(uv.x), saturate(bilateralSymmetry));
     float t = time * 0.065f;
