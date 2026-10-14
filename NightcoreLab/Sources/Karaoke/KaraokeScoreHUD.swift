@@ -4,53 +4,58 @@ import SwiftUI
 struct KaraokeScoreHUD: View {
     let session: KaraokeScoringSession
     var accent: Color = .cyan
+    var resultsOnly = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if session.isHUDVisible {
+        if session.isHUDVisible, resultsOnly == (session.completedResult != nil) {
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")
+                        Text(session.displaysSimulation ? "SIMULAÇÃO" : resultsOnly ? "RESULTADO" : "CANTO AO VIVO")
                             .font(.system(size: 9, weight: .bold))
-                        Text(session.snapshot.totalScore, format: .number)
+                        Text(session.displayedScore.totalScore, format: .number)
                             .font(.title3.bold().monospacedDigit())
                             .contentTransition(.numericText())
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
-                        Text("\(session.snapshot.multiplier)x · \(session.snapshot.streakCombo) combo")
+                        Text("\(session.displayedScore.multiplier)x · \(session.displayedScore.streakCombo) combo")
                             .font(.caption.bold().monospacedDigit())
                             .padding(.horizontal, 9).padding(.vertical, 5)
                             .background(accent.opacity(0.22), in: Capsule())
-                        Text(session.snapshot.hasHarmonicReference ? "Ritmo + afinação" : "Ritmo e presença · tom indisponível")
+                        Text(session.displayedScore.hasHarmonicReference ? "Ritmo + afinação" : "Ritmo e presença · tom indisponível")
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
                     }
                 }
-                ProgressView(value: session.snapshot.vocalAccuracy)
+                ProgressView(value: session.displayedScore.vocalAccuracy)
                     .tint(accent)
                     .accessibilityLabel("Precisão vocal")
-                    .accessibilityValue("\(Int(session.snapshot.vocalAccuracy * 100)) por cento")
-                if session.snapshot.isFinished {
-                    KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode == .simulation)
+                    .accessibilityValue("\(Int(session.displayedScore.vocalAccuracy * 100)) por cento")
+                if session.displayedScore.isFinished {
+                    KaraokeScoreSummary(snapshot: session.displayedScore, simulation: session.displaysSimulation)
+                    Button("Fechar resultado") { session.dismissResult() }
+                        .font(.caption)
                 }
             }
             .padding(12)
             .foregroundStyle(.white)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.3)))
-            .shadow(color: accent.opacity(session.snapshot.vocalAccuracy * 0.15), radius: 8)
+            .shadow(color: accent.opacity(session.displayedScore.vocalAccuracy * 0.15), radius: 8)
             .overlay(alignment: .bottom) {
-                Text(session.judgmentVisible ? session.snapshot.lastVerseRating?.rawValue ?? "" : "")
+                Text(session.displayedScore.lastVerseRating?.rawValue ?? "")
                     .font(.caption.bold())
                     .foregroundStyle(accent)
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.black.opacity(session.judgmentVisible ? 0.7 : 0), in: Capsule())
+                    .opacity(session.judgmentVisible ? 1 : 0)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: session.judgmentVisible)
                     .offset(y: 34)
                     .allowsHitTesting(false)
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.snapshot.totalScore)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.displayedScore.totalScore)
             .padding(.horizontal, 18).padding(.top, 4)
             .accessibilityIdentifier("karaoke.scoreHUD")
         }

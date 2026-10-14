@@ -23,7 +23,10 @@ source time plus the lyric calibration offset. EnginePlaybackClock is unchanged.
 The HUD reads only this separate Observation leaf at <=15 Hz. Its overlay and
 judgment badge do not change the lyrics' layout or scroll policy. Pausing earns
 no points; a detected seek starts a new run. Playback completion finalizes the
-result before the clock resets or the queue loads another song.
+result before the clock resets or the queue loads another song. A separate
+completed snapshot survives auto-next and lyrics loading; its dismissible card
+is hosted by NowPlayingScreen, outside the lyrics fade mask. Only a new run or
+explicit dismissal clears it.
 
 ## Scoring contract
 

@@ -172,11 +172,7 @@ struct LyricsView: View {
     private var synchronizedLyrics: some View {
         KaraokeLyricsView(clock: audio.lyricsClock,
                           theme: .forAppTheme(theme),
-                          accent: lyricAccent)
-            .mask {
-                if inline { LyricsFadeMask() }
-                else { Rectangle() }
-            }
+                          accent: lyricAccent, fadesEdges: inline)
     }
 
     var body: some View {

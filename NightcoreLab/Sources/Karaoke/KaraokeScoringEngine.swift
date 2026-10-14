@@ -104,7 +104,7 @@ struct KaraokeScoringEngine {
 
     mutating func advance(to time: Double, voice: KaraokeVoiceFrame, playing: Bool) {
         guard !snapshot.isFinished, time.isFinite else { return }
-        guard playing else { lastTime = time; priorVoice = .silence; return }
+        guard playing else { lastTime = time; priorVoice = .silence; snapshot.vocalAccuracy = 0; return }
         let delta = time - lastTime
         guard delta > 0 else { return }
         // Seek/dropout: no historical points and no silent verses fabricated.

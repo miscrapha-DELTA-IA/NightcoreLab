@@ -865,7 +865,7 @@ final class AudioEngineManager {
                     let wasPlaying = self.isPlaying
                     let source = self.sourceURL
                     self.pause()
-                    self.endKaraokeMicrophone()
+                    if self.karaokeMicrophoneActive { self.endKaraokeMicrophone() }
                     // Pause invalidates any previous request. Capture *after*
                     // it so a later user pause or replacement cancels resumption.
                     self.interruptedSourceURL = wasPlaying ? source : nil
@@ -905,7 +905,7 @@ final class AudioEngineManager {
                 if removed {
                     self.interruptedSourceURL = nil
                     self.pause()
-                    self.endKaraokeMicrophone()
+                    if self.karaokeMicrophoneActive { self.endKaraokeMicrophone() }
                 }
             }
         }

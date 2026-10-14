@@ -231,6 +231,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         // (optional environment: other hosts simply get no features).
         .environment(liveUniforms)
         .overlay {
+            // Remains visible while auto-next is loading the next lyrics.
+            KaraokeScoreHUD(session: lyricsStore.scoring, accent: appTheme.accent, resultsOnly: true)
+        }
+        .overlay {
             if panels.isZen {
                 // Toque em qualquer área livre revela o layout; estados individuais
                 // de cada painel não mudam quando alternamos Zen.

@@ -187,6 +187,7 @@ struct KaraokeLyricsView: View {
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
+    var fadesEdges = false
 
     /// Same catalog helpers the StoryRequestBuilder freezes (Stage 12.5).
     private var typographyPreset: TypographyPreset {
@@ -325,6 +326,10 @@ struct KaraokeLyricsView: View {
                     scrollTo(active, proxy: proxy, reason: .restoration)
                 }
             }
+        }
+        .mask {
+            if fadesEdges { LyricsFadeMask() }
+            else { Rectangle() }
         }
         .overlay(alignment: .top) {
             KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill)

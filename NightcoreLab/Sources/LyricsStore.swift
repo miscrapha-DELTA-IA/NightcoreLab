@@ -69,7 +69,7 @@ final class LyricsStore {
 
     func markUnavailable(trackID: String) {
         guard self.trackID == trackID else { return }
-        scoring.stop()
+        scoring.lyricsDidChange()
         status = .unavailable
         lines = []
         activeLineIndex = nil
@@ -85,7 +85,7 @@ final class LyricsStore {
             return
         }
         loadTask?.cancel()
-        scoring.stop()
+        scoring.lyricsDidChange()
         self.trackID = trackID
         self.needsReview = needsReview
         status = .searching

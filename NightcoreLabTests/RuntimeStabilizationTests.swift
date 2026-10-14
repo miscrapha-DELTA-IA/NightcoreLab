@@ -83,9 +83,25 @@ final class RuntimeStabilizationTests: XCTestCase {
         for step in 41...119 { engine.advance(to: Double(step) / 20, voice: voice, playing: true) }
         XCTAssertEqual(engine.snapshot.totalScore, score)
         engine.advance(to: 6.1, voice: voice, playing: false)
+        XCTAssertEqual(engine.snapshot.vocalAccuracy, 0)
         XCTAssertEqual(engine.snapshot.totalScore, score)
         engine.advance(to: 6.2, voice: .init(rms: .infinity, frequency: 220, confidence: 1), playing: true)
         XCTAssertEqual(engine.snapshot.totalScore, score)
+    }
+
+    func testExp8PointsDependOnElapsedTimeNotFrameCount() {
+        let lines = karaokeLines(1)
+        let voice = KaraokeVoiceFrame(rms: 0.15, frequency: 261.625565, confidence: 1)
+        func score(hz: Int) -> Int {
+            var engine = KaraokeScoringEngine()
+            engine.key = karaokeKey()
+            engine.start(lines: lines, at: 0)
+            for step in 1...hz {
+                engine.advance(to: Double(step) / Double(hz), voice: voice, playing: true)
+            }
+            return engine.snapshot.totalScore
+        }
+        XCTAssertEqual(Double(score(hz: 20)), Double(score(hz: 60)), accuracy: 1)
     }
 
     func testExp8MicrophonePitchDetectorRejectsSilenceAndTracksOctaves() throws {
@@ -126,6 +142,13 @@ final class RuntimeStabilizationTests: XCTestCase {
         session.finish()
         XCTAssertTrue(session.snapshot.isFinished)
         XCTAssertTrue(KaraokeScoreShareComposer.text(session.snapshot, simulation: true).contains("SIMULAÇÃO"))
+        let final = session.completedResult
+        session.resetForTrack()
+        session.lyricsDidChange()
+        XCTAssertEqual(session.completedResult, final)
+        XCTAssertTrue(session.isHUDVisible, "Auto-next retains the finished card")
+        session.dismissResult()
+        XCTAssertFalse(session.isHUDVisible)
         session.present(false)
         XCTAssertFalse(session.isHUDVisible)
         XCTAssertEqual(session.snapshot.totalScore, 0)
@@ -140,6 +163,10 @@ final class RuntimeStabilizationTests: XCTestCase {
         XCTAssertFalse(session.isHUDVisible)
         session.start(mode: .simulation, lines: lines, at: 0)
         XCTAssertFalse(session.snapshot.hasHarmonicReference)
+        session.start(mode: .microphone, lines: lines, at: 0)
+        session.inject(.init(rms: 0.1, frequency: 261.625565, confidence: 1))
+        for step in 1...20 { session.advance(time: Double(step) / 20, playing: true, lines: lines) }
+        XCTAssertEqual(session.snapshot.totalScore, 0, "Synthetic evidence cannot enter a microphone run")
     }
 
     func testExp7CuratedMaterialsHaveUniquePalettesAndTextureTopology() throws {

@@ -11,7 +11,14 @@ final class KaraokeScoringSession {
     private(set) var message: String?
     private(set) var isPresented = false
     private(set) var judgmentVisible = false
-    var isHUDVisible: Bool { isPresented && mode != .off }
+    struct CompletedResult: Equatable {
+        let score: KaraokeScoreSnapshot
+        let simulation: Bool
+    }
+    private(set) var completedResult: CompletedResult?
+    var isHUDVisible: Bool { isPresented && (mode != .off || completedResult != nil) }
+    var displayedScore: KaraokeScoreSnapshot { completedResult?.score ?? snapshot }
+    var displaysSimulation: Bool { completedResult?.simulation ?? (mode == .simulation) }
     @ObservationIgnored private var engine = KaraokeScoringEngine()
     @ObservationIgnored private var lastTime: Double?
     @ObservationIgnored private var judgmentUntil = 0.0
@@ -35,6 +42,7 @@ final class KaraokeScoringSession {
     func start(mode: Mode, lines: [TimedLyricLine], at time: Double) {
         guard isPresented, mode != .off else { return }
         self.mode = mode
+        completedResult = nil
         message = nil
         engine = KaraokeScoringEngine()
         engine.key = referenceKey; engine.melody = referenceMelody
@@ -45,12 +53,20 @@ final class KaraokeScoringSession {
 
     func stop(message: String? = nil) {
         mode = .off; self.message = message
+        completedResult = nil
         snapshot = .init(); lastTime = nil; judgmentVisible = false
         microphoneFrame = nil; syntheticFrame = nil
     }
 
+    func lyricsDidChange() {
+        let result = completedResult
+        stop()
+        completedResult = result // auto-next must not erase the finished song's card
+    }
+
     func resetForTrack() {
-        stop(); referenceKey = nil; referenceMelody = nil
+        lyricsDidChange()
+        referenceKey = nil; referenceMelody = nil
     }
 
     /// Safe hardware-free injection; real microphone runs cannot accept it.
@@ -60,7 +76,7 @@ final class KaraokeScoringSession {
     }
 
     func advance(time: Double, playing: Bool, lines: [TimedLyricLine], pitchShift: Double = 0) {
-        guard isHUDVisible, !snapshot.isFinished else { return }
+        guard isHUDVisible, mode != .off, !snapshot.isFinished else { return }
         guard time.isFinite else { return }
         if let previous = lastTime, time < previous - 0.05 || time - previous > 0.5 {
             // Seeking invalidates a competitive run instead of farming a verse.
@@ -90,6 +106,13 @@ final class KaraokeScoringSession {
     func finish() {
         guard mode != .off else { return }
         engine.finish(); snapshot = engine.snapshot
+        judgmentVisible = false
+        completedResult = .init(score: snapshot, simulation: mode == .simulation)
         microphoneFrame = nil
+    }
+
+    func dismissResult() {
+        completedResult = nil
+        if snapshot.isFinished { stop() }
     }
 }
