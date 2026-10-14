@@ -54,7 +54,8 @@ struct CreatorPreset: Codable, Equatable, Sendable {
             program: program, sourceStart: request.playbackTime,
             speed: Double(request.speed), duration: request.duration,
             deterministicSeed: CreativePresetCatalog.selectedExperience(id: experienceID)?
-                .composition.deterministicSeed ?? 0) {
+                .composition.deterministicSeed ?? 0,
+            padPerformance: request.renderRuntime?.composition.timeline.padPerformance) {
             result.compositionRuntime = CompositionRuntime(
                 composition: composition, material: selectedMaterial)
         }

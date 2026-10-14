@@ -359,6 +359,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 theme: appTheme,
                 backgroundStyle: playerBackgroundStyle,
                 featureEngine: visualEngine,
+                padPulseSource: audio.livePadPulseSource,
                 onParameters: { next in liveUniforms.update(next) },
                 onPulseDriver: { driver in liveUniforms.setPulseDriver(driver) },
                 onFeatureTimeline: { timeline in liveUniforms.setFeatureTimeline(timeline) }
@@ -433,7 +434,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         typography: karaokeTypography,
                         background: playerBackgroundStyle, reaction: reactionMode),
                 reactiveSourceURL: audio.visualAnalysisURL,
-                creativePresetID: creativePresetID
+                creativePresetID: creativePresetID,
+                padPerformance: audio.capturedPadPerformance
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,

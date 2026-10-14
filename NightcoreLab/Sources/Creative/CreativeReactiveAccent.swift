@@ -69,7 +69,21 @@ struct CreativeReactiveAccent: View {
                 onFeatureTimeline(nil)
             }
         }
-        guard canReact, let sourceURL else { return }
+        guard canReact, let sourceURL else {
+            // Pads stay visible when the optional music reaction is off.
+            // No SwiftUI per-frame mutation; existing Marble reads the source.
+            if let padPulseSource, energyBudget.allowsDecorativeMotion {
+                onPulseDriver(MarblePulseDriver(
+                    material: CreativePresetCatalog.material(selection: selectedProgramID),
+                    rhythm: nil, clock: clock, reactionGain: 0,
+                    padPulseSource: padPulseSource))
+                while !Task.isCancelled && activeRunID == runID {
+                    do { try await Task.sleep(for: .seconds(1)) }
+                    catch { break }
+                }
+            }
+            return
+        }
 
         do {
             try await featureEngine.prepareAudio(at: sourceURL, budget: energyBudget)

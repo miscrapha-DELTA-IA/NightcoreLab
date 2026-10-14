@@ -133,7 +133,8 @@ enum StoryRequestBuilder {
                      includeAudio: Bool,
                      reactiveProgram: CreativeVisualProgram? = nil,
                      reactiveSourceURL: URL? = nil,
-                     creativePresetID: String = CreativePresetCatalog.defaultID) throws -> StoryVideoRequest {
+                     creativePresetID: String = CreativePresetCatalog.defaultID,
+                     padPerformance: PerformanceTimeline? = nil) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
         let safeSpeed = max(Double(speed), 0.1)
         let start = min(max(playbackTime, 0), sourceDuration)
@@ -169,7 +170,8 @@ enum StoryRequestBuilder {
             program: effective, sourceStart: start,
             speed: Double(speed), duration: seconds,
             deterministicSeed: CreativePresetCatalog.selectedExperience(id: creativePresetID)?
-                .composition.deterministicSeed ?? 0)
+                .composition.deterministicSeed ?? 0,
+            padPerformance: padPerformance)
         if let composition = request.visualComposition {
             request.compositionRuntime = CompositionRuntime(
                 composition: composition,
