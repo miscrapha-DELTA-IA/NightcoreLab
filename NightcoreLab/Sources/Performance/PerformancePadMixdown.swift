@@ -33,9 +33,12 @@ enum PerformancePadMixdown {
         let byID = Dictionary(uniqueKeysWithValues: effectiveKit.samples.map { ($0.id, $0) })
         let ordered = timeline.events.compactMap { event -> (PadEvent, SampleDescriptor, Int64)? in
             guard let sample = byID[event.padId] else { return nil }
-            let elapsed = event.sourceTime.map {
-                ($0 - startTime) / Double(speed)
-            } ?? event.timestamp
+            // Both offline export and CompositionRuntime preview share the
+            // same optional groove transform. Raw timestamps remain intact.
+            let elapsed = CompositionRuntime.padEventSourceTime(
+                event, quantizeStrength: timeline.quantizeStrength).map {
+                    ($0 - startTime) / Double(speed)
+                } ?? event.timestamp
             guard elapsed.isFinite, elapsed > -5,
                   elapsed < Double(Int64.max / 4) / sampleRate else { return nil }
             return (event, sample, Int64((elapsed * sampleRate).rounded()))

@@ -102,6 +102,27 @@ struct CompositionRuntime: Sendable {
             typography: typography, runtime: self)
     }
 
+    /// The SAME musical-time mapping for performance preview replay and
+    /// offline stem scheduling. It never mutates the source-time clock or
+    /// the raw captured PadEvent.timestamp.
+    static func padEventSourceTime(_ event: PadEvent,
+                                   quantizeStrength: Float = 0) -> TimeInterval? {
+        guard let raw = event.sourceTime else { return nil }
+        return PadMusicalGrid.assistedTime(
+            raw: raw, grid: event.quantizedSourceTime,
+            strength: quantizeStrength)
+    }
+
+    /// Use a frozen composition's source coordinates for preview replay.
+    /// Offline PerformancePadMixdown uses the same sourceTime helper below.
+    func padEventElapsed(_ event: PadEvent,
+                         quantizeStrength: Float = 0) -> TimeInterval {
+        guard let sourceTime = Self.padEventSourceTime(
+            event, quantizeStrength: quantizeStrength) else { return event.timestamp }
+        return (sourceTime - composition.timeline.sourceStart) /
+            composition.timeline.playbackSpeed
+    }
+
     /// Freeze a program once at StoryRequestBuilder time so preview and export
     /// receive exactly the same composition, clock and existing visual rules.
     /// `deterministicSeed` carries a selected experience's composition seed.
