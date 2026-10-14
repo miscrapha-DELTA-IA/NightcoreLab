@@ -371,6 +371,11 @@ final class AudioEngineManager {
         }
     }
 
+    // Compatibility with the already-merged KaraokeScoringControls surface.
+    var karaokeMicrophoneActive: Bool { vocalCaptureActive }
+    func beginKaraokeMicrophone() async -> Bool { await beginVocalCapture() }
+    func endKaraokeMicrophone() { endVocalCapture() }
+
     func karaokeVoiceFrame() -> KaraokeVoiceFrame {
         microphoneCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
     }
