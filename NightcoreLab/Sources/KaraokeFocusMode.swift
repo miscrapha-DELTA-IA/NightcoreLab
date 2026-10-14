@@ -83,13 +83,14 @@ enum KaraokeScrollPolicy {
                 return KaraokeScrollDecision(duration: 0)
             }
             let gap = lines[targetIndex].start - lines[previousIndex].start
-            // No scroll animation on short verses. On longer consecutive
-            // verses, 0.22 * source seconds fits even at maximum 2x speed,
-            // without creating another playback clock or wall-timer.
-            guard gap.isFinite, gap >= 0.45 else {
+            // Short passages and seeks reposition immediately instead of
+            // stacking spring requests. For natural verse spacing, allow a
+            // soft response without reaching into the playback clock.
+            // Source LRC spacing is conservative for playback up to 2x.
+            guard gap.isFinite, gap >= 1.25 else {
                 return KaraokeScrollDecision(duration: 0)
             }
-            return KaraokeScrollDecision(duration: min(0.16, gap * 0.22))
+            return KaraokeScrollDecision(duration: min(0.50, gap * 0.38))
         }
     }
 }

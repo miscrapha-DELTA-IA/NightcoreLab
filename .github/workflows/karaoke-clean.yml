@@ -10,10 +10,12 @@ on:
       - 'NightcoreLab/Sources/KaraokePerformanceProbe.swift'
       - 'NightcoreLab/Sources/LyricsStore.swift'
       - 'NightcoreLab/Sources/EnergyBudget.swift'
+      - 'NightcoreLab/Sources/Creative/TypographyEngine/TypographyAnimationEngine.swift'
       - 'NightcoreLab/Sources/NowPlayingScreen.swift'
       - 'NightcoreLab/Sources/ContentView.swift'
       - 'NightcoreLabTests/KaraokeCleanModeTests.swift'
       - 'NightcoreLabTests/KaraokeExperienceTests.swift'
+      - 'NightcoreLabTests/KaraokeTypographyTests.swift'
       - 'NightcoreLabTests/KaraokePerformanceProbeTests.swift'
       - '.github/workflows/karaoke-clean.yml'
 
@@ -45,6 +47,8 @@ jobs:
             -destination "platform=iOS Simulator,id=$device_id" \
             -parallel-testing-enabled NO \
             -only-testing:NightcoreLabTests/KaraokeCleanModeTests \
+            -only-testing:NightcoreLabTests/KaraokeExperienceTests \
+            -only-testing:NightcoreLabTests/KaraokeTypographyTests \
             -only-testing:NightcoreLabTests/LyricsMatchingTests \
             -only-testing:NightcoreLabTests/NowPlayingScreenTests \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-test.log

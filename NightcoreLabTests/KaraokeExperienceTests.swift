@@ -68,6 +68,33 @@ final class KaraokeExperienceTests: XCTestCase {
         XCTAssertEqual(KaraokeFocusResolver.scrollInset(for: 0), 95)
     }
 
+    func testMidSongEntryResolvesActiveVerseSynchronously() {
+        let lines = lineFixture(starts: [0, 2, 4, 6, 8])
+        // Frame zero must use source playback time, not line 0 or a
+        // late display-link publication. Offset is applied exactly once.
+        XCTAssertEqual(KaraokeEntryAnchor.activeLineID(
+            in: lines, sourceTime: 4.08, userOffset: 0), 2)
+        XCTAssertEqual(KaraokeEntryAnchor.activeLineID(
+            in: lines, sourceTime: 4.08, userOffset: 2), 3)
+        XCTAssertNil(KaraokeEntryAnchor.activeLineID(
+            in: lines, sourceTime: .nan, userOffset: 0))
+    }
+
+    func testNormalVerseUsesNaturalSpringResponseWithoutStacking() {
+        let lines = lineFixture(starts: [0, 1.4, 3.2])
+        let first = KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 1, lastRequestedID: 0,
+            reason: .automatic, reduceMotion: false,
+            allowsDecorativeMotion: true)
+        XCTAssertNotNil(first)
+        XCTAssertTrue(first?.animated == true)
+        XCTAssertEqual(first?.duration ?? 0, 0.50, accuracy: 0.001)
+        XCTAssertNil(KaraokeScrollPolicy.decision(
+            lines: lines, targetID: 1, lastRequestedID: 1,
+            reason: .automatic, reduceMotion: false,
+            allowsDecorativeMotion: true))
+    }
+
     func testAutomaticScrollSkipsDuplicateAndLongJump() {
         let lines = lineFixture(starts: [0, 1.2, 2.4, 3.6])
         XCTAssertNil(KaraokeScrollPolicy.decision(
@@ -96,7 +123,7 @@ final class KaraokeExperienceTests: XCTestCase {
         let follow = KaraokeScrollPolicy.decision(
             lines: lines, targetID: 1, lastRequestedID: 0, reason: .automatic,
             reduceMotion: false, allowsDecorativeMotion: true)
-        XCTAssertEqual(follow?.duration, 0.16)
+        XCTAssertEqual(follow?.duration, 0.50)
         let seek = KaraokeScrollPolicy.decision(
             lines: lines, targetID: 0, lastRequestedID: 1, reason: .seek,
             reduceMotion: false, allowsDecorativeMotion: true)

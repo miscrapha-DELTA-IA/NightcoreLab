@@ -14,6 +14,18 @@ protocol PlaybackClock: AnyObject, Sendable {
 
 // MARK: - Store
 
+/// Entry anchor is computed directly from the source clock before the first
+/// visible Karaoke layout, without waiting for a display-link tick.
+enum KaraokeEntryAnchor {
+    static func activeLineID(in lines: [TimedLyricLine],
+                             sourceTime: TimeInterval,
+                             userOffset: TimeInterval) -> Int? {
+        let time = sourceTime + userOffset
+        guard time.isFinite else { return nil }
+        return lines.activeIndex(at: time)
+    }
+}
+
 enum LyricsStatus: Equatable, Sendable { case idle, searching, ready, unavailable }
 
 /// Vive no root do app (@State no App) e é injetado via .environment.
@@ -48,6 +60,15 @@ final class LyricsStore {
     // MARK: Contrato
 
     func attach(clock: PlaybackClock) { self.clock = clock }
+
+    /// Synchronously publish the active verse on entry/re-entry. The regular
+    /// display-link remains responsible for subsequent discrete changes.
+    @discardableResult
+    func synchronizeForEntry(using currentClock: PlaybackClock) -> Int? {
+        clock = currentClock
+        syncNow()
+        return activeLineIndex
+    }
 
     /// O prefetcher começa o trabalho antes do utilizador entrar em Karaokê.
     func beginLoading(trackID: String) {
@@ -127,8 +148,8 @@ final class LyricsStore {
         let playing = clock.isPlaying
         if playing != isPlaying { isPlaying = playing }
 
-        let t = clock.lyricTime + userOffset
-        let idx = lines.activeIndex(at: t)
+        let idx = KaraokeEntryAnchor.activeLineID(
+            in: lines, sourceTime: clock.lyricTime, userOffset: userOffset)
         if idx != activeLineIndex {
             KaraokePerformanceProbe.shared.activeLineChanged()
             activeLineIndex = idx
