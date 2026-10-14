@@ -189,16 +189,25 @@ struct TurbulentMarbleView: View {
             edited, accent: padAccentEmitter?.accent()) : edited
     }
 
+    /// Same palette mapping consumed by the shader and asserted by tests.
+    /// Only Neon Pulse among live experiences has five authored texture stops;
+    /// replacing their hues with the current theme preserves procedural folds.
+    static func shaderPalette(materialID: String, theme: MarbleTheme,
+                              authored: [String]?) -> [Color]? {
+        if materialID == "neon-pulse" {
+            let colors = theme.palette
+            return [colors.deep, colors.body, colors.glow,
+                    colors.body, colors.glow]
+        }
+        return authored?.map { Color(materialHex: $0) }
+    }
+
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
         let palette = theme.palette
         let uniforms = resolved.marbleUniforms
         let binding = MarbleSurfaceBinding.resolve(frame: resolved)
-        // Neon Pulse is the only textured live experience. Retain texture
-        // topology while feeding it the active lightning-bolt palette.
-        let colors: [Color]? = resolved.materialID == "neon-pulse"
-            ? [palette.deep, palette.body, palette.glow,
-               palette.body, palette.glow]
-            : binding.paletteHex?.map { Color(materialHex: $0) }
+        let colors = Self.shaderPalette(materialID: resolved.materialID,
+                                        theme: theme, authored: binding.paletteHex)
         let texture = binding.textured
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
