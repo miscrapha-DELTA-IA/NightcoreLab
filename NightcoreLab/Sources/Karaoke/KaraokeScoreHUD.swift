@@ -149,3 +149,18 @@ struct KaraokeScoringControls: View {
         }
     }
 }
+
+
+/// Offline, text-only share contract. Never represents simulated scores as
+/// a recorded microphone performance.
+enum KaraokeScoreShareComposer {
+    static func text(_ snapshot: KaraokeScoreSnapshot, simulation: Bool) -> String {
+        let mode = simulation ? "Simulação de karaokê" : "Canto ao vivo"
+        return [
+            "NightcoreLab · \(mode)",
+            "Nota \(snapshot.rank) · \(Int(snapshot.accuracyPercentage.rounded()))%",
+            "\(snapshot.totalScore) pontos · maior combo \(snapshot.bestCombo)x",
+            snapshot.hasHarmonicReference ? "Ritmo e afinação" : "Avaliação rítmica"
+        ].joined(separator: "\n")
+    }
+}
