@@ -9,6 +9,8 @@ struct StoryRenderFrame: Equatable, Sendable {
     let sourceTime: TimeInterval
     let lyricTime: TimeInterval
     let marblePhase: Float
+    /// Source-time matched pad visual accent for THIS exact presentation frame.
+    var padAccent: PadVisualAccent? = nil
 }
 
 /// Media time uses the original source clock (already includes playback speed).
@@ -30,7 +32,10 @@ struct StoryRenderTimeline: Sendable {
         return StoryRenderFrame(index: clamped, elapsed: seconds,
                                 sourceTime: request.sourceTime(at: seconds),
                                 lyricTime: request.lyricTime(at: seconds),
-                                marblePhase: request.marbleTime(at: seconds))
+                                marblePhase: request.marbleTime(at: seconds),
+                                padAccent: PadVisualAccentResolver.at(
+                                    sourceTime: request.sourceTime(at: seconds),
+                                    timeline: request.padPerformance))
     }
 
     /// Preview scrubbing snaps to the exact same frame grid as the encoder.

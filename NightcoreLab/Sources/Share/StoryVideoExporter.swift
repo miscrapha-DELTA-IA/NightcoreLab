@@ -177,7 +177,8 @@ enum StoryVideoExporter {
             progress(0.02)
             audioURL = try await AudioEngineManager.exportStorySegment(
                 source: audioSource, startTime: request.playbackTime,
-                duration: request.duration)
+                duration: request.duration,
+                performance: request.padPerformance)
         }
         defer { if let audioURL { try? FileManager.default.removeItem(at: audioURL) } }
         progress(0.12)

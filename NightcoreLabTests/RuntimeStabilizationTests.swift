@@ -8,6 +8,99 @@ import XCTest
 final class RuntimeStabilizationTests: XCTestCase {
 
     @MainActor
+    func testExp10LivePadImpulseIsBoundedAndMaterialAware() throws {
+        let emitter = PadVisualAccentEmitter()
+        emitter.trigger("kick", velocity: 0.8, at: 10)
+        let instant = try XCTUnwrap(emitter.accent(at: 10))
+        XCTAssertEqual(instant.band, .low)
+        XCTAssertEqual(instant.strength, 0.8, accuracy: 0.000001)
+        let trailing = try XCTUnwrap(emitter.accent(at: 10.2))
+        XCTAssertLessThan(trailing.strength, instant.strength)
+        XCTAssertNil(emitter.accent(at: 10.9))
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse, timestamp: 0)
+        let boosted = PadVisualAccentResolver.apply(base, accent: instant)
+        XCTAssertGreaterThan(boosted.parameters.beatPulse, base.parameters.beatPulse)
+        XCTAssertGreaterThan(boosted.parameters.warpAmount, base.parameters.warpAmount)
+        XCTAssertEqual(boosted.parameters.stripingFrequency,
+                       base.parameters.stripingFrequency)
+        emitter.trigger("snare", velocity: 3, at: 12)
+        XCTAssertEqual(emitter.accent(at: 12)?.strength, 1)
+        XCTAssertEqual(emitter.accent(at: 12)?.band, .mid)
+        emitter.clear()
+        XCTAssertNil(emitter.accent(at: 12))
+    }
+
+    @MainActor
+    func testExp10PadOverdubClearLastTakeAndCodableRoundTrip() throws {
+        let recorder = PerformanceRecorder()
+        let sample = try XCTUnwrap(PadKit.starter.samples.first)
+        recorder.start(at: 10)
+        recorder.append(sample, velocity: 0.8, sourceTime: 1.1, at: 10.1)
+        recorder.stop()
+        recorder.overdub(at: 20)
+        recorder.append(sample, velocity: 0.6, sourceTime: 2.4, at: 20.2)
+        recorder.stop()
+        XCTAssertEqual(recorder.takeEventIDs.count, 2)
+        let original = recorder.archive(quantizeStrength: 0.5)
+        let decoded = try JSONDecoder().decode(
+            PerformanceTakeArchive.self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(original, decoded)
+        let restored = PerformanceRecorder()
+        restored.restore(decoded)
+        XCTAssertEqual(restored.events.count, 2)
+        restored.clearLastTake()
+        XCTAssertEqual(restored.events.count, 1)
+        XCTAssertEqual(restored.takeEventIDs.count, 1)
+        XCTAssertEqual(restored.events.first?.sourceTime, 1.1)
+        restored.clearLastTake()
+        XCTAssertTrue(restored.events.isEmpty)
+    }
+
+    @MainActor
+    func testExp10PadAccentAndAudioUseOneFrozenStoryTimestamp() throws {
+        var request = try storyRequest()
+        let kick = try XCTUnwrap(PadKit.starter.samples.first)
+        let hit = PadEvent(id: UUID(), padId: kick.id, timestamp: 0.42,
+                           velocity: 0.85, duration: kick.duration,
+                           sourceTime: 1.25, musicalBeat: 2.5,
+                           musicalBar: 1, bpmAtTrigger: 120,
+                           quantizedSourceTime: 1.0)
+        let take = PerformanceTimeline(
+            kitID: PadKit.starter.id, events: [hit], quantizeStrength: 0.5)
+        request.padPerformance = take
+        let timeline = StoryRenderTimeline(request: request, profile: .balanced)
+        // Start at source 0.5, speed 1.25: a 50%-quantized 1.125s
+        // event occurs at video elapsed 0.5s, exact index 10 @ 20fps.
+        let padFrame = timeline.frame(index: 10)
+        XCTAssertEqual(padFrame.sourceTime, 1.125, accuracy: 0.000001)
+        let accent = try XCTUnwrap(padFrame.padAccent)
+        XCTAssertEqual(accent.band, .low)
+        XCTAssertEqual(accent.strength, 0.85, accuracy: 0.000001)
+        let preview = try XCTUnwrap(request.resolvedFrame(
+            padFrame, audioTimeline: nil, rhythm: nil))
+        let exporterScene = StorySceneView(
+            request: request, artwork: nil, frame: timeline.frame(index: 10))
+        XCTAssertEqual(preview.materialFrame, exporterScene.materialFrame)
+        XCTAssertEqual(preview, exporterScene.resolvedCompositionFrame)
+        let bare = try storyRequest()
+        let baseline = try XCTUnwrap(bare.resolvedFrame(
+            StoryRenderTimeline(request: bare, profile: .balanced).frame(index: 10),
+            audioTimeline: nil, rhythm: nil))
+        XCTAssertGreaterThan(preview.materialFrame?.parameters.beatPulse ?? 0,
+                             baseline.materialFrame?.parameters.beatPulse ?? 0)
+
+        let scheduled = try PerformancePadMixdown.schedule(
+            take, kit: .starter, startTime: request.playbackTime,
+            speed: request.speed, sampleRate: 48_000)
+        XCTAssertEqual(scheduled.first?.startFrame, 24_000)
+        let previousFrame = timeline.frame(index: 9)
+        XCTAssertNil(previousFrame.padAccent)
+        XCTAssertEqual(timeline.frame(index: 10), timeline.frame(at: 0.5))
+    }
+
+
+
+    @MainActor
     func testStage18C3VisibleMaterialBindingsAndCreatorNavigation() throws {
         let expected: [(String, [String])] = [
             ("neon-pulse", ["#040406", "#FF0088", "#00FF9D", "#00E5FF", "#F8FAFC"]),

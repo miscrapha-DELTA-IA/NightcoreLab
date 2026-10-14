@@ -111,6 +111,11 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    /// Shared with the Creator/Performance sheet and the Story snapshot.
+    @ObservationIgnored let performanceRecorder = PerformanceRecorder()
+    @ObservationIgnored let padAccentEmitter = PadVisualAccentEmitter()
+    @ObservationIgnored private(set) var performanceRecordingSourceRevision: Int?
+    @ObservationIgnored var padQuantizeStrength: Float = 0
     /// Read by the visible Player at visual FPS; published nowhere on the
     /// render/audio thread. Uses the existing main mixer output, not a second graph.
     @ObservationIgnored let liveVisualMeter = AudioVisualLiveMeter()
@@ -190,6 +195,9 @@ final class AudioEngineManager {
         audioFile = file
         sourceURL = url
         playbackSourceRevision &+= 1
+        performanceRecorder.clearAll()
+        performanceRecordingSourceRevision = nil
+        padAccentEmitter.clear()
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
@@ -221,6 +229,30 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+    }
+
+    /// One tap, no transport mutation and no AVAudioSession query.
+    func beginPadTake(overdub: Bool = false) {
+        if !overdub || performanceRecorder.events.isEmpty {
+            performanceRecordingSourceRevision = playbackSourceRevision
+            performanceRecorder.start()
+        } else if performanceRecordingSourceRevision == playbackSourceRevision {
+            performanceRecorder.overdub()
+        }
+    }
+
+    func stopPadTake() { performanceRecorder.stop() }
+    func clearLastPadTake() { performanceRecorder.clearLastTake() }
+
+    /// Frozen, source-identity-matched snapshot for Story preview/export.
+    func frozenPadPerformance(quantizeStrength: Float? = nil) -> PerformanceTimeline? {
+        guard !performanceRecorder.isRecording,
+              performanceRecordingSourceRevision == playbackSourceRevision,
+              !performanceRecorder.events.isEmpty else { return nil }
+        let result = performanceRecorder.timeline(
+            sourceClip: padRuntime.sourceClip,
+            quantizeStrength: quantizeStrength ?? padQuantizeStrength)
+        return result.isValid ? result : nil
     }
 
     // MARK: Performance pads
@@ -259,7 +291,7 @@ final class AudioEngineManager {
     private func refreshPerformanceOutputLatency() {
         let latency = AVAudioSession.sharedInstance().outputLatency
         performanceOutputLatency = latency.isFinite ?
-            min(0.35, max(0, latency)) : 0
+            min(0.200, max(0, latency)) : 0
     }
 
     /// Prepare at most five seconds from the currently loaded local source.
@@ -355,6 +387,11 @@ final class AudioEngineManager {
                 nodeScheduleMS: nodeTiming.scheduleMS,
                 nodePlayMS: nodeTiming.playMS,
                 wasCold: wasCold, succeeded: played))
+        }
+        if played {
+            // AFTER the audio command; the shader samples this lock-free of
+            // any SwiftUI invalidation via its own TimelineView.
+            padAccentEmitter.trigger(padID, velocity: velocity)
         }
         return played
     }
@@ -566,11 +603,13 @@ final class AudioEngineManager {
     /// Standalone offline graph. Does not seek, pause or replace the live player.
     nonisolated static func exportStorySegment(source: StoryAudioSource,
                                                startTime: TimeInterval,
-                                               duration: TimeInterval) async throws -> URL {
+                                               duration: TimeInterval,
+                                               performance: PerformanceTimeline? = nil) async throws -> URL {
         let renderTask = Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: source.url, settings: source.settings,
                                    format: .m4a, progress: { _ in },
-                                   startTime: startTime, maxDuration: duration)
+                                   startTime: startTime, maxDuration: duration,
+                                   performance: performance)
         }
         // Detached tasks do not inherit cancellation automatically.
         // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.

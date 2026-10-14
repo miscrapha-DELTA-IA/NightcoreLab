@@ -77,11 +77,13 @@ struct CreatorStudioRoute: Equatable {
 /// package store rather than a new preset catalogue.
 private struct CreatorStudioPanel: View {
     let store: CreativePresetPackageStore
+    let audio: AudioEngineManager
     @Binding var selectedPresetID: String
     @Binding var reactionMode: CreativePreset.AudioReaction
     @Binding var controls: CreatorControls
     let suggestedPresetID: String?
 
+    @State private var showPadDeck = false
     @State private var experiences: [CreativeExperiencePreset] =
         CreativePresetCatalog.selectableExperiences
     @Environment(\.dismiss) private var dismiss
@@ -113,6 +115,31 @@ private struct CreatorStudioPanel: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .accessibilityIdentifier("creator.preset.\(experience.id)")
+                    }
+                    Divider()
+                    Text("Performance Pads").font(.headline)
+                    HStack(spacing: 10) {
+                        Button { showPadDeck = true } label: {
+                            Label("Abrir pads", systemImage: "square.grid.3x3.fill")
+                        }
+                        .accessibilityIdentifier("creator.openPads")
+                        Button {
+                            audio.beginPadTake(overdub: true)
+                            showPadDeck = true
+                        } label: {
+                            Label("Overdub", systemImage: "plus.circle.fill")
+                        }
+                        .disabled(audio.performanceRecorder.events.isEmpty ||
+                                  audio.performanceRecorder.isRecording)
+                        .accessibilityIdentifier("creator.overdub")
+                    }
+                    if !audio.performanceRecorder.takeEventIDs.isEmpty {
+                        Button(role: .destructive) {
+                            audio.clearLastPadTake()
+                        } label: {
+                            Label("Limpar último take", systemImage: "arrow.uturn.backward")
+                        }
+                        .accessibilityIdentifier("creator.clearLastTake")
                     }
                     Divider()
                     Picker("Ritmo visual", selection: $reactionMode) {
@@ -148,6 +175,9 @@ private struct CreatorStudioPanel: View {
             }
         }
         .accessibilityIdentifier("creator.studio")
+        .sheet(isPresented: $showPadDeck) {
+            PerformanceModeView(audio: audio, accent: .pink)
+        }
     }
 }
 
@@ -235,7 +265,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
-                        creatorControls: creatorControls
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter
                     )
                 }
                 .transition(.opacity)
@@ -255,7 +286,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         pulseDriver: pulse,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
-                        creatorControls: creatorControls
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter
                     )
                 }
                 .overlay(Color.black.opacity(0.4))
@@ -384,7 +416,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
-                store: songProfileStore,
+                store: songProfileStore, audio: audio,
                 selectedPresetID: $creativePresetID,
                 reactionMode: $reactionMode,
                 controls: $creatorControls,
@@ -551,7 +583,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         pulseDriver: pulse, material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
-                        creatorControls: creatorControls)
+                        creatorControls: creatorControls,
+                        padAccentEmitter: audio.padAccentEmitter)
                 }
                 .id(track.coverURL)
                 .allowsHitTesting(false)
@@ -641,7 +674,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         typography: karaokeTypography,
                         background: playerBackgroundStyle, reaction: reactionMode),
                 reactiveSourceURL: audio.visualAnalysisURL,
-                creativePresetID: creativePresetID
+                creativePresetID: creativePresetID,
+                padPerformance: audio.frozenPadPerformance()
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,
@@ -851,6 +885,7 @@ private struct BackgroundLayer: View {
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
     var creatorControls: CreatorControls = .neutral
+    var padAccentEmitter: PadVisualAccentEmitter? = nil
 
     @Environment(\.energyBudget) private var energyBudget
 
@@ -868,7 +903,8 @@ private struct BackgroundLayer: View {
                                     pulseDriver: pulseDriver,
                                     liveMeter: liveMeter,
                                     reactionMode: reactionMode,
-                                    creatorControls: creatorControls)
+                                    creatorControls: creatorControls,
+                                    padAccentEmitter: padAccentEmitter)
                     .transition(.opacity)
             case .cover:
                 BlurredCover(url: coverURL)
