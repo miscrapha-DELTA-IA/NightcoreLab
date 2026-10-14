@@ -6,25 +6,26 @@
 	<false/>
 	<key>NSPrivacyTrackingDomains</key>
 	<array/>
+	<!-- No analytics endpoint ships by default. Local-only metrics are not
+	     data collected off-device. Re-audit before enabling telemetry uploads. -->
 	<key>NSPrivacyCollectedDataTypes</key>
-	<array>
-		<!-- Só é necessário se você configurar um endpoint de telemetria.
-		     Com endpoint = nil, deixe este array vazio. -->
-		<dict>
-			<key>NSPrivacyCollectedDataType</key>
-			<string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
-			<key>NSPrivacyCollectedDataTypeLinked</key>
-			<false/>
-			<key>NSPrivacyCollectedDataTypeTracking</key>
-			<false/>
-			<key>NSPrivacyCollectedDataTypePurposes</key>
-			<array>
-				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
-			</array>
-		</dict>
-	</array>
+	<array/>
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
+		<!-- File metadata in this app's own Caches/Application Support. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array><string>C617.1</string></array>
+		</dict>
+		<!-- Monotonic host time for pad/performance event intervals. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array><string>35F9.1</string></array>
+		</dict>
 		<!-- UserDefaults (@AppStorage / TelemetryManager) -->
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
