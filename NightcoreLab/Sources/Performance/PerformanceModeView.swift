@@ -46,32 +46,32 @@ enum PadExpressiveness {
 private final class PadTouchControl: UIControl {
     var onStrike: ((UITouch, UIView) -> Void)?
     var onPressedChanged: ((Bool) -> Void)?
-    private var state = PadTouchState()
+    private var touchState = PadTouchState()
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        for touch in touches where state.begin(ObjectIdentifier(touch)) {
+        for touch in touches where touchState.begin(ObjectIdentifier(touch)) {
             onStrike?(touch, self)
         }
-        onPressedChanged?(state.isPressed)
+        onPressedChanged?(touchState.isPressed)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        for touch in touches { _ = state.end(ObjectIdentifier(touch)) }
-        onPressedChanged?(state.isPressed)
+        for touch in touches { _ = touchState.end(ObjectIdentifier(touch)) }
+        onPressedChanged?(touchState.isPressed)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
-        for touch in touches { _ = state.end(ObjectIdentifier(touch)) }
-        onPressedChanged?(state.isPressed)
+        for touch in touches { _ = touchState.end(ObjectIdentifier(touch)) }
+        onPressedChanged?(touchState.isPressed)
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil {
-            state.reset()
+            touchState.reset()
             onPressedChanged?(false)
         }
     }
