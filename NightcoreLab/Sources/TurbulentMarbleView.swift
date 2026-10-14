@@ -189,9 +189,9 @@ struct TurbulentMarbleView: View {
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
         let palette = theme.palette
         let uniforms = resolved.marbleUniforms
-        let authoredPalette = VisualMaterialCatalog.curatedPalettes[resolved.materialID]
-        let colors = authoredPalette?.hex.map { Color(materialHex: $0) }
-        let texture = resolved.parameters.usesProceduralTexture && colors?.count == 5
+        let binding = MarbleSurfaceBinding.resolve(frame: resolved)
+        let colors = binding.paletteHex?.map { Color(materialHex: $0) }
+        let texture = binding.textured
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
         let detailQuality: Float = energyBudget.thermal.rawValue >= 2 ? 0 :
@@ -366,5 +366,27 @@ enum MarbleCreatorResponse {
                              audioResponse: frame.audioResponse, timestamp: frame.timestamp,
                              seed: frame.seed, controls: frame.controls,
                              signals: frame.signals, viewport: frame.viewport)
+    }
+}
+
+
+/// Renderer-owned description of the EXACT material/palette passed to Metal
+/// by TurbulentMarbleView; inspectable by integration tests without GPU OCR.
+struct MarbleSurfaceBinding: Equatable {
+    let materialID: String
+    let paletteHex: [String]?
+    let parameters: VisualParameterSet
+    let textured: Bool
+
+    static func resolve(frame: MaterialFrame) -> Self {
+        let hex = VisualMaterialCatalog.curatedPalettes[frame.materialID]?.hex
+        return Self(materialID: frame.materialID, paletteHex: hex,
+                    parameters: frame.parameters,
+                    textured: frame.parameters.usesProceduralTexture &&
+                              hex?.count == 5)
+    }
+
+    static func resolve(material: VisualMaterial) -> Self {
+        resolve(frame: MaterialResolver.resolve(material, timestamp: 0))
     }
 }
