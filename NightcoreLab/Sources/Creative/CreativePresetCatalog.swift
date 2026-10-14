@@ -263,7 +263,68 @@ extension CreativePresetCatalog {
             mapping: CreativeAudioMapping(enabled: true, bindings: [
                 .init(signal: .energy, target: .movement, gain: 0.2)
             ]))
-        return [cyber, liquid, neon, chrome, organic, marble, smoke].compactMap { $0 }
+        let agate = authoredExperience(
+            id: "agate-zebra", name: "Agate Zebra",
+            description: "Fine white/black folds, mineral gold and slate microveins",
+            sourceID: "night-drive",
+            typography: TypographyPreset(style: .glitch, effectIntensity: 0.38),
+            seed: 0xA6A7, material: VisualMaterialCatalog.agateZebra,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.11),
+                .init(signal: .bass, target: .movement, gain: 0.07)
+            ]))
+        let void = authoredExperience(
+            id: "void-gloss", name: "Void Gloss",
+            description: "Deep obsidian pools and cyan-crimson glossy ribbons",
+            sourceID: "night-drive",
+            typography: TypographyPreset(style: .neon, effectIntensity: 0.38),
+            seed: 0xB01D, material: VisualMaterialCatalog.voidGloss,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.11),
+                .init(signal: .bass, target: .movement, gain: 0.07)
+            ]))
+        let terrazzo = authoredExperience(
+            id: "terrazzo-magma", name: "Terrazzo Magma",
+            description: "Embossed volcanic stone ribbons and mineral speckle",
+            sourceID: "bass-pulse",
+            typography: TypographyPreset(style: .kinetic, effectIntensity: 0.38),
+            seed: 0x7E22, material: VisualMaterialCatalog.terrazzoMagma,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.11),
+                .init(signal: .bass, target: .movement, gain: 0.07)
+            ]))
+        let airbrush = authoredExperience(
+            id: "airbrush-mirage", name: "Airbrush Mirage",
+            description: "Diffuse color clouds with subtle ridged scanlines",
+            sourceID: "soft-flow",
+            typography: TypographyPreset(style: .magazineCutout, effectIntensity: 0.38),
+            seed: 0xA18B, material: VisualMaterialCatalog.airbrushMirage,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.11),
+                .init(signal: .bass, target: .movement, gain: 0.07)
+            ]))
+        let ebru = authoredExperience(
+            id: "groove-ebru", name: "Groove Ebru",
+            description: "Warm 1970s laminar liquid comb patterns",
+            sourceID: "soft-flow",
+            typography: TypographyPreset(style: .kinetic, effectIntensity: 0.38),
+            seed: 0xE8B0, material: VisualMaterialCatalog.grooveEbru,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.11),
+                .init(signal: .bass, target: .movement, gain: 0.07)
+            ]))
+        let cymatic = authoredExperience(
+            id: "cymatic-rorschach", name: "Cymatic Rorschach",
+            description: "Bilateral engraved wave interference with halftone light",
+            sourceID: "night-drive",
+            typography: TypographyPreset(style: .minimal, effectIntensity: 0.38),
+            seed: 0xC7A1, material: VisualMaterialCatalog.cymaticRorschach,
+            mapping: CreativeAudioMapping(enabled: true, bindings: [
+                .init(signal: .energy, target: .visualIntensity, gain: 0.11),
+                .init(signal: .bass, target: .movement, gain: 0.07)
+            ]))
+        return [cyber, liquid, neon, chrome, organic, marble, smoke,
+                agate, void, terrazzo, airbrush, ebru, cymatic].compactMap { $0 }
     }()
 
     /// Look up demo experiences, then wrap the original four recipes losslessly.
