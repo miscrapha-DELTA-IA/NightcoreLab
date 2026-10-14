@@ -7,6 +7,34 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
 
+    func testExp2IndependentFingersCancelWithoutStuckHighlights() {
+        let fingerA = NSObject()
+        let fingerB = NSObject()
+        let fingerC = NSObject()
+        var firstPad = PadTouchState()
+        var secondPad = PadTouchState()
+
+        XCTAssertTrue(firstPad.begin(ObjectIdentifier(fingerA)))
+        XCTAssertTrue(firstPad.begin(ObjectIdentifier(fingerB)))
+        XCTAssertFalse(firstPad.begin(ObjectIdentifier(fingerA)))
+        XCTAssertTrue(firstPad.isPressed)
+
+        XCTAssertTrue(secondPad.begin(ObjectIdentifier(fingerC)))
+        XCTAssertTrue(firstPad.end(ObjectIdentifier(fingerA)))
+        XCTAssertTrue(firstPad.isPressed)
+        XCTAssertTrue(secondPad.isPressed)
+
+        // Cancellation and normal end both remove ONLY the matching UITouch.
+        XCTAssertTrue(firstPad.end(ObjectIdentifier(fingerB)))
+        XCTAssertFalse(firstPad.isPressed)
+        XCTAssertFalse(firstPad.end(ObjectIdentifier(fingerB)))
+        XCTAssertTrue(secondPad.isPressed)
+        secondPad.reset() // UIKit view detached while still pressed.
+        XCTAssertFalse(secondPad.isPressed)
+        XCTAssertTrue(secondPad.active.isEmpty)
+    }
+
+
     // MARK: Deterministic fixtures
 
     /// Small LCG so fixtures are identical on every run and device.

@@ -171,4 +171,34 @@ final class AudioQualityTests: XCTestCase {
         XCTAssertTrue([a, b, c].allSatisfy { (0.7...0.8).contains($0) })
     }
 
+
+    func testExp2PadVelocityAndRecordingLatencyBounds() {
+        XCTAssertEqual(PadExpressiveness.velocity(
+            verticalZone: 0, base: 1, hitIndex: 0), 0.72, accuracy: 0.0001)
+        XCTAssertEqual(PadExpressiveness.velocity(
+            verticalZone: 1, base: 1, hitIndex: 0), 1, accuracy: 0.0001)
+        XCTAssertEqual(PadExpressiveness.velocity(
+            verticalZone: -10, base: 1, hitIndex: 0), 0.72, accuracy: 0.0001)
+        XCTAssertEqual(PadExpressiveness.velocity(
+            verticalZone: 10, base: 1, hitIndex: 0), 1, accuracy: 0.0001)
+        XCTAssertEqual(PadExpressiveness.velocity(
+            verticalZone: .nan, base: 0.85, hitIndex: 0), 0.85, accuracy: 0.0001)
+
+        XCTAssertEqual(PadRecordingTiming.safeOutputLatency(-2), 0)
+        XCTAssertEqual(PadRecordingTiming.safeOutputLatency(.nan), 0)
+        XCTAssertEqual(PadRecordingTiming.safeOutputLatency(0.35), 0.2, accuracy: 0.000001)
+        XCTAssertEqual(PadRecordingTiming.sourceTime(
+            10, outputLatency: 0.05, speed: 1.25, duration: 30),
+            9.9375, accuracy: 0.000001)
+        XCTAssertEqual(PadRecordingTiming.sourceTime(
+            10, outputLatency: 0.4, speed: 2, duration: 30),
+            9.6, accuracy: 0.000001)
+        XCTAssertEqual(PadRecordingTiming.sourceTime(
+            0.05, outputLatency: 0.2, speed: 2, duration: 30), 0)
+        XCTAssertEqual(PadRecordingTiming.sourceTime(
+            40, outputLatency: 0, speed: 1, duration: 30), 30)
+        XCTAssertEqual(PadRecordingTiming.sourceTime(
+            .nan, outputLatency: 0.1, speed: 1, duration: 30), 0)
+    }
+
 }

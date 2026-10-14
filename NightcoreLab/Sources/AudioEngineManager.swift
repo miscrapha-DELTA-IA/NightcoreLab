@@ -50,6 +50,24 @@ struct StoryAudioSource: Sendable {
     let settings: RenderSettings
 }
 
+/// Converts uncompensated player media time to the music position heard
+/// when a pad was struck. EnginePlaybackClock.lyricTime ALREADY subtracts
+/// output latency and must never be compensated a second time.
+enum PadRecordingTiming {
+    static func safeOutputLatency(_ latency: TimeInterval) -> TimeInterval {
+        guard latency.isFinite else { return 0 }
+        return min(0.200, max(0, latency))
+    }
+
+    static func sourceTime(_ mediaTime: TimeInterval, outputLatency: TimeInterval,
+                           speed: Float, duration: TimeInterval) -> TimeInterval {
+        guard mediaTime.isFinite, duration.isFinite, duration >= 0,
+              speed.isFinite, speed > 0 else { return 0 }
+        let shift = safeOutputLatency(outputLatency) * Double(speed)
+        return min(duration, max(0, mediaTime - shift))
+    }
+}
+
 // MARK: - AudioEngineManager
 
 @MainActor
@@ -256,14 +274,14 @@ final class AudioEngineManager {
     /// lyricTime (which already compensates independently).
     func recordedPadSourceTime() -> TimeInterval? {
         guard isPlaying else { return nil }
-        let compensation = performanceOutputLatency * Double(speed)
-        return min(duration, max(0, currentTime - compensation))
+        return PadRecordingTiming.sourceTime(
+            currentTime, outputLatency: performanceOutputLatency,
+            speed: speed, duration: duration)
     }
 
     private func refreshPerformanceOutputLatency() {
         let latency = AVAudioSession.sharedInstance().outputLatency
-        performanceOutputLatency = latency.isFinite ?
-            min(0.35, max(0, latency)) : 0
+        performanceOutputLatency = PadRecordingTiming.safeOutputLatency(latency)
     }
 
     /// Prepare at most five seconds from the currently loaded local source.

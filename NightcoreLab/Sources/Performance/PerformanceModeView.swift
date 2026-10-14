@@ -36,7 +36,8 @@ enum PadExpressiveness {
         case 3: accent = 0.994
         default: accent = 1
         }
-        let gain: Float = 0.60 + 0.40 * normalized
+        // 0.72...1.0: gentle zone dynamics without inaudible edge hits.
+        let gain: Float = 0.72 + 0.28 * normalized
         return min(1, max(0.05, base * gain * accent))
     }
 }
@@ -110,11 +111,17 @@ private struct PadTouchSurface: UIViewRepresentable {
             let index = hitIndex
             hitIndex &+= 1
             // Audio submission returns before any SwiftUI heldPads mutation.
-            let played = onDown(touch.timestamp, PadExpressiveness.velocity(
-                verticalZone: vertical, base: 0.85, hitIndex: index))
+            let velocity = PadExpressiveness.velocity(
+                verticalZone: vertical, base: 0.85, hitIndex: index)
+            let played = onDown(touch.timestamp, velocity)
             if played && haptics {
-                generator.impactOccurred(intensity: 0.85)
-                generator.prepare()
+                // The audio command has completed; haptics are scheduled
+                // on MainActor afterwards, not inside the audio hot path.
+                Task { @MainActor [weak self] in
+                    guard let self, self.haptics else { return }
+                    self.generator.impactOccurred(intensity: CGFloat(velocity))
+                    self.generator.prepare()
+                }
             }
         }
     }
@@ -157,7 +164,7 @@ struct PerformanceModeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var recorder = PerformanceRecorder()
-    @State private var haptics = false
+    @State private var haptics = true
     @State private var heldPads: Set<String> = []
     @State private var recordedSourceRevision: Int?
     @State private var isRenderingAudio = false
