@@ -22,9 +22,13 @@ enum CreativeExperienceResolver {
                         features: AudioFeatures? = nil,
                         typography: TypographyLayer? = nil,
                         rhythm: RhythmFrame? = nil,
-                        runtime frozen: CompositionRuntime? = nil) -> CreativeExperienceFrame? {
+                        runtime frozen: CompositionRuntime? = nil,
+                        songDNA: SongDNA? = nil) -> CreativeExperienceFrame? {
         guard preset.isValid else { return nil }
         let audioState = preset.audioMapping.resolve(features: features)
+        // Source-time derives from the SAME frozen composition on every render.
+        let songTime = preset.composition.timeline.timestamp(at: elapsed)?.sourceTime ?? -1
+        let cadence = SongSectionCadence.at(sourceTime: songTime, dna: songDNA)
 
         // Composition carries the existing CreativeVisualProgram and rules.
         // The experience mapping is an additional explicit authoring channel:
@@ -33,9 +37,14 @@ enum CreativeExperienceResolver {
             // Same envelope as the karaoke and Story (TypographyPreset.modulated).
             let mapped = preset.typographyPreset.modulated(
                 by: preset.audioMapping, features: features)
+            let adapted = cadence.typography == 1 ? mapped : TypographyPreset(
+                style: mapped.style, audioReaction: mapped.audioReaction,
+                effectIntensity: mapped.effectIntensity * cadence.typography,
+                audioMapping: mapped.audioMapping,
+                deterministicSeed: mapped.deterministicSeed, font: mapped.font)
             return TypographyLayer(
                 layerID: input.layerID, state: input.state,
-                preset: mapped, lyricOffset: input.lyricOffset,
+                preset: adapted, lyricOffset: input.lyricOffset,
                 prepared: input.prepared)
         }
 
@@ -53,10 +62,12 @@ enum CreativeExperienceResolver {
         }
 
         let visualFrame = CreativeExperienceVisualFrame(
-            parameters: compositionFrame.programParameters,
-            intensity: min(1, preset.visualPreset.intensity +
-                           audioState.visualIntensity),
-            movement: min(1, preset.visualPreset.motion + audioState.movement))
+            parameters: SongSectionCadence.apply(
+                compositionFrame.programParameters, cadence: cadence),
+            intensity: min(1, (preset.visualPreset.intensity +
+                           audioState.visualIntensity) * cadence.visual),
+            movement: min(1, (preset.visualPreset.motion +
+                              audioState.movement) * cadence.motion))
 
         return CreativeExperienceFrame(
             experienceID: preset.id, visualFrame: visualFrame,
@@ -146,6 +157,55 @@ enum SongCreativeProfileResolver {
             typographyPreset: typography, padMapping: mapping,
             vocalAndAudioFXMacro: brightness.map { 0.15 + (1 - $0) * 0.25 } ?? 0,
             reactionProfile: (density ?? 0) > 0.65 || expressiveSections
+                ? .responsive : .subtle)
+    }
+
+
+    /// Pure opt-in SongDNA policy; zero-cache data selects Original + starter
+    /// pads, with no melodic sample retuning or extra audio graph.
+    static func suggest(dna: SongDNA) -> SongCreativeProfile {
+        let trusted = dna.isValid
+        let tempo = trusted && dna.bpm >= 55 ? dna.bpm : 0
+        let tonic = trusted && (dna.key?.confidence ?? 0) >= 0.70
+            ? dna.key?.key : nil
+        let scale = tonic == nil ? nil : dna.key?.scale
+        let hints = trusted ? dna.mood?.hints : nil
+        func hint(_ dimension: MoodDimension) -> Double? {
+            hints?.first(where: {
+                $0.dimension == dimension && $0.confidence >= 0.60 &&
+                $0.normalizedValue.isFinite
+            })?.normalizedValue
+        }
+        let density = hint(.rhythmicDensity)
+        let brightness = hint(.spectralBrightness)
+        let chorus = trusted && dna.sections.contains {
+            $0.label == .chorus && $0.confidence >= 0.75
+        }
+        let selection: String
+        if (density ?? 0) >= 0.70 || tempo >= 145 {
+            selection = "neon-pulse"
+        } else if let brightness, brightness < 0.38 {
+            selection = "liquid-dream"
+        } else if density != nil || brightness != nil {
+            selection = "cyber-night"
+        } else {
+            selection = CreativePresetCatalog.defaultID
+        }
+        let typography = CreativePresetCatalog.selectedExperience(id: selection)?
+            .typographyPreset ?? TypographyPreset(
+                style: CreativePresetCatalog.recipe(for: selection)
+                    .preset.typographyStyle)
+        return SongCreativeProfile(
+            assetID: dna.assetID, sourceRevision: dna.sourceRevision,
+            visualPresetID: selection,
+            materialID: CreativePresetCatalog.material(selection: selection).id,
+            typographyPreset: typography,
+            padMapping: SongPadGuardrails(
+                bpm: tempo > 0 ? tempo : nil, tonic: tonic, scale: scale,
+                subdivision: tempo >= 145 ? 2 : 1,
+                melodicPadTuningActive: false),
+            vocalAndAudioFXMacro: brightness.map { 0.15 + (1 - $0) * 0.25 } ?? 0,
+            reactionProfile: (density ?? 0) > 0.65 || chorus
                 ? .responsive : .subtle)
     }
 
