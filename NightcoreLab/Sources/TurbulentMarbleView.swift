@@ -273,6 +273,19 @@ struct TurbulentMarbleView: View {
                     )
                 }
             }
+            // Only the compact player card gets a restrained beat-lit rim.
+            // The full-screen visual and frozen Story captures are unchanged.
+            .overlay {
+                if !extendIntoSafeArea && frozenTime == nil &&
+                   reactionMode == .responsive {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(
+                            palette.glow.opacity(
+                                materialBound(resolved.parameters.beatPulse, 0...1) * 0.20),
+                            lineWidth: 1.5)
+                        .blur(radius: 2)
+                }
+            }
     }
 }
 
