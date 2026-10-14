@@ -141,6 +141,13 @@ final class PadAudioRuntime {
         }
     }
 
+    /// Start players once on the already-running engine, outside the touch
+    /// callback. On normal hits scheduleBuffer can then append immediately
+    /// without a new node.play() transition (historically ~22ms p95).
+    func primeVoices() {
+        for node in nodes + releaseNodes where !node.isPlaying { node.play() }
+    }
+
     /// Continue a stolen/choked voice in a short preallocated release channel.
     /// Only 384 stereo frames are copied; no allocation or I/O on touch.
     /// When all release channels are busy, prefer a rare hard cut to
@@ -166,7 +173,8 @@ final class PadAudioRuntime {
             destR[i] = index < Int(source.frameLength) ? srcR[index] * envelope : 0
         }
         let node = releaseNodes[slot]
-        node.stop()
+        // Do not stop an already-primed release player: this slot has
+        // completed consumption, so it has no pending PCM to interrupt.
         node.volume = voiceGains[item.voiceIndex]
         releaseBuffers[slot].frameLength = AVAudioFrameCount(length)
         releaseSlotBusy[slot] = true
@@ -179,7 +187,7 @@ final class PadAudioRuntime {
                 self.releaseSlotBusy[slot] = false
             }
         }
-        node.play()
+        if !node.isPlaying { node.play() }
     }
 
     func trigger(padID: String, velocity: Float,
@@ -208,7 +216,9 @@ final class PadAudioRuntime {
         node.volume = voiceGains[selection.voiceIndex]
         node.scheduleBuffer(buffer, at: nil, options: .interrupts)
         let scheduled = measuring ? ProcessInfo.processInfo.systemUptime : 0
-        node.play()
+        // Only a stolen/stopped voice needs replay; normal prepared voices
+        // remain running and accept subsequent buffers without play().
+        if !node.isPlaying { node.play() }
         if let timing {
             let played = ProcessInfo.processInfo.systemUptime
             timing(PadNodeDispatchTiming(stopMS: max(0, stopped - started) * 1_000,
