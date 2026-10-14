@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import DownloadKit
 import Foundation
+import UIKit
 
 /// Main-actor coordinator; DownloadKit owns URLSession tasks and its serial transfer queue.
 @MainActor
