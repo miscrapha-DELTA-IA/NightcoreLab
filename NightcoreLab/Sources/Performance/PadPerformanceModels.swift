@@ -164,17 +164,25 @@ final class PerformanceRecorder {
 /// Oldest active voice is stolen only after free or expired voices run out.
 /// A new closed/open hat stops other voices in the same choke group.
 struct PadVoiceAllocator {
-    struct Lease {
+    struct Lease: Equatable {
         var id: String?
         var chokeGroup: String?
         var began: TimeInterval = 0
         var expires: TimeInterval = 0
     }
 
+    struct InterruptedLease: Equatable {
+        let voiceIndex: Int
+        let previous: Lease
+    }
+
     struct Selection: Equatable {
         let voiceIndex: Int
         let chokeIndices: [Int]
         let stoleVoice: Bool
+        /// Snapshot of interrupted voices before assigning/releasing leases.
+        /// Used for short-release tails rather than cutting PCM at full level.
+        let interrupted: [InterruptedLease]
     }
 
     private(set) var leases: [Lease]
@@ -197,12 +205,16 @@ struct PadVoiceAllocator {
             leases[$0].began < leases[$1].began
         })!
         let stolen = leases[index].id != nil && leases[index].expires > uptime
+        let interruptedIndices = chokes.filter { $0 != index } + (stolen ? [index] : [])
+        let interrupted = interruptedIndices.map {
+            InterruptedLease(voiceIndex: $0, previous: leases[$0])
+        }
         leases[index] = Lease(id: id, chokeGroup: chokeGroup,
                               began: uptime, expires: uptime + duration)
         chokes.filter { $0 != index }.forEach { leases[$0] = Lease() }
         return Selection(voiceIndex: index,
                          chokeIndices: chokes.filter { $0 != index },
-                         stoleVoice: stolen)
+                         stoleVoice: stolen, interrupted: interrupted)
     }
 
     mutating func reset() {
