@@ -104,6 +104,9 @@ final class AudioEngineManager {
     /// Only the existing live AVAudioEngine produces sound.
     private let performanceMixer = AVAudioMixerNode()
     @ObservationIgnored private let padRuntime = PadAudioRuntime()
+    /// A bounded foreground lease: while the playable pad deck is visible,
+    /// do not cold-stop the sole AVAudioEngine between fingerdrumming hits.
+    @ObservationIgnored private var performanceModePresented = false
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
 
@@ -197,6 +200,7 @@ final class AudioEngineManager {
                           performanceMixer: performanceMixer)
         padRuntime.connect(to: engine, mixer: performanceMixer)
         engine.prepare()
+        if performanceModePresented { try? engine.start() }
         needsScheduling = true
         scheduledStartTime = 0
         lastKnownTime = 0
@@ -204,6 +208,25 @@ final class AudioEngineManager {
     }
 
     // MARK: Performance pads
+
+    /// Prewarm the EXISTING shared engine when entering Performance Mode.
+    /// Its first-start cost occurs on opening the instrument instead of the
+    /// first musical hit. The lease exists only while the sheet is shown.
+    func beginPerformanceMode() {
+        guard !performanceModePresented else { return }
+        performanceModePresented = true
+        cancelIdleStop()
+        if !engine.isRunning { try? engine.start() }
+    }
+
+    /// Restore the normal energy policy when the instrument is dismissed.
+    /// Playback continues normally if a source song is still running.
+    func endPerformanceMode() {
+        guard performanceModePresented else { return }
+        performanceModePresented = false
+        padRuntime.stopAll()
+        if !isPlaying { scheduleIdleStop() }
+    }
 
     /// Prepare at most five seconds from the currently loaded local source.
     /// Decode/resample is off the main actor; no disk IO on the pad's touch path.
@@ -253,7 +276,7 @@ final class AudioEngineManager {
         let wasCold = !engine.isRunning
         var engineStartMS = 0.0
         var nodeTiming = PadNodeDispatchTiming(stopMS: 0, scheduleMS: 0, playMS: 0)
-        cancelIdleStop()
+        if !performanceModePresented { cancelIdleStop() }
         var played = false
         // Capture the audio-command boundary BEFORE idle-stop task work.
         // This timer is unrelated to when node.play() has been submitted.
@@ -274,10 +297,10 @@ final class AudioEngineManager {
                 played = padRuntime.trigger(padID: padID, velocity: velocity)
             }
             if profiling { commandCompletedAt = ProcessInfo.processInfo.systemUptime }
-            if !isPlaying { scheduleIdleStop() }
+            if !isPlaying && !performanceModePresented { scheduleIdleStop() }
         } catch {
             if profiling { commandCompletedAt = ProcessInfo.processInfo.systemUptime }
-            if !isPlaying { scheduleIdleStop() }
+            if !isPlaying && !performanceModePresented { scheduleIdleStop() }
         }
         if profiling {
             let inputDelay = touchEventUptime.flatMap { event -> Double? in
@@ -303,7 +326,7 @@ final class AudioEngineManager {
 
     func stopPerformancePads() {
         padRuntime.stopAll()
-        if !isPlaying { scheduleIdleStop() }
+        if !isPlaying && !performanceModePresented { scheduleIdleStop() }
     }
 
     // MARK: Transporte
@@ -349,12 +372,14 @@ final class AudioEngineManager {
 
     private func scheduleIdleStop() {
         cancelIdleStop()
+        guard !performanceModePresented else { return }
         let generation = idleStopGeneration
         let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
-                  generation == self.idleStopGeneration, !self.isPlaying else { return }
+                  generation == self.idleStopGeneration,
+                  !self.isPlaying, !self.performanceModePresented else { return }
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
