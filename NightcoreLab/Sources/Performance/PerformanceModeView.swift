@@ -157,6 +157,9 @@ struct PerformanceModeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var recorder = PerformanceRecorder()
+    @State private var grooveStrength: Double = 0
+    @State private var padRhythm: RhythmAnalysisResult?
+    @State private var padRhythmTask: Task<Void, Never>?
     @State private var haptics = false
     @State private var heldPads: Set<String> = []
     @State private var recordedSourceRevision: Int?
@@ -264,7 +267,9 @@ struct PerformanceModeView: View {
                             .accessibilityIdentifier("performance.record")
 
                             if !recorder.events.isEmpty && !recorder.isRecording,
-                               let payload = recorder.shareJSON(sourceClip: recordedClip) {
+                               let payload = recorder.shareJSON(
+                                   sourceClip: recordedClip,
+                                   quantizeStrength: Float(grooveStrength)) {
                                 ShareLink(item: payload,
                                           subject: Text("NightcoreLab Performance Events"),
                                           message: Text("Sequência de pads NightcoreLab (JSON v1)")) {
@@ -276,6 +281,20 @@ struct PerformanceModeView: View {
                                 .accessibilityIdentifier("performance.shareEvents")
                             }
                         }
+                        HStack {
+                            Text("Groove assistido")
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                            Text("\(Int((grooveStrength * 100).rounded()))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $grooveStrength, in: 0...1, step: 0.1)
+                            .tint(accent)
+                            .accessibilityIdentifier("performance.grooveStrength")
+                        Text("0% preserva o toque original. Com grade rítmica disponível, 100% aproxima a gravação da semicolcheia mais próxima. O áudio do toque ao vivo não muda.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         Text("A captura guarda ações e tempos em memória. Você pode compartilhar os eventos em JSON e, com música carregada, renderizar um M4A com os pads. Exportação de Story com pads é etapa posterior.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -363,9 +382,11 @@ struct PerformanceModeView: View {
             confirmSharingRights = false
             if recorder.isRecording { recorder.stop() }
             exportedAudio = nil
+            prepareMusicalGrid()
         }
         .onAppear {
             audio.beginPerformanceMode()
+            prepareMusicalGrid()
         }
         .onDisappear {
             audio.padLatencyProbe.cancel()
@@ -373,6 +394,8 @@ struct PerformanceModeView: View {
             activeLatencyContext = nil
             clipTask?.cancel()
             exportTask?.cancel()
+            padRhythmTask?.cancel()
+            padRhythm = nil
             heldPads.removeAll()
             recorder.stop()
             audio.endPerformanceMode()
@@ -522,7 +545,8 @@ struct PerformanceModeView: View {
         // never in the sampler's scheduling path.
         if recorder.isRecording {
             recorder.append(sample, velocity: performedVelocity,
-                            sourceTime: audio.recordedPadSourceTime())
+                            sourceTime: audio.recordedPadSourceTime(),
+                            rhythm: padRhythm)
         }
         exportedAudio = nil
         return true
@@ -641,7 +665,8 @@ struct PerformanceModeView: View {
     private func renderPerformanceAudio() {
         guard !isRenderingAudio, audio.fileName != nil,
               recordedSourceRevision == audio.playbackSourceRevision else { return }
-        let frozen = recorder.timeline(sourceClip: recordedClip)
+        let frozen = recorder.timeline(
+            sourceClip: recordedClip, quantizeStrength: Float(grooveStrength))
         guard frozen.isValid && !frozen.events.isEmpty else { return }
         isRenderingAudio = true
         exportedAudio = nil
@@ -660,6 +685,27 @@ struct PerformanceModeView: View {
             } catch {
                 renderError = error.localizedDescription
             }
+        }
+    }
+
+    /// Reuses MusicIntelligenceEngine's shared scheduler/cache, off the
+    /// audio callback. Revision/cancellation gates prevent stale grids.
+    private func prepareMusicalGrid() {
+        padRhythmTask?.cancel()
+        padRhythm = nil
+        guard let url = audio.visualAnalysisURL, url.isFileURL else { return }
+        let revision = audio.playbackSourceRevision
+        padRhythmTask = Task { @MainActor in
+            do {
+                let analysis = try await MusicIntelligenceEngine.shared.analysis(for: url)
+                guard !Task.isCancelled,
+                      revision == audio.playbackSourceRevision,
+                      analysis.capabilities[.rhythm] == .available,
+                      analysis.rhythmAnalyzerVersion == RhythmAnalysisResult.algorithmVersion,
+                      let rhythm = analysis.rhythmAnalysis,
+                      rhythm.quality == .medium || rhythm.quality == .high else { return }
+                padRhythm = rhythm
+            } catch { /* Unavailable rhythm keeps original timing. */ }
         }
     }
 
