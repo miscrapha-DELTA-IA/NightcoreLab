@@ -37,7 +37,8 @@ struct CreativePresetPackageSnapshot: Equatable, Sendable {
             id: package.id, name: package.name, author: package.author,
             composition: frozen,
             typographyPreset: package.typographyPreset,
-            previewMetadata: preview)
+            previewMetadata: preview,
+            songProfile: package.songProfile)
         return Self(state: state, package: captured)
     }
 
