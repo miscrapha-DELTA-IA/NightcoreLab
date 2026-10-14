@@ -93,3 +93,67 @@ struct RhythmFrame: Equatable, Sendable {
                            downbeatConfidence: rhythm.downbeatConfidence)
     }
 }
+
+
+/// Musical coordinates derived ONLY from the existing validated rhythm grid.
+/// Values are 0-based beat positions (2.5 = halfway through the third beat),
+/// with 1-based bars assuming 4/4. No tempo analysis or clock is created.
+enum PadMusicalGrid {
+    enum Subdivision: Int, Codable, Sendable {
+        case eighth = 2
+        case sixteenth = 4
+    }
+
+    struct Position: Equatable, Sendable {
+        let beat: Double
+        let bar: Int
+        let bpm: Double
+        let nearestGridSourceTime: TimeInterval?
+    }
+
+    /// Requires meaningful rhythm evidence; silent/ambiguous sections leave
+    /// event timing untouched instead of inventing a BPM.
+    static func at(_ sourceTime: TimeInterval, rhythm: RhythmAnalysisResult,
+                   subdivision: Subdivision = .sixteenth) -> Position? {
+        guard (rhythm.quality == .medium || rhythm.quality == .high),
+              rhythm.algorithmVersion == RhythmAnalysisResult.algorithmVersion,
+              rhythm.beatGrid.count >= 2,
+              let frame = RhythmFrame.at(sourceTime, in: rhythm),
+              frame.beatIndex >= 0, frame.beatIndex < rhythm.beatGrid.count,
+              frame.bpm.isFinite, frame.bpm > 0 else { return nil }
+        let beat = Double(frame.beatIndex) + frame.phase
+        guard beat.isFinite, beat >= 0 else { return nil }
+        let snapped = (beat * Double(subdivision.rawValue))
+            .rounded(.toNearestOrAwayFromZero) / Double(subdivision.rawValue)
+        let gridTime = time(forBeat: snapped, rhythm: rhythm)
+        return Position(beat: beat, bar: Int(beat / 4) + 1,
+                        bpm: frame.bpm, nearestGridSourceTime: gridTime)
+    }
+
+    /// Piecewise linear inversion over TRACKED beats. Local tempo drift is
+    /// preserved; out-of-range requests do not extrapolate a fictional grid.
+    static func time(forBeat beat: Double,
+                     rhythm: RhythmAnalysisResult) -> TimeInterval? {
+        let beats = rhythm.beatGrid
+        guard beat.isFinite, beat >= 0, beats.count >= 2,
+              beat <= Double(beats.count - 1) else { return nil }
+        let index = Int(beat.rounded(.down))
+        let start = beats[index].time
+        let fraction = beat - Double(index)
+        if fraction == 0 { return start.isFinite ? start : nil }
+        guard index + 1 < beats.count else { return nil }
+        let end = beats[index + 1].time
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        return start + (end - start) * fraction
+    }
+
+    /// Applies magnetic pull without mutating a PadEvent's raw timestamp.
+    static func assistedTime(raw: TimeInterval,
+                             grid: TimeInterval?,
+                             strength: Float) -> TimeInterval {
+        guard raw.isFinite, raw >= 0, let grid, grid.isFinite, grid >= 0,
+              strength.isFinite, strength > 0 else { return raw }
+        let clamped = Double(min(1, max(0, strength)))
+        return max(0, raw + (grid - raw) * clamped)
+    }
+}
