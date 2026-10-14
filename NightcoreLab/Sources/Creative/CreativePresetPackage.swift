@@ -50,6 +50,105 @@ struct CreativePresetAudioMapping: Codable, Equatable, Sendable {
     }
 }
 
+
+// MARK: - Stage 19A.1: additive, song-scoped creative manifest
+
+/// The harmonic information is advisory for the current original drum kit.
+/// Its 808 is a fixed synthesized sample, NOT automatically key-tuned.
+struct SongPadGuardrails: Codable, Equatable, Sendable {
+    let bpm: Double?
+    let tonic: MusicalPitchClass?
+    let scale: MusicalScale?
+    let subdivision: Int
+    let melodicPadTuningActive: Bool
+
+    var isValid: Bool {
+        (bpm == nil || (bpm!.isFinite && (55...210).contains(bpm!))) &&
+        (subdivision == 1 || subdivision == 2 || subdivision == 4) &&
+        (tonic == nil || scale != nil) &&
+        !melodicPadTuningActive // No tuned melodic kit exists in Stage 19A.1.
+    }
+}
+
+/// References existing catalog presets, CreatorControls, and PadKit; never
+/// duplicates visual equations, PCM, tracks, or a playback timeline.
+struct SongCreativeProfile: Codable, Equatable, Sendable {
+    static let schemaVersion = 1
+
+    let version: Int
+    let assetID: String
+    let sourceRevision: String
+    let visualPresetID: String
+    let materialID: String
+    let typographyPreset: TypographyPreset
+    let padKitID: String
+    let padMapping: SongPadGuardrails
+    /// 0...1; mapped to the existing reverb wet/dry parameter on explicit apply.
+    /// No vocal isolation or independent vocal track is implied.
+    let vocalAndAudioFXMacro: Double
+    let reactionProfile: CreativePreset.AudioReaction
+
+    init(assetID: String, sourceRevision: String,
+         visualPresetID: String, materialID: String,
+         typographyPreset: TypographyPreset, padKitID: String = PadKit.starter.id,
+         padMapping: SongPadGuardrails,
+         vocalAndAudioFXMacro: Double = 0,
+         reactionProfile: CreativePreset.AudioReaction = .subtle) {
+        version = Self.schemaVersion
+        self.assetID = assetID
+        self.sourceRevision = sourceRevision
+        self.visualPresetID = visualPresetID
+        self.materialID = materialID
+        self.typographyPreset = typographyPreset
+        self.padKitID = padKitID
+        self.padMapping = padMapping
+        self.vocalAndAudioFXMacro = vocalAndAudioFXMacro
+        self.reactionProfile = reactionProfile
+    }
+
+    var isValid: Bool {
+        version == Self.schemaVersion &&
+        !assetID.isEmpty && assetID.count <= 256 &&
+        !sourceRevision.isEmpty && sourceRevision.count <= 256 &&
+        !visualPresetID.isEmpty && visualPresetID.count <= 128 &&
+        !materialID.isEmpty && materialID.count <= 128 &&
+        padKitID == PadKit.starter.id &&
+        padMapping.isValid &&
+        vocalAndAudioFXMacro.isFinite && (0...1).contains(vocalAndAudioFXMacro)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, assetID, sourceRevision, visualPresetID, materialID
+        case typographyPreset, padKitID, padMapping
+        case vocalAndAudioFXMacro, reactionProfile
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decode(Int.self, forKey: .version)
+        guard version == Self.schemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .version, in: c,
+                debugDescription: "Unsupported song creative profile")
+        }
+        self.init(
+            assetID: try c.decode(String.self, forKey: .assetID),
+            sourceRevision: try c.decode(String.self, forKey: .sourceRevision),
+            visualPresetID: try c.decode(String.self, forKey: .visualPresetID),
+            materialID: try c.decode(String.self, forKey: .materialID),
+            typographyPreset: try c.decode(TypographyPreset.self, forKey: .typographyPreset),
+            padKitID: try c.decode(String.self, forKey: .padKitID),
+            padMapping: try c.decode(SongPadGuardrails.self, forKey: .padMapping),
+            vocalAndAudioFXMacro: try c.decode(Double.self, forKey: .vocalAndAudioFXMacro),
+            reactionProfile: try c.decode(CreativePreset.AudioReaction.self, forKey: .reactionProfile))
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid song creative profile"))
+        }
+    }
+}
+
 /// Portable, self-contained authoring envelope ABOVE the existing preset,
 /// visual program, typography preset and composition. No renderer is activated.
 struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
@@ -69,11 +168,14 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
     let composition: VisualComposition
     let audioMapping: CreativePresetAudioMapping
     let previewMetadata: CreativePresetPreviewMetadata
+    /// Optional v1 extension; legacy package JSON has no song-scoped field.
+    let songProfile: SongCreativeProfile?
 
     init(id: String, name: String, author: String,
          composition: VisualComposition,
          typographyPreset: TypographyPreset? = nil,
-         previewMetadata: CreativePresetPreviewMetadata = .init()) throws {
+         previewMetadata: CreativePresetPreviewMetadata = .init(),
+         songProfile: SongCreativeProfile? = nil) throws {
         self.id = id
         self.schemaVersion = Self.supportedSchemaVersion
         self.name = name
@@ -84,6 +186,7 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
             TypographyPreset(style: composition.program.preset.typographyStyle)
         self.audioMapping = .referencing(composition)
         self.previewMetadata = previewMetadata
+        self.songProfile = songProfile
         guard isValid else { throw PackageError.invalidPackage }
     }
 
@@ -99,7 +202,8 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
         Self.typographyMatches(typographyPreset.style,
                                composition.program.preset.typographyStyle) &&
         audioMapping == .referencing(composition) &&
-        previewMetadata.isValid(for: composition)
+        previewMetadata.isValid(for: composition) &&
+        (songProfile?.isValid ?? true)
     }
 
     /// The package's typography style must be the one its preset records.
@@ -127,7 +231,7 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, schemaVersion, name, author, visualPreset, typographyPreset
-        case composition, audioMapping, previewMetadata
+        case composition, audioMapping, previewMetadata, songProfile
     }
 
     init(from decoder: Decoder) throws {
@@ -154,11 +258,14 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
             .referencing(composition)
         let preview = try c.decodeIfPresent(
             CreativePresetPreviewMetadata.self, forKey: .previewMetadata) ?? .init()
+        let song = try c.decodeIfPresent(
+            SongCreativeProfile.self, forKey: .songProfile)
 
         guard let built = try? Self(id: id, name: name, author: author,
                                     composition: composition,
                                     typographyPreset: typography,
-                                    previewMetadata: preview),
+                                    previewMetadata: preview,
+                                    songProfile: song),
               built.visualPreset == visual,
               built.audioMapping == mapping else {
             throw DecodingError.dataCorrupted(.init(

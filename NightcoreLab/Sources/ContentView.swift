@@ -41,59 +41,30 @@ final class PlaybackQueue: ObservableObject {
         upNextQueue.append(contentsOf: fresh)
     }
 
+    /// Manual reorder must preserve every candidate exactly once.
+    /// Invalid/stale reorder requests leave the queue untouched.
+    @discardableResult
+    func reorder(ids: [String]) -> Bool {
+        let existing = Dictionary(uniqueKeysWithValues: upNextQueue.map { ($0.id, $0) })
+        guard ids.count == upNextQueue.count,
+              Set(ids).count == ids.count,
+              Set(ids) == Set(existing.keys) else { return false }
+        upNextQueue = ids.compactMap { existing[$0] }
+        return true
+    }
+
+    /// A committed skip may change priority, but never enqueue or prefetch a new file.
+    func reorderAfterSkip(anchor: Track, vectors: [String: DiscoveryFeatureVector],
+                          recentlyPlayed: Set<String> = []) {
+        upNextQueue = DiscoveryQueuePolicy.afterSkip(upNextQueue, anchor: anchor,
+                        vectors: vectors, recentlyPlayed: recentlyPlayed)
+    }
+
     func shouldFetchRadio(afterAutomaticAdvance: Bool) -> Bool {
         afterAutomaticAdvance && upNextQueue.count < 2
     }
 
     func clear() { upNextQueue.removeAll() }
-}
-
-@MainActor
-final class PlaybackTransitionCoordinator: ObservableObject {
-    enum Phase: Equatable {
-        case idle
-        case preparing(String)
-        case playing(String)
-        case failed(String)
-    }
-
-    @Published private(set) var phase: Phase = .idle
-    private var token = UUID()
-
-    @discardableResult
-    func begin(trackID: String) -> UUID {
-        token = UUID()
-        phase = .preparing(trackID)
-        return token
-    }
-
-    func isCurrent(_ request: UUID, trackID: String) -> Bool {
-        request == token && phase == .preparing(trackID)
-    }
-
-    @discardableResult
-    func didStart(_ request: UUID, trackID: String) -> Bool {
-        guard isCurrent(request, trackID: trackID) else { return false }
-        phase = .playing(trackID)
-        return true
-    }
-
-    @discardableResult
-    func didFail(_ request: UUID, trackID: String) -> Bool {
-        guard isCurrent(request, trackID: trackID) else { return false }
-        phase = .failed(trackID)
-        return true
-    }
-
-    var isPreparing: Bool {
-        if case .preparing = phase { return true }
-        return false
-    }
-
-    func reset() {
-        token = UUID()
-        phase = .idle
-    }
 }
 
 struct ContentView: View {
@@ -122,6 +93,7 @@ struct ContentView: View {
     }
 
     @State private var showImporter = false
+    @State private var showPerformanceMode = false
     @State private var exportFormat: ExportFormat = .m4a
     @State private var shareItem: ShareItem?
     @State private var errorMessage: String?
@@ -129,10 +101,19 @@ struct ContentView: View {
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
     @StateObject private var playbackQueue = PlaybackQueue()
-    @StateObject private var playbackTransition = PlaybackTransitionCoordinator()
+    @StateObject private var playbackTransition = PlaybackCoordinator()
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
+    @State private var remoteRelay = RemotePlaybackRelay()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
+    @State private var suggestionReasons: [String: String] = [:]
+    @State private var discoveryEvents: [DiscoveryEvent] = []
+    @State private var acousticVectors: [String: DiscoveryFeatureVector] = [:]
+    @State private var discoveryTracker = DiscoveryPlaybackTracker()
+    @State private var discoveryAnalysisTask: Task<Void, Never>?
+    @State private var discoveryLog = DiscoveryEventLog()
+    /// Serialize event persistence and local deletion despite asynchronous Tasks.
+    @State private var discoveryPersistenceTask: Task<Void, Never>?
     @State private var playingTrackID: String?
     @State private var currentTrack: Track?
     @State private var resumeTrack: Track?
@@ -161,6 +142,7 @@ struct ContentView: View {
     @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.energyBudget) private var energyBudget
 
     // Troque pelo seu link (Ko-fi, GitHub Sponsors, página com QR Code do Pix…)
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
@@ -207,7 +189,7 @@ struct ContentView: View {
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
             playerBackgroundStyle: bgStyle,
-            onPlayPause: { audio.togglePlayback() },
+            onPlayPause: { playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID) },
             onPrevious: { goToPreviousTrack() },
             onNext: { goToNextTrack() },
             header: { header },
@@ -239,6 +221,13 @@ struct ContentView: View {
             restoreDiscoverExpansionPreference()
             if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
+            remoteRelay.connect { action in handleRemotePlayback(action) }
+            audio.connectRemoteCommands(remoteRelay)
+            synchronizeRemoteAvailability()
+        }
+        .onDisappear {
+            audio.connectRemoteCommands(nil)
+            remoteRelay.disconnect()
         }
         .onOpenURL { incomingURL in
             guard let components = URLComponents(
@@ -265,11 +254,17 @@ struct ContentView: View {
             startDownload(receivedLink)
         }
         .task(id: relatedRequestID) { await loadRelatedVideos() }
+        .task { discoveryEvents = await discoveryLog.snapshot() }
         .onChange(of: audio.playbackCompletionCount) { _, _ in
+            if let playingTrackID { playbackTransition.didEnd(trackID: playingTrackID) }
+            finishDiscovery(reason: .completed)
             if let currentTrack { playHistory.completePlayback(trackID: currentTrack.id) }
             advanceQueue()
         }
         .onChange(of: audio.isPlaying) { _, playing in
+            playbackTransition.confirmPlayback(isPlaying: playing, trackID: playingTrackID)
+            synchronizeRemoteAvailability()
+            discoveryTracker.playbackChanged(isPlaying: playing, speed: Double(speed))
             if playing {
                 if let currentTrack {
                     playHistory.resumePlaybackIfNeeded(currentTrack, sourceDuration: audio.duration)
@@ -277,12 +272,35 @@ struct ContentView: View {
                 // A manual play/pause is not a request to start radio.
                 prefetchUpcoming()
             } else if let currentTrack {
-                downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
             }
+        }
+        // The system's lock-screen controls reflect confirmed queue state.
+        .onChange(of: playbackQueue.upNextQueue.map(\.id)) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: navigationHistory.previousTrack?.id) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: navigationHistory.forwardTrack?.id) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: audio.fileName) { _, _ in
+            synchronizeRemoteAvailability()
+        }
+        .onChange(of: audio.isExporting) { _, _ in
+            synchronizeRemoteAvailability()
         }
         // Áudio muda instantaneamente enquanto o dedo arrasta
         .onChange(of: speed) { _, _ in
+            discoveryTracker.contextChanged(speed: Double(speed))
             applyPitch()
+        }
+        .onChange(of: energyBudget.allowsNewAnalysis) { _, isAllowed in
+            if !isAllowed {
+                discoveryAnalysisTask?.cancel()
+                discoveryAnalysisTask = nil
+            }
         }
         .onChange(of: keepOriginalPitch) { _, _ in applyPitch() }
         .onChange(of: reverb) { _, value in audio.setReverb(value) }
@@ -293,7 +311,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 if let currentTrack {
-                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                    playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
                 }
                 TelemetryManager.shared.flush()
             }
@@ -307,6 +325,9 @@ struct ContentView: View {
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showPerformanceMode) {
+            PerformanceModeView(audio: audio, accent: currentTheme.accent)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff]) { result in
             switch result {
@@ -349,6 +370,9 @@ struct ContentView: View {
 
             GlassGroup(spacing: 8) {
                 HStack(spacing: 8) {
+                    headerButton("square.grid.3x3.fill", label: "Abrir Performance Mode") {
+                        showPerformanceMode = true
+                    }
                     headerButton("heart.fill", label: "Apoiar o projeto") {
                         openURL(donationURL)
                     }
@@ -459,6 +483,7 @@ struct ContentView: View {
                     downloader: downloader, theme: currentTheme,
                     isEnabled: !audio.isExporting,
                     suggestedTracks: relatedVideos,
+                    suggestionReasons: suggestionReasons,
                     isLoadingSuggestions: isLoadingRelated,
                     canRefreshSuggestions: currentTrack != nil,
                     onRefreshSuggestions: { startRadio() },
@@ -659,7 +684,7 @@ struct ContentView: View {
                             return
                         }
                         let percent = min(max(Double(value.location.x / max(geometry.size.width, 1)), 0), 1)
-                        audio.seek(to: percent * audio.duration)
+                        playbackTransition.seek(to: percent * audio.duration, audio: audio, trackID: playingTrackID)
                         isDraggingTime = false
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
@@ -994,11 +1019,68 @@ struct ContentView: View {
             }
             .tint(.gray)
             .padding(.top, 4)
+
+            Button("Apagar eventos locais de descoberta", role: .destructive) {
+                discoveryEvents.removeAll()
+                acousticVectors.removeAll()
+                suggestionReasons.removeAll()
+                let previous = discoveryPersistenceTask
+                let log = discoveryLog
+                discoveryPersistenceTask = Task {
+                    await previous?.value
+                    await log.clear()
+                }
+            }
+            .font(DS.Typography.caption)
+            .foregroundStyle(DS.Ink.secondary)
+            .accessibilityHint("Apaga o log local de descoberta. Não altera o histórico de reproduções.")
         }
         .padding(.top, 8)
     }
 
     // MARK: - Ações
+
+    /// Remote playback and on-screen controls use the same queue/navigation
+    /// transition and the same AVAudioEngine. No second player is created.
+    private func handleRemotePlayback(_ action: RemotePlaybackAction) -> Bool {
+        guard !audio.isExporting, !playbackTransition.isPreparing else { return false }
+        switch action {
+        case .play:
+            guard hasTrack else { return false }
+            playbackTransition.resume(audio: audio, trackID: playingTrackID)
+            return audio.isPlaying
+        case .pause:
+            guard hasTrack else { return false }
+            playbackTransition.pause(audio: audio, trackID: playingTrackID)
+            return !audio.isPlaying
+        case .toggle:
+            guard hasTrack else { return false }
+            playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID)
+            return true
+        case .next:
+            guard navigationHistory.forwardTrack != nil ||
+                  !playbackQueue.upNextQueue.isEmpty else { return false }
+            goToNextTrack()
+            return true // Playback is confirmed asynchronously before queue commit.
+        case .previous:
+            guard hasTrack else { return false }
+            goToPreviousTrack()
+            return true
+        case .seek(let position):
+            guard hasTrack, position.isFinite, position >= 0,
+                  audio.duration > 0 else { return false }
+            playbackTransition.seek(to: position, audio: audio, trackID: playingTrackID)
+            return true
+        }
+    }
+
+    private func synchronizeRemoteAvailability() {
+        audio.updateRemoteCommandAvailability(
+            canSkipNext: !audio.isExporting &&
+                (navigationHistory.forwardTrack != nil ||
+                 !playbackQueue.upNextQueue.isEmpty),
+            canSkipPrevious: !audio.isExporting && hasTrack)
+    }
 
     private func applyPitch() {
         audio.setPlayback(speed: speed, keepOriginalPitch: keepOriginalPitch)
@@ -1024,10 +1106,10 @@ struct ContentView: View {
     /// track. With no prior track, fall back to restarting the current one.
     private func goToPreviousTrack() {
         guard !audio.isExporting else { return }
-        if let previous = navigationHistory.previousTrack {
+        if let previous = playbackTransition.previousCandidate(navigation: navigationHistory) {
             playTrack(previous, navigation: .backward)
         } else {
-            audio.seek(to: 0)
+            playbackTransition.seek(to: 0, audio: audio, trackID: playingTrackID)
         }
     }
 
@@ -1054,7 +1136,7 @@ struct ContentView: View {
             duration: audio.duration,
             automaticAdvance: automaticAdvance || navigation != .regular)
         let resumingPrevious = navigation == .regular && resumeTrack?.id == track.id
-        let resumeAt = resumingPrevious ? downloader.loadLastTrack()?.position : nil
+        let resumeAt = resumingPrevious ? playbackTransition.restoredSession()?.position : nil
         resumeTrack = nil
         let token = playbackTransition.begin(trackID: track.id)
         downloader.select(track, onReady: { localURL, downloadedCoverURL in
@@ -1078,18 +1160,31 @@ struct ContentView: View {
                 // download selection time. Back/forward leave Up Next intact.
                 let priorTrack = currentTrack
                 let committedTrack = downloader.cachedTrack(track)
-                navigationHistory.commitStarted(committedTrack, replacing: priorTrack,
-                                                direction: navigation)
-                if navigation == .regular {
-                    playbackQueue.commitPlaying(track)
-                }
+                playbackTransition.commitStarted(committedTrack, replacing: priorTrack,
+                    direction: navigation, queue: playbackQueue, navigation: navigationHistory)
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
                 if let currentTrack {
+                    // End the previous listening interval only after replacement starts.
+                    let isManualSkip = !automaticAdvance && navigation == .regular &&
+                        priorTrack != nil && priorTrack?.id != currentTrack.id
+                    finishDiscovery(reason: isManualSkip ? .manualSelection :
+                                    (automaticAdvance ? .completed : .nextButton))
+                    discoveryTracker.start(currentTrack.id, duration: audio.duration,
+                                           speed: Double(speed))
+                    if isManualSkip {
+                        let recentIDs = playHistory.entries.values.sorted {
+                            $0.lastPlayed > $1.lastPlayed
+                        }.prefix(10).map { $0.hit.id }
+                        playbackTransition.reorderAfterSkip(anchor: currentTrack,
+                            vectors: acousticVectors,
+                            recentlyPlayed: Set(recentIDs), queue: playbackQueue)
+                    }
+                    analyzeDiscoveryAudio(track: currentTrack, localURL: localURL)
                     playHistory.beginPlayback(currentTrack, sourceDuration: audio.duration,
                                               replacing: pendingSkip)
-                    downloader.saveLastTrack(currentTrack, at: audio.playbackTime)
+                    playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
                     startLyricsPrefetch(for: currentTrack)
                 }
                 prefetchUpcoming()
@@ -1112,7 +1207,7 @@ struct ContentView: View {
         guard !didRestoreSession else { return }
         didRestoreSession = true
         guard !hasTrack, !downloader.isDownloading,
-              let saved = downloader.loadLastTrack() else { return }
+              let saved = playbackTransition.restoredSession() else { return }
         guard let local = downloader.cachedAudioURL(for: saved.track) else {
             // No silent server request after a cold launch or cache eviction.
             resumeTrack = saved.track
@@ -1200,9 +1295,16 @@ struct ContentView: View {
         }
         let ranked = RecommendationRanker.recommendations(
             mix: videos, history: playHistory.entries, currentID: playingTrackID,
-            queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now))
+            queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now),
+            discovery: discoverySnapshot)
         relatedVideos = ranked
-        playbackQueue.append(ranked, excluding: playingTrackID)
+        let snapshot = discoverySnapshot
+        suggestionReasons = Dictionary(uniqueKeysWithValues: ranked.compactMap { track in
+            RecommendationRanker.whyAppeared(track, history: playHistory.entries,
+                context: RecContext(speed: audio.speed, now: .now),
+                discovery: snapshot).map { (track.id, $0) }
+        })
+        playbackTransition.enqueue(ranked, excluding: playingTrackID, queue: playbackQueue)
         prefetchUpcoming()
         if autoplayWhenRadioReady {
             autoplayWhenRadioReady = false
@@ -1234,13 +1336,15 @@ struct ContentView: View {
             coverURL = nil
             playingTrackID = nil
             currentTrack = nil
+            finishDiscovery(reason: .stopped)
+            discoveryAnalysisTask?.cancel()
             playHistory.endSession()
             lyricsStore.clear()
             if let lyricsPrefetcher { Task { await lyricsPrefetcher.cancel() } }
             showLyrics = false
             resumeTrack = nil
-            downloader.clearLastTrack()
-            playbackQueue.clear()
+            playbackTransition.clearSession()
+            playbackTransition.clearQueue(playbackQueue)
             navigationHistory.clear()
             playbackTransition.reset()
             downloader.cancel()
@@ -1249,6 +1353,63 @@ struct ContentView: View {
         } catch {
             TelemetryManager.shared.log(.importFailed)
             errorMessage = "Não foi possível abrir o arquivo: \(error.localizedDescription)"
+        }
+    }
+
+    private var discoverySnapshot: DiscoverySnapshot {
+        DiscoverySnapshot(events: discoveryEvents, vectors: acousticVectors,
+            currentID: playingTrackID ?? "",
+            materialID: CreativePresetCatalog.material(selection: selectedCreativePresetID).id,
+            presetID: selectedCreativePresetID)
+    }
+
+    private var discoveryAudioPreset: String? {
+        if abs(speed - 1.25) < 0.001 && abs(reverb) < 0.01 && abs(bass - 5) < 0.01 {
+            return "nightcore"
+        }
+        if abs(speed - 0.8) < 0.001 && abs(reverb - 35) < 0.01 && abs(bass) < 0.01 {
+            return "lentidao"
+        }
+        if abs(speed - 1) < 0.001 && abs(reverb) < 0.01 && abs(bass) < 0.01 {
+            return "reset"
+        }
+        return nil // Manual audio controls are not falsely labeled as a preset.
+    }
+
+    private func finishDiscovery(reason: DiscoveryEvent.SkipReason?, exported: Bool = false) {
+        let event = discoveryTracker.finish(reason: reason, selectedPreset: selectedCreativePresetID,
+            materialID: CreativePresetCatalog.material(selection: selectedCreativePresetID).id,
+            experienceID: selectedCreativePresetID, audioPreset: discoveryAudioPreset,
+            exported: exported)
+        guard let event else { return }
+        discoveryEvents.append(event)
+        if discoveryEvents.count > DiscoveryEventLog.eventLimit {
+            discoveryEvents.removeFirst(discoveryEvents.count - DiscoveryEventLog.eventLimit)
+        }
+        let previous = discoveryPersistenceTask
+        let log = discoveryLog
+        discoveryPersistenceTask = Task {
+            await previous?.value
+            await log.append(event)
+        }
+    }
+
+    private func analyzeDiscoveryAudio(track: Track, localURL: URL) {
+        discoveryAnalysisTask?.cancel()
+        guard energyBudget.allowsNewAnalysis, localURL.isFileURL else { return }
+        // One cancelable offline analysis for the confirmed local track, never per frame.
+        discoveryAnalysisTask = Task(priority: .utility) {
+            do {
+                let result = try await MusicIntelligenceEngine.shared.analysis(for: localURL)
+                guard !Task.isCancelled, playingTrackID == track.id else { return }
+                acousticVectors[track.id] = DiscoveryFeatureVector(analysis: result)
+                if acousticVectors.count > 200 {
+                    let permitted = Set(playHistory.entries.keys).union([track.id])
+                    acousticVectors = acousticVectors.filter { permitted.contains($0.key) }
+                }
+            } catch {
+                // Missing local features are nil and never block listening.
+            }
         }
     }
 
@@ -1263,6 +1424,7 @@ struct ContentView: View {
                 let seconds = Double(elapsed.components.seconds)
                     + Double(elapsed.components.attoseconds) / 1e18
                 TelemetryManager.shared.log(.exportCompleted(format: format, renderSeconds: seconds))
+                finishDiscovery(reason: nil, exported: true)
                 shareItem = ShareItem(url: url)
             } catch {
                 TelemetryManager.shared.log(.exportFailed(format: format))

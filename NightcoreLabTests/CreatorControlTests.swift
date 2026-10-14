@@ -153,4 +153,55 @@ final class CreatorControlTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(preview.dataProvider?.data) as Data,
                        try XCTUnwrap(output.dataProvider?.data) as Data)
     }
+
+    func testSongProfileHotSwapIsDeterministicWithoutPlaybackTimelineEdits() throws {
+        let base = try clip(mode: .lyrics)
+        let profile = SongCreativeProfile(
+            assetID: "fixture", sourceRevision: "r1",
+            visualPresetID: "neon-pulse",
+            materialID: CreativePresetCatalog.material(selection: "neon-pulse").id,
+            typographyPreset: TypographyPreset(style: .kinetic),
+            padMapping: SongPadGuardrails(
+                bpm: 145, tonic: nil, scale: nil, subdivision: 2,
+                melodicPadTuningActive: false),
+            vocalAndAudioFXMacro: 0.2,
+            reactionProfile: .responsive)
+        let first = SongCreativeProfileResolver.creatorPreset(for: profile)
+        let repeated = SongCreativeProfileResolver.creatorPreset(for: profile)
+        XCTAssertEqual(first, repeated)
+        XCTAssertTrue(first.isValid)
+        let data = try JSONEncoder().encode(first)
+        XCTAssertEqual(try JSONDecoder().decode(
+            CreatorPreset.self, from: data), first)
+        var legacyJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacyJSON.removeValue(forKey: "songProfile")
+        let legacy = try JSONDecoder().decode(
+            CreatorPreset.self,
+            from: JSONSerialization.data(withJSONObject: legacyJSON))
+        XCTAssertNil(legacy.songProfile)
+
+        var changedControls = CreatorControls()
+        changedControls.set(0.9, for: .glow)
+        let edited = CreatorPreset(
+            experienceID: "original", materialID: "original-marble",
+            typography: TypographyPreset(style: .neon),
+            controls: changedControls)
+        let swapped = SongCreativeProfileResolver.creatorPreset(
+            for: profile, preserving: edited)
+        XCTAssertEqual(swapped.controls, edited.controls)
+        XCTAssertEqual(swapped.exportProfile, edited.exportProfile)
+        let frozen = swapped.applying(to: base)
+        let second = swapped.applying(to: base)
+        XCTAssertEqual(frozen.playbackTime, base.playbackTime)
+        XCTAssertEqual(second.playbackTime, base.playbackTime)
+        let timeline = StoryRenderTimeline(
+            request: frozen,
+            profile: swapped.exportProfile.encodingProfile(for: .lyrics))
+        let at = timeline.frame(at: 1)
+        XCTAssertEqual(
+            frozen.resolvedFrame(at, audioTimeline: nil, rhythm: nil),
+            second.resolvedFrame(at, audioTimeline: nil, rhythm: nil))
+    }
+
 }

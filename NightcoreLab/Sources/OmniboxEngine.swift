@@ -105,99 +105,246 @@ enum OmniboxRanker {
 
 // MARK: - Engine
 
+/// The cache is small and in-memory (NSCache retains at most 100 keys).
+/// Its stale window is a resilience fallback, not a claim that results are fresh.
+enum OmniboxCachePolicy {
+    static let freshTTL: TimeInterval = 5 * 60
+    static let staleTTL: TimeInterval = 24 * 60 * 60
+
+    enum Freshness: Equatable {
+        case fresh
+        case stale
+        case expired
+    }
+
+    static func freshness(savedAt: Date, now: Date = .now) -> Freshness {
+        let age = now.timeIntervalSince(savedAt)
+        guard age.isFinite, age >= 0 else { return .expired }
+        if age <= freshTTL { return .fresh }
+        return age <= staleTTL ? .stale : .expired
+    }
+}
+
+enum OmniboxLoadState: Equatable {
+    case idle
+    case local
+    case loading
+    case partial
+    case ready
+    case failed
+}
+
+private enum OmniboxResponse: Sendable {
+    case hits([TrackHit])
+    case suggestions([String])
+    case failedHits
+    case failedSuggestions
+}
+
 @MainActor
 @Observable
 final class OmniboxEngine {
     private(set) var results: [TrackHit] = []
     private(set) var suggestions: [String] = []
-    private(set) var directVideoID: String?          // link/ID colado: o app resolve direto
+    private(set) var directVideoID: String?
     private(set) var isSearching = false
     private(set) var lastRequestFailed = false
     private(set) var hasSearched = false
+    private(set) var loadState: OmniboxLoadState = .idle
+    private(set) var isShowingStaleCache = false
 
     @ObservationIgnored private var historyStore: PlayHistoryStore?
     private var history: [String: HistoryEntry] { historyStore?.entries ?? [:] }
-
     func useHistoryStore(_ store: PlayHistoryStore) { historyStore = store }
 
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var requestGeneration = UUID()
     @ObservationIgnored private let cache = NSCache<NSString, Box>()
-    private var baseURL: URL
-    private let session: URLSession
+    @ObservationIgnored private var baseURL: URL
+    @ObservationIgnored private let session: URLSession
+    @ObservationIgnored private let debounce: Duration
+    @ObservationIgnored private let now: () -> Date
 
-    private final class Box { let hits: [TrackHit]; let sugg: [String]
-        init(_ h: [TrackHit], _ s: [String]) { hits = h; sugg = s } }
+    private final class Box {
+        let hits: [TrackHit]
+        let suggestions: [String]
+        let savedAt: Date
+        init(_ hits: [TrackHit], _ suggestions: [String], savedAt: Date = .now) {
+            self.hits = hits
+            self.suggestions = suggestions
+            self.savedAt = savedAt
+        }
+    }
 
-    init(baseURL: URL) {
+    init(baseURL: URL, session: URLSession? = nil,
+         debounce: Duration = .milliseconds(220),
+         now: @escaping () -> Date = Date.init) {
         self.baseURL = baseURL
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 8
-        session = URLSession(configuration: cfg)
+        self.debounce = debounce
+        self.now = now
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 8
+            self.session = URLSession(configuration: config)
+        }
         cache.countLimit = 100
     }
 
+    /// Invalidates even a late response that ignores URLSession cancellation.
     func useServer(_ newURL: URL) {
         guard baseURL != newURL else { return }
         task?.cancel()
+        requestGeneration = UUID()
         baseURL = newURL
-        cache.removeAllObjects()
+        cache.removeAllObjects() // Cached requests never cross server scopes.
+        results = []
+        suggestions = []
+        directVideoID = nil
         isSearching = false
+        hasSearched = false
+        lastRequestFailed = false
+        isShowingStaleCache = false
+        loadState = .idle
     }
 
-    /// Chame em `.onChange(of: text)`.
+    /// Each edit starts a new generation. Cancellation alone is not a
+    /// correctness boundary; no old generation may publish or cache results.
     func queryChanged(_ raw: String) {
         task?.cancel()
+        requestGeneration = UUID()
+        let generation = requestGeneration
         directVideoID = nil
         lastRequestFailed = false
         hasSearched = false
+        isShowingStaleCache = false
+        suggestions = []
 
         switch OmniboxIntent.classify(raw) {
         case .empty:
-            results = []; suggestions = []; isSearching = false
+            results = []
+            isSearching = false
+            loadState = .idle
         case .direct(let id):
-            results = []; suggestions = []; isSearching = false; directVideoID = id
-        case .text(let q):
-            results = OmniboxRanker.localMatches(q, history: history)         // instantâneo
-            guard q.count >= 2 else { return }
+            results = []
+            isSearching = false
+            directVideoID = id
+            loadState = .idle
+        case .text(let query):
+            // Keep only local matches for the newly typed query.
+            results = OmniboxRanker.localMatches(query, history: history)
+            isSearching = false
+            loadState = .local
+            guard query.count >= 2 else { return }
 
-            let key = MetadataCleaner.key(q) as NSString
-            if let cached = cache.object(forKey: key) {
-                results = OmniboxRanker.rank(query: q, remote: cached.hits, history: history)
-                suggestions = cached.sugg; isSearching = false; hasSearched = true
-                return
+            let key = MetadataCleaner.key(query) as NSString
+            let candidate = cache.object(forKey: key)
+            let freshness = candidate.map {
+                OmniboxCachePolicy.freshness(savedAt: $0.savedAt, now: now())
+            } ?? .expired
+
+            if let candidate, freshness != .expired {
+                results = OmniboxRanker.rank(query: query, remote: candidate.hits,
+                                            history: history)
+                suggestions = candidate.suggestions
+                hasSearched = true
+                if freshness == .fresh {
+                    loadState = .ready
+                    return
+                }
+                isShowingStaleCache = true
             }
+
+            let endpoint = baseURL
             isSearching = true
+            loadState = isShowingStaleCache ? .partial : .loading
             task = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(220))                 // debounce
-                guard !Task.isCancelled, let self else { return }
-                do {
-                    async let hits = self.fetch([TrackHit].self, "v1/search", q)
-                    async let sugg = self.fetch([String].self, "v1/suggest", q)
-                    let (h, s) = (try await hits, (try? await sugg) ?? [])
-                    guard !Task.isCancelled else { return }
-                    self.cache.setObject(Box(h, s), forKey: key)
-                    self.results = OmniboxRanker.rank(query: q, remote: h, history: self.history)
-                    self.suggestions = s
-                    self.isSearching = false
-                    self.hasSearched = true
-                } catch {
-                    if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
-                    self.isSearching = false
-                    self.lastRequestFailed = true
-                    self.hasSearched = true  // falha: preserva histórico
+                do { try await Task.sleep(for: self?.debounce ?? .milliseconds(220)) }
+                catch { return }
+                guard !Task.isCancelled, let self,
+                      self.requestGeneration == generation else { return }
+
+                var freshHits: [TrackHit]?
+                var freshSuggestions: [String]?
+                var hitsFailed = false
+                var suggestionsFailed = false
+
+                await withTaskGroup(of: OmniboxResponse.self) { group in
+                    group.addTask {
+                        do {
+                            return .hits(try await self.fetch([TrackHit].self,
+                                        path: "v1/search", query: query, endpoint: endpoint))
+                        } catch { return .failedHits }
+                    }
+                    group.addTask {
+                        do {
+                            return .suggestions(try await self.fetch([String].self,
+                                        path: "v1/suggest", query: query, endpoint: endpoint))
+                        } catch { return .failedSuggestions }
+                    }
+                    for await response in group {
+                        guard !Task.isCancelled,
+                              self.requestGeneration == generation else {
+                            group.cancelAll()
+                            return
+                        }
+                        switch response {
+                        case .hits(let hits):
+                            freshHits = hits
+                            self.results = OmniboxRanker.rank(query: query, remote: hits,
+                                                               history: self.history)
+                            self.isShowingStaleCache = false
+                        case .suggestions(let values):
+                            freshSuggestions = values
+                            self.suggestions = values
+                        case .failedHits:
+                            hitsFailed = true
+                        case .failedSuggestions:
+                            suggestionsFailed = true
+                        }
+                        // Display the first successful part without awaiting the
+                        // second endpoint. The spinner stays until both settle.
+                        self.loadState = .partial
+                    }
+                }
+
+                guard !Task.isCancelled,
+                      self.requestGeneration == generation else { return }
+                if let freshHits {
+                    self.cache.setObject(Box(freshHits,
+                        freshSuggestions ?? candidate?.suggestions ?? [],
+                        savedAt: self.now()), forKey: key)
+                }
+                self.isSearching = false
+                self.hasSearched = true
+                self.lastRequestFailed = hitsFailed || suggestionsFailed
+                if hitsFailed && freshHits == nil && freshSuggestions == nil &&
+                   !self.isShowingStaleCache && self.results.isEmpty {
+                    self.loadState = .failed
+                } else if hitsFailed || suggestionsFailed || self.isShowingStaleCache {
+                    self.loadState = .partial
+                } else {
+                    self.loadState = .ready
                 }
             }
         }
     }
 
-    private func fetch<T: Decodable>(_ type: T.Type, _ path: String, _ q: String) async throws -> T {
-        var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "q", value: q)]
-        let (data, resp) = try await session.data(from: comps.url!)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        return try JSONDecoder().decode(T.self, from: data)
+    private func fetch<T: Decodable>(_ type: T.Type, path: String, query: String,
+                                     endpoint: URL) async throws -> T {
+        var components = URLComponents(url: endpoint.appendingPathComponent(path),
+                                       resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        let (data, response) = try await session.data(from: components.url!)
+        try Task.checkCancellation()
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(type, from: data)
     }
 }
+
 extension TrackHit {
     var asTrack: Track {
         Track(id: id, title: title,

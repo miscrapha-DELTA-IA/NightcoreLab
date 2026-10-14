@@ -9,21 +9,26 @@ struct CreatorPreset: Codable, Equatable, Sendable {
     var typography: TypographyPreset
     var controls: CreatorControls
     var exportProfile: ExportProfile
+    /// Optional v1 extension; legacy user defaults remain readable.
+    var songProfile: SongCreativeProfile?
 
     init(experienceID: String, materialID: String,
          typography: TypographyPreset, controls: CreatorControls = .neutral,
-         exportProfile: ExportProfile = ExportProfile()) {
+         exportProfile: ExportProfile = ExportProfile(),
+         songProfile: SongCreativeProfile? = nil) {
         version = Self.schemaVersion
         self.experienceID = experienceID
         self.materialID = materialID
         self.typography = typography
         self.controls = controls
         self.exportProfile = exportProfile
+        self.songProfile = songProfile
     }
 
     var isValid: Bool {
         version == Self.schemaVersion &&
-        !experienceID.isEmpty && !materialID.isEmpty && controls.isValid
+        !experienceID.isEmpty && !materialID.isEmpty && controls.isValid &&
+        (songProfile?.isValid ?? true)
     }
 
     func applying(to request: StoryVideoRequest) -> StoryVideoRequest {
@@ -62,7 +67,7 @@ struct CreatorPreset: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, experienceID, materialID, typography, controls, exportProfile
+        case version, experienceID, materialID, typography, controls, exportProfile, songProfile
     }
 
     init(from decoder: Decoder) throws {
@@ -78,6 +83,8 @@ struct CreatorPreset: Codable, Equatable, Sendable {
         typography = try c.decode(TypographyPreset.self, forKey: .typography)
         controls = try c.decode(CreatorControls.self, forKey: .controls)
         exportProfile = try c.decode(ExportProfile.self, forKey: .exportProfile)
+        songProfile = try c.decodeIfPresent(
+            SongCreativeProfile.self, forKey: .songProfile)
         guard isValid else {
             throw DecodingError.dataCorrupted(.init(
                 codingPath: decoder.codingPath, debugDescription: "Invalid creator preset"))

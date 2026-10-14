@@ -1,0 +1,30 @@
+name: Playback Foundation Backend Regression
+
+on:
+  pull_request:
+    branches: [main, stage-16a-discovery-engine, stage-17-spotifast-playback-foundation, stage-17b-search-persistence-robustness, stage-17c-ios-remote-transport, stage-17d-karaoke-smoothness , stage-18a-performance-pad-engine, stage-18a2-source-clip-pad, stage-18a3-fingerdrum-latency-profiling, stage-18a4-latency-findings-minimal-fix, stage-18a5-device-latency-evidence, stage-18a6-pad-touch-delivery]
+    paths:
+      - 'NightcoreLab/Sources/**'
+      - 'NightcoreLabTests/**'
+      - 'backend/**'
+      - '.github/workflows/playback-backend-regression.yml'
+  workflow_dispatch:
+
+# Stop obsolete jobs only for the *same* PR. Never cancel another PR's gates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  python-offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing backend dependencies
+        run: python -m pip install -r backend/requirements.txt httpx
+      - name: Run all backend unit tests (no live YouTube required)
+        run: python -m unittest discover -s backend -p 'test_*.py' -v
