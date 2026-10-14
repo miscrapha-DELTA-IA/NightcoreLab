@@ -7,6 +7,54 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
 
+    func testExp4SongDNAMappingAndSectionBoundariesAreDeterministic() throws {
+        let sections = [
+            MusicSection(startTime: 0, endTime: 8, label: .intro, confidence: 0.9),
+            MusicSection(startTime: 8, endTime: 24, label: .verse, confidence: 0.9),
+            MusicSection(startTime: 24, endTime: 40, label: .chorus, confidence: 0.95),
+            MusicSection(startTime: 40, endTime: 50, label: .buildup, confidence: 0.8)
+        ]
+        let dna = SongDNA(assetID: "fixture-song", sourceRevision: "revision-1",
+                          sourceDuration: 60, bpm: 152,
+                          beatTimestamps: [0, 0.395, 0.790], energy: 0.8,
+                          sections: sections)
+        XCTAssertTrue(dna.isValid)
+        let decoded = try JSONDecoder().decode(SongDNA.self,
+                                               from: JSONEncoder().encode(dna))
+        XCTAssertEqual(decoded, dna)
+        XCTAssertEqual(SongCreativeProfileResolver.suggest(dna: dna),
+                       SongCreativeProfileResolver.suggest(dna: decoded))
+        let profile = SongCreativeProfileResolver.suggest(dna: dna)
+        XCTAssertEqual(profile.visualPresetID, "neon-pulse")
+        XCTAssertEqual(profile.padKitID, PadKit.starter.id)
+        XCTAssertEqual(profile.padMapping.bpm, 152)
+        XCTAssertFalse(profile.padMapping.melodicPadTuningActive)
+
+        XCTAssertEqual(dna.section(at: 7.999)?.label, .intro)
+        XCTAssertEqual(dna.section(at: 8)?.label, .verse)
+        XCTAssertEqual(dna.section(at: 24)?.label, .chorus)
+        XCTAssertEqual(dna.section(at: 40)?.label, .buildup)
+        XCTAssertNil(dna.section(at: 55))
+        XCTAssertLessThan(SongSectionCadence.at(sourceTime: 1, dna: dna).visual,
+                          SongSectionCadence.at(sourceTime: 25, dna: dna).visual)
+
+        let parameters = CreativeParameterFrame(
+            playerGlow: 0.8, marbleDistortion: 0.6,
+            lyricKinetics: 0.5, particleEmission: 0.4)
+        XCTAssertEqual(SongSectionCadence.apply(parameters, cadence:
+            .at(sourceTime: 25, dna: dna)), parameters)
+        XCTAssertEqual(SongSectionCadence.apply(parameters, cadence:
+            .at(sourceTime: 1, dna: dna)).playerGlow, 0.52, accuracy: 0.0001)
+
+        let fallback = SongDNA(assetID: "fixture-song", sourceRevision: "revision-1",
+                               sourceDuration: 60)
+        XCTAssertTrue(fallback.isValid)
+        XCTAssertEqual(SongCreativeProfileResolver.suggest(dna: fallback).visualPresetID,
+                       CreativePresetCatalog.defaultID)
+        XCTAssertEqual(SongSectionCadence.at(sourceTime: 24, dna: fallback), .neutral)
+    }
+
+
     // MARK: Deterministic fixtures
 
     /// Small LCG so fixtures are identical on every run and device.

@@ -162,3 +162,43 @@ enum CreativeParameterResolver {
             particleEmission: evaluated(.particleEmission))
     }
 }
+
+
+// MARK: - Stage 19A.1 — deterministic source-time section cadence
+
+/// Pure envelope above the existing visual equations, not a second shader
+/// or clock. MusicSectionLabel has buildup/instrumental, not a drop case.
+struct SongSectionCadence: Equatable, Sendable {
+    let visual: Double
+    let typography: Double
+    let motion: Double
+    static let neutral = SongSectionCadence(visual: 1, typography: 1, motion: 1)
+
+    static func at(sourceTime: TimeInterval, dna: SongDNA?) -> SongSectionCadence {
+        guard let section = dna?.section(at: sourceTime) else { return .neutral }
+        switch section.label {
+        case .intro, .outro:
+            return SongSectionCadence(visual: 0.65, typography: 0.68, motion: 0.65)
+        case .verse:
+            return SongSectionCadence(visual: 0.85, typography: 0.90, motion: 0.82)
+        case .chorus:
+            return .neutral // Full intensity; no amplification or clipping.
+        case .buildup, .instrumental:
+            return SongSectionCadence(visual: 0.96, typography: 1, motion: 1)
+        case .bridge:
+            return SongSectionCadence(visual: 0.78, typography: 0.82, motion: 0.80)
+        case .unknown:
+            return .neutral
+        }
+    }
+
+    static func apply(_ frame: CreativeParameterFrame,
+                      cadence: SongSectionCadence) -> CreativeParameterFrame {
+        guard cadence != .neutral else { return frame }
+        return CreativeParameterFrame(
+            playerGlow: frame.playerGlow * cadence.visual,
+            marbleDistortion: frame.marbleDistortion * cadence.motion,
+            lyricKinetics: frame.lyricKinetics * cadence.typography,
+            particleEmission: frame.particleEmission * cadence.visual)
+    }
+}
