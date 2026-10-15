@@ -1380,3 +1380,30 @@ final class Stage37ExportStabilizationTests: XCTestCase {
         XCTAssertTrue(scene.contains("request.showsLyrics"))
     }
 }
+
+
+final class Stage38AlbumArtistRuntimeTests: XCTestCase {
+    func testOlderTrackJSONStillDecodesWhenAlbumAndTrackOrderMissing() throws {
+        let oldJSON = #"{"id":"legacy","title":"Aurora - Song","thumbnailURL":null,"isCached":false}"#
+        let decoded = try JSONDecoder().decode(Track.self, from: Data(oldJSON.utf8))
+        XCTAssertNil(decoded.trackNumber)
+        XCTAssertNil(decoded.album)
+        let grouped = AlbumArtistCollectionResolver.resolve(anchor: decoded, candidates: [])
+        XCTAssertEqual(grouped.playbackTracks.map(\.id), ["legacy"])
+        XCTAssertTrue(grouped.usedArtistFallback)
+    }
+
+    func testAlbumResolverDoesNotMatchGenericOrUnrelatedAlbums() {
+        var a = Track(id: "a", title: "Artist A - Track A", thumbnailURL: nil)
+        a.album = "Single"
+        var b = Track(id: "b", title: "Artist B - Track B", thumbnailURL: nil)
+        b.album = "Single"
+        var c = Track(id: "c", title: "Artist A - Another", thumbnailURL: nil)
+        c.album = "Album Z"
+        XCTAssertNil(AlbumArtistCollectionResolver.albumTitle(for: a))
+        let group = AlbumArtistCollectionResolver.resolve(
+            anchor: a, candidates: [b, c], mode: .album)
+        XCTAssertEqual(group.playbackTracks.map(\.id), ["a", "c"])
+        XCTAssertTrue(group.usedArtistFallback)
+    }
+}
