@@ -61,7 +61,7 @@ final class OfflineLibrary: ObservableObject {
                 let result = try await MusicIntelligenceEngine.shared.analysis(for: url)
                 if OfflineReadiness(audio: true, syncedLyrics: hasLyrics,
                     songDNA: result.energyTimeline != nil &&
-                        result.rhythmAnalysis != nil).isReady {
+                        result.isTerminal).isReady {
                     readyIDs.insert(track.id)
                 } else {
                     failedIDs.insert(track.id)

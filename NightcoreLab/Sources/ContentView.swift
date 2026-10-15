@@ -229,8 +229,24 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
     }
 
-    private var playerLifecycle: some View {
+    private var offlineAwareCanvas: some View {
         playerCanvas
+            .onChange(of: searchDrawer.isOpen) { _, open in
+                if open, let lyricsPrefetcher {
+                    offlineLibrary.refresh(downloader.allCachedTracks,
+                        downloader: downloader, lyrics: lyricsPrefetcher)
+                }
+            }
+            .onChange(of: downloader.cachedIDs) { _, _ in
+                if searchDrawer.isOpen, let lyricsPrefetcher {
+                    offlineLibrary.refresh(downloader.allCachedTracks,
+                        downloader: downloader, lyrics: lyricsPrefetcher)
+                }
+            }
+    }
+
+    private var playerLifecycle: some View {
+        offlineAwareCanvas
         .onAppear {
             let saved = CreativeSessionPreferences.load()
             currentTheme = saved.theme
@@ -298,18 +314,6 @@ struct ContentView: View {
         // The system's lock-screen controls reflect confirmed queue state.
         .onChange(of: playbackQueue.upNextQueue.map(\.id)) { _, _ in
             synchronizeRemoteAvailability()
-        }
-        .onChange(of: searchDrawer.isOpen) { _, open in
-            if open, let lyricsPrefetcher {
-                offlineLibrary.refresh(downloader.allCachedTracks,
-                    downloader: downloader, lyrics: lyricsPrefetcher)
-            }
-        }
-        .onChange(of: downloader.cachedIDs) { _, _ in
-            if searchDrawer.isOpen, let lyricsPrefetcher {
-                offlineLibrary.refresh(downloader.allCachedTracks,
-                    downloader: downloader, lyrics: lyricsPrefetcher)
-            }
         }
         .onChange(of: navigationHistory.previousTrack?.id) { _, _ in
             synchronizeRemoteAvailability()
