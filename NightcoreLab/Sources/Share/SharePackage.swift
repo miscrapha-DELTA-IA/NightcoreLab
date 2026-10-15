@@ -59,11 +59,18 @@ enum SharePackageError: LocalizedError {
 /// Product orchestration ABOVE the stable StoryVideoExporter.
 @MainActor
 enum SharePackageBuilder {
-    /// No cleanup on share-sheet dismissal: the system may still be reading
-    /// URLs asynchronously. Collect abandoned packages only after 24 hours.
+    /// The finished package lives in Caches while the share sheet may still
+    /// read its URLs. Intermediate writer/mux files remain in Temporary and
+    /// are removed as soon as packaging finishes or cancellation is observed.
+    private static var packageRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ??
+            FileManager.default.temporaryDirectory
+    }
+
+    /// Collect abandoned completed packages after 24 hours.
     private static func pruneExpiredPackages() {
         let manager = FileManager.default
-        let root = manager.temporaryDirectory
+        let root = packageRoot
         guard let contents = try? manager.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]) else { return }
@@ -92,7 +99,7 @@ enum SharePackageBuilder {
                 profile: encoding, mode: request.mode)
         }
         let timeline = StoryRenderTimeline(request: request, profile: encoding)
-        let folder = FileManager.default.temporaryDirectory
+        let folder = packageRoot
             .appendingPathComponent("NightcoreShare-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: folder, withIntermediateDirectories: true)

@@ -224,5 +224,9 @@ final class ShareExportPipelineTests: XCTestCase {
         XCTAssertEqual(size.width, CGFloat(encoding.width))
         XCTAssertEqual(size.height, CGFloat(encoding.height))
         XCTAssertEqual(metadata.thumbnailElapsed, 0)
+        XCTAssertFalse(output.videoURL.path.hasPrefix(
+            FileManager.default.temporaryDirectory.path))
+        output.cleanup()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.videoURL.path))
     }
 }
