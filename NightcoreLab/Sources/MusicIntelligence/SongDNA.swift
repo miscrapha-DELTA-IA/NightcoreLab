@@ -147,7 +147,9 @@ struct SongDNA: Codable, Equatable, Sendable {
 actor SongSectionTracker {
     func modulation(for dna: SongDNA?, sourceTime: TimeInterval,
                     enabled: Bool) -> SongSectionCadence {
-        guard enabled, let dna, dna.isValid else { return .neutral }
+        // SongDNA validity is checked once before publishing it to the player.
+        // A background actor performs only binary search during playback.
+        guard enabled, let dna else { return .neutral }
         return SongSectionCadence.at(sourceTime: sourceTime, dna: dna)
     }
 }
