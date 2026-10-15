@@ -97,6 +97,11 @@ final class AudioEngineManager {
     private let stemPlayers = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
         ($0, AVAudioPlayerNode())
     })
+    /// Native gain after each prepared stem, so 200% is a real +6.02 dB boost
+    /// instead of relying on AVAudioPlayerNode.volume (nominal range 0...1).
+    private let stemGainEQs = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
+        ($0, AVAudioUnitEQ(numberOfBands: 1))
+    })
     private(set) var stemMixEnabled = false
     private(set) var stemLevels: [StemKind: Float] = Dictionary(
         uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
@@ -185,7 +190,9 @@ final class AudioEngineManager {
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
-        [player, centerCutPlayer] + StemKind.allCases.compactMap { stemPlayers[$0] } +
+        [player, centerCutPlayer] +
+        StemKind.allCases.compactMap { stemPlayers[$0] } +
+        StemKind.allCases.compactMap { stemGainEQs[$0] } +
         [upmix, varispeed, timePitch, bassEQ, stemEQ, reverbNode, performanceMixer, limiter]
     }
 
@@ -317,7 +324,11 @@ final class AudioEngineManager {
         centerCutPlayer.volume = 0
         for kind in StemKind.allCases {
             guard let node = stemPlayers[kind] else { continue }
-            engine.connect(node, to: upmix, format: graphFormat)
+            guard let gainEQ = stemGainEQs[kind] else { continue }
+            engine.connect(node, to: gainEQ, format: graphFormat)
+            engine.connect(gainEQ, to: upmix, format: graphFormat)
+            gainEQ.bands[0].bypass = true
+            gainEQ.globalGain = 0
             node.volume = 0
         }
         player.volume = 1
@@ -939,7 +950,7 @@ final class AudioEngineManager {
         setStemMixerEnabled(true)
         if stemsAvailable {
             for kind in StemKind.allCases {
-                stemPlayers[kind]?.volume = stemLevels[kind] ?? 1
+                applyPreparedStemGain(kind, level: stemLevels[kind] ?? 1)
             }
         }
     }
@@ -951,7 +962,7 @@ final class AudioEngineManager {
         if !stemMixEnabled { setStemMixerEnabled(true) }
         if !stemsAvailable { requestStemPreparation() }
         if stemsAvailable {
-            stemPlayers[kind]?.volume = clamped
+            applyPreparedStemGain(kind, level: clamped)
         } else {
             applyLiveStemEQ()
         }
@@ -959,6 +970,12 @@ final class AudioEngineManager {
 
     func resetStemLevels() {
         for kind in StemKind.allCases { setStemLevel(kind, level: 1) }
+    }
+
+    private func applyPreparedStemGain(_ kind: StemKind, level: Float) {
+        let clamped = level.clamped(to: Self.stemRange)
+        stemPlayers[kind]?.volume = min(1, clamped)
+        stemGainEQs[kind]?.globalGain = clamped > 1 ? 20 * log10(clamped) : 0
     }
 
     private func applyLiveStemEQ() {
@@ -1005,7 +1022,11 @@ final class AudioEngineManager {
         stemRampTask?.cancel()
         let active = stemMixEnabled && stemsAvailable
         let original = player.volume
-        let initial = stemPlayers.mapValues(\.volume)
+        let initial = Dictionary(uniqueKeysWithValues: StemKind.allCases.map { kind in
+            let volume = stemPlayers[kind]?.volume ?? 0
+            let gain = stemGainEQs[kind]?.globalGain ?? 0
+            return (kind, volume * pow(Float(10), gain / 20))
+        })
         let targets = stemLevels
         stemRampTask = Task { [weak self] in
             for step in 1...5 {
@@ -1016,7 +1037,7 @@ final class AudioEngineManager {
                 for kind in StemKind.allCases {
                     let start = initial[kind] ?? 0
                     let target = active ? (targets[kind] ?? 1) : 0
-                    self.stemPlayers[kind]?.volume = start + (target - start) * progress
+                    self.applyPreparedStemGain(kind, level: start + (target - start) * progress)
                 }
             }
             if !active, let self { self.stemPlayers.values.forEach { $0.stop() } }
