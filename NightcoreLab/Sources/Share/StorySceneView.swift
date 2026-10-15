@@ -401,7 +401,8 @@ private struct StoryLyricLine: View {
                     wordSeed: resolved.seed,
                     tracking: frame.preset.font.tracking,
                     glowRadius: 7 * glowMultiplier,
-                    minimumScaleFactor: 0.55)
+                    minimumScaleFactor: 0.55,
+                    estimatedTiming: frame.precision == .estimated)
                 .gapAfter(resolved.word.spaceAfter ? 10 : 0)
             }
         }
