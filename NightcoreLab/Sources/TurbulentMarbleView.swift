@@ -131,6 +131,15 @@ struct TurbulentMarbleView: View {
     @State private var motion = MarbleMotionState()
     @State private var organic = OrganicReactiveMotionState()
     @Environment(\.energyBudget) private var energyBudget
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var shouldPauseLiveShader: Bool {
+        isPaused || energyBudget.pausesShader || scenePhase != .active || reduceMotion
+    }
+    private var powerAwareShaderFPS: Double {
+        ProcessInfo.processInfo.isLowPowerModeEnabled ? min(30, maxFPS) : maxFPS
+    }
 
 
     var body: some View {
@@ -140,8 +149,8 @@ struct TurbulentMarbleView: View {
                 marbleFrame(time: frozenTime, resolved: resolvedFrame(live: false))
             } else {
                 TimelineView(.animation(
-                    minimumInterval: 1.0 / max(min(maxFPS, energyBudget.shaderFPS), 1.0),
-                    paused: isPaused || energyBudget.pausesShader
+                    minimumInterval: 1.0 / max(min(powerAwareShaderFPS, energyBudget.shaderFPS), 1.0),
+                    paused: shouldPauseLiveShader
                 )) { context in
                     // Pausing the TimelineView freezes its date; never replace
                     // the accumulated phase with zero on Notification Center
