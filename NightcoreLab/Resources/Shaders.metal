@@ -322,5 +322,8 @@ kernel void storyMarbleFrame(texture2d<float, access::write> output [[texture(0)
             half4(c[0]), half4(c[1]), half4(c[2]), v[18], v[19], v[20],
             v[21], v[22], v[15], v[23], v[24], v[25], v[26], v[27]);
     }
-    output.write(float4(color), gid);
+    // SwiftUI color effects emit premultiplied RGB. The live scene sits on
+    // black, so flattening that backing preserves RGB while ensuring that
+    // smoke/glass do not turn into translucent PNGs or encoder-dependent mats.
+    output.write(float4(float3(color.rgb), 1.0f), gid);
 }

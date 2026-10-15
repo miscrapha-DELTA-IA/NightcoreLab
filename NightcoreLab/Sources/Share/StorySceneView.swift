@@ -106,6 +106,7 @@ struct StorySceneView: View {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
             edgeVignette
+                .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             VStack(spacing: 0) {
                 HStack {
@@ -166,6 +167,7 @@ struct StorySceneView: View {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
             edgeVignette
+                .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             HStack {
                 if request.showsBrand {

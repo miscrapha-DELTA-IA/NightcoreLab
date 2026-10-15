@@ -136,7 +136,11 @@ extension PlayerBackgroundStyleTests {
                 let image = try StoryMetalSurface.shared.render(
                     size: CGSize(width: 48, height: 80), theme: theme,
                     frame: frame, phase: 2.1)
-                palettes.insert(try XCTUnwrap(image.dataProvider?.data) as Data)
+                let data = try XCTUnwrap(image.dataProvider?.data) as Data
+                palettes.insert(data)
+                XCTAssertTrue(stride(from: 3, to: data.count, by: 4).allSatisfy {
+                    data[$0] == 255
+                }, "Export must composite \(experience.id) over the live black backing")
             }
             XCTAssertEqual(palettes.count, AppTheme.allCases.count, experience.id)
         }

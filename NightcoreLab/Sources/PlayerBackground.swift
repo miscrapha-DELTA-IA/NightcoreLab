@@ -11,7 +11,7 @@ enum PlayerBackgroundStyle: Int, CaseIterable, Sendable {
     case sharp
     /// Em movimento: capa deslizando em loop contínuo.
     case marquee
-    /// Turbulent Displacement: gradientes neon animados com blur, sem imagem.
+    /// Turbulent Displacement: textura líquida Metal, compartilhada com o Story.
     case turbulent
 
     /// Próximo estilo no ciclo blurred → sharp → marquee → turbulent → blurred.
