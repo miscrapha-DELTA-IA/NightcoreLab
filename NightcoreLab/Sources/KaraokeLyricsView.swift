@@ -191,7 +191,6 @@ struct KaraokeLyricsView: View {
     @State private var followsPlayback = true
     @State private var lastRequestedLineID: Int?
     @State private var animateLineTransition = false
-    @State private var lineCenters: [Int: CGFloat] = [:]
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
@@ -257,13 +256,6 @@ struct KaraokeLyricsView: View {
                                 chords: chords(for: line), focusMode: focusMode
                             )
                             .frame(maxWidth: .infinity)
-                            .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(key: KaraokeLineCenterPreference.self,
-                                        value: [line.id: geometry.frame(in:
-                                            .named("karaoke-scroll")).midY])
-                                }
-                            }
                             .overlay(alignment: .leading) {
                                 if emphasis.showsIndicator && !line.words.isEmpty {
                                     Capsule()
@@ -288,20 +280,7 @@ struct KaraokeLyricsView: View {
                         }
                     }
                     .padding(.horizontal, inset)
-                    .background {
-                        TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
-                            paused: !store.isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
-                            KaraokeScrollCamera(
-                                targetScreenY: cameraTargetY(at: clock.lyricTime + store.userOffset),
-                                viewportCenterY: viewport.size.height * 0.5,
-                                enabled: followsPlayback && store.isPlaying,
-                                reduceMotion: reduceMotion)
-                                .frame(width: 0, height: 0)
-                        }
-                    }
                 }
-                .coordinateSpace(name: "karaoke-scroll")
-                .onPreferenceChange(KaraokeLineCenterPreference.self) { lineCenters = $0 }
                 .scrollIndicators(.hidden)
                 .contentMargins(
                     .vertical,
@@ -364,11 +343,7 @@ struct KaraokeLyricsView: View {
                 }
                 .onChange(of: store.activeLineIndex) { _, new in
                     guard followsPlayback, let new else { return }
-                    // The display-link camera handles adjacent lines. A large
-                    // explicit seek may land outside LazyVStack's mounted area.
-                    if lineCenters[new] == nil {
-                        scrollTo(new, proxy: proxy, reason: .seek)
-                    }
+                    scrollTo(new, proxy: proxy, reason: .automatic)
                 }
                 .onChange(of: store.trackID) { _, _ in
                     KaraokePerformanceProbe.shared.timelineSuspended()
@@ -396,7 +371,10 @@ struct KaraokeLyricsView: View {
             KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill,
                             onResult: onShowResult)
         }
-        .onAppear { store.startTracking() }
+        .onAppear {
+            store.scoring.present(true)
+            store.startTracking()
+        }
         .task(id: "\(store.trackID ?? "")|\(chordMode)|\(store.lines.count)|\(liveUniforms?.songDNA?.barTimestamps.count ?? 0)") {
             guard chordMode, let sourceURL,
                   let dna = liveUniforms?.songDNA, !dna.barTimestamps.isEmpty else {
@@ -435,7 +413,7 @@ struct KaraokeLyricsView: View {
             animatedDuration: decision.duration,
             automatic: reason == .automatic)
         if decision.animated {
-            withAnimation(.smooth(duration: decision.duration)) {
+            withAnimation(.easeOut(duration: 0.28)) {
                 proxy.scrollTo(id, anchor: .center)
             }
         } else {
@@ -464,19 +442,7 @@ struct KaraokeLyricsView: View {
         return result
     }
 
-    private func cameraTargetY(at time: TimeInterval) -> CGFloat? {
-        guard let progress = KaraokeStanzaCamera.interpolatedIndex(lines: store.lines,
-                                                                    at: time) else { return nil }
-        let lower = Int(progress.rounded(.down))
-        let upper = min(store.lines.count - 1, lower + 1)
-        guard store.lines.indices.contains(lower) else { return nil }
-        let first = lineCenters[store.lines[lower].id]
-        let second = lineCenters[store.lines[upper].id]
-        if let first, let second {
-            return first + (second - first) * CGFloat(progress - Double(lower))
-        }
-        return first ?? second
-    }
+
 }
 
 // MARK: - Linha
@@ -570,24 +536,29 @@ private struct KaraokeLineView: View {
         Group {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
-        } else {
+        } else if status == .active {
+            // Only the current row subscribes to display cadence, never the stanza list.
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
                 let source = clock.lyricTime
-                let active = status == .active
-                let _ = active ? KaraokePerformanceProbe.shared.timelineTick(
-                    expectedInterval: energyBudget.visualInterval) : ()
-                layout(frame: resolve(sourceTime: active ? source : -offset,
-                                      features: active ? liveUniforms?.typographyFeatures(at: source) : nil),
+                let _ = KaraokePerformanceProbe.shared.timelineTick(
+                    expectedInterval: energyBudget.visualInterval)
+                layout(frame: resolve(sourceTime: source,
+                                      features: liveUniforms?.typographyFeatures(at: source)),
                        pacing: KaraokeTimingGuide.pacing(
                            start: line.start, end: line.end, at: source + offset),
                        preview: nextPreviewEnabled && previewFrom.map {
                            KaraokeTimingGuide.previewsNext(activeEnd: $0,
                                                             at: source + offset)
                        } == true,
-                       lineFocusProgress: KaraokeStanzaCamera.focusProgress(
-                           line: line, at: source + offset))
+                       lineFocusProgress: 1)
             }
+        } else {
+            // A static row has no per-frame clock read, active animation or layout work.
+            layout(frame: resolve(sourceTime: (status == .past ? line.end : line.start) - offset,
+                                  features: nil),
+                   lineFocusProgress: status == .past ? 1 : 0)
+                .drawingGroup()
         }
         }
         .onAppear {
