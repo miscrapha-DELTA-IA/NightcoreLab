@@ -24,10 +24,14 @@ final class KaraokeExperienceTests: XCTestCase {
 
     @MainActor
     func testMicrophoneSilenceResetsComboAndSingingEarnsPoints() {
-        let lines = (0..<5).map { index in
-            TimedLyricLine(id: index, start: Double(index), end: Double(index + 1),
-                words: [.init(id: 0, text: "Cante", start: Double(index),
-                              end: Double(index + 1), spaceAfter: false)], precision: .word)
+        var lines: [TimedLyricLine] = []
+        for index in 0..<5 {
+            let start = Double(index)
+            let end = start + 1
+            let word = WordSync(id: 0, text: "Cante", start: start,
+                                end: end, spaceAfter: false)
+            lines.append(TimedLyricLine(id: index, start: start, end: end,
+                                        words: [word], precision: .word))
         }
         let session = KaraokeScoringSession()
         session.setKaraokePresented(true, lines: lines, at: 0, trackEnergy: { 1 })
