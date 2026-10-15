@@ -93,6 +93,13 @@ final class AudioEngineManager {
     // player → upmix → varispeed → timePitch (só quando necessário) → EQ → reverb → limiter → saída
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
+    private let centerCutPlayer = AVAudioPlayerNode()
+    private(set) var centerCutEnabled = false
+    private(set) var centerCutAvailable = true
+    @ObservationIgnored private var centerCutFile: AVAudioFile?
+    @ObservationIgnored private var centerCutURL: URL?
+    @ObservationIgnored private var centerCutPrepareTask: Task<Void, Never>?
+    @ObservationIgnored private var centerCutRampTask: Task<Void, Never>?
     @ObservationIgnored lazy var lyricsClock = EnginePlaybackClock(player: player)
     private let upmix = AVAudioMixerNode()
     private let varispeed = AVAudioUnitVarispeed()
@@ -151,7 +158,8 @@ final class AudioEngineManager {
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
-        [player, upmix, varispeed, timePitch, bassEQ, reverbNode, performanceMixer, limiter]
+        [player, centerCutPlayer, upmix, varispeed, timePitch, bassEQ,
+         reverbNode, performanceMixer, limiter]
     }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
@@ -218,6 +226,13 @@ final class AudioEngineManager {
     // MARK: Carregar arquivo
 
     func load(url: URL) throws {
+        centerCutPrepareTask?.cancel()
+        centerCutRampTask?.cancel()
+        centerCutPlayer.stop()
+        centerCutFile = nil
+        if let centerCutURL { try? FileManager.default.removeItem(at: centerCutURL) }
+        centerCutURL = nil
+        centerCutEnabled = false
         interruptedSourceURL = nil // A replacement must never resume a prior source.
         // Core Audio decodifica MP3/AAC para PCM float; não há conversão com perdas na importação.
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
@@ -230,6 +245,7 @@ final class AudioEngineManager {
         stopAllCreatorLoops()
         stopPlayback()
         audioFile = file
+        centerCutAvailable = file.processingFormat.channelCount == 2
         sourceURL = url
         playbackSourceRevision &+= 1
         performanceRecorder.clearAll()
@@ -252,6 +268,9 @@ final class AudioEngineManager {
                           varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
                           performanceMixer: performanceMixer)
+        engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
+        centerCutPlayer.volume = 0
+        player.volume = 1
         padRuntime.connect(to: engine, mixer: performanceMixer)
         // No mic FX wiring during load/prepare/offline tests. It is done on
         // opt-in activation, after validating actual hardware input.
@@ -663,9 +682,11 @@ final class AudioEngineManager {
                 // Preserve the existing replay-from-start behavior at EOF.
                 if lastKnownTime >= duration { lastKnownTime = 0 }
                 schedule(file, startingAt: lastKnownTime)
+                if centerCutEnabled { scheduleCenterCut(startingAt: lastKnownTime) }
             }
             lyricsClock.refreshOutputLatency()
             player.play()
+            if centerCutEnabled, centerCutFile != nil { centerCutPlayer.play() }
             interruptedSourceURL = nil
             isPlaying = true
             setupNowPlaying()
@@ -680,6 +701,7 @@ final class AudioEngineManager {
         lastKnownTime = currentTime   // captura antes de pausar, enquanto lastRenderTime é válido
         lyricsClock.didPause(at: lastKnownTime)
         player.pause()
+        centerCutPlayer.pause()
         isPlaying = false
         setupNowPlaying()
         scheduleIdleStop()
@@ -727,6 +749,7 @@ final class AudioEngineManager {
         let shouldResume = isPlaying
         scheduleGeneration += 1
         player.stop()
+        centerCutPlayer.stop()
         isPlaying = false
         lastKnownTime = target
         lyricsClock.didSeek(to: target)
@@ -734,6 +757,7 @@ final class AudioEngineManager {
         needsScheduling = true
         if target < duration {
             schedule(file, startingAt: target)
+            if centerCutEnabled { scheduleCenterCut(startingAt: target) }
             if shouldResume {
                 play()
             }
@@ -747,6 +771,75 @@ final class AudioEngineManager {
     }
 
     // MARK: Parâmetros em tempo real
+
+    func setCenterCutEnabled(_ enabled: Bool) {
+        centerCutEnabled = enabled
+        centerCutRampTask?.cancel()
+        guard enabled else { crossfadeCenterCut(to: false); return }
+        guard let sourceURL, let file = audioFile,
+              file.processingFormat.channelCount == 2 else {
+            centerCutAvailable = false
+            centerCutEnabled = false
+            return
+        }
+        centerCutAvailable = true
+        if centerCutFile != nil {
+            scheduleCenterCut(startingAt: currentTime)
+            crossfadeCenterCut(to: true)
+            return
+        }
+        let revision = playbackSourceRevision
+        centerCutPrepareTask?.cancel()
+        centerCutPrepareTask = Task { [weak self] in
+            let prepared = try? await Task.detached(priority: .utility) {
+                try CenterCutProcessor.prepare(source: sourceURL)
+            }.value
+            guard let self else { return }
+            guard self.centerCutEnabled, self.playbackSourceRevision == revision,
+                  let prepared else {
+                if let prepared { try? FileManager.default.removeItem(at: prepared) }
+                return
+            }
+            guard let ready = try? AVAudioFile(forReading: prepared,
+                                               commonFormat: .pcmFormatFloat32,
+                                               interleaved: false) else {
+                try? FileManager.default.removeItem(at: prepared)
+                self.centerCutEnabled = false
+                return
+            }
+            self.centerCutURL = prepared
+            self.centerCutFile = ready
+            self.scheduleCenterCut(startingAt: self.currentTime)
+            self.crossfadeCenterCut(to: true)
+        }
+    }
+
+    private func scheduleCenterCut(startingAt time: TimeInterval) {
+        guard let file = centerCutFile else { return }
+        centerCutPlayer.stop()
+        let start = min(max(AVAudioFramePosition(time * file.processingFormat.sampleRate), 0),
+                        file.length)
+        guard start < file.length else { return }
+        centerCutPlayer.scheduleSegment(file, startingFrame: start,
+            frameCount: AVAudioFrameCount(min(file.length - start, Int64(UInt32.max))),
+            at: nil)
+        if isPlaying { centerCutPlayer.play() }
+    }
+
+    private func crossfadeCenterCut(to enabled: Bool) {
+        let original = player.volume
+        let processed = centerCutPlayer.volume
+        centerCutRampTask = Task { [weak self] in
+            for step in 1...5 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard !Task.isCancelled, let self else { return }
+                let fraction = CenterCutProcessor.ramp(step)
+                self.player.volume = original + ((enabled ? 0 : 1) - original) * fraction
+                self.centerCutPlayer.volume = processed + ((enabled ? 1 : 0) - processed) * fraction
+            }
+            if !enabled { self?.centerCutPlayer.stop() }
+        }
+    }
 
     func setSpeed(_ value: Float) {
         speed = value.clamped(to: Self.speedRange)
@@ -890,6 +983,7 @@ final class AudioEngineManager {
         guard !isReconfiguringGraph, generation == scheduleGeneration else { return }
         karaokeCompletion?()
         player.stop()
+        centerCutPlayer.stop()
         // Pads are an independent performance surface: ending the song must
         // not choke a cymbal or 808 that the user is still hearing.
         needsScheduling = true
@@ -906,6 +1000,7 @@ final class AudioEngineManager {
         cancelIdleStop()
         scheduleGeneration += 1
         player.stop()
+        centerCutPlayer.stop()
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0
@@ -1203,7 +1298,8 @@ final class AudioEngineManager {
             // safely be distinguished from user files, so intentionally keep
             // them rather than deleting someone else's temporary WAV.
             let owned = url.lastPathComponent.hasPrefix("nightcore_export_") ||
-                        url.lastPathComponent.hasPrefix("NightcorePerformance-")
+                        url.lastPathComponent.hasPrefix("NightcorePerformance-") ||
+                        url.lastPathComponent.hasPrefix("nightcore_center_cut_")
             guard owned,
                   (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   let type = UTType(filenameExtension: url.pathExtension),

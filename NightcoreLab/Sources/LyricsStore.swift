@@ -49,6 +49,9 @@ final class LyricsStore {
     @ObservationIgnored private var clock: PlaybackClock?
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var refinedCache: [String: (source: String, lines: [TimedLyricLine])] = [:]
+    @ObservationIgnored private var rawSource: String?
+    @ObservationIgnored private var acousticRefinementKey: String?
 
     // MARK: Contrato
 
@@ -90,6 +93,8 @@ final class LyricsStore {
         loadTask?.cancel()
         scoring.stop()
         self.trackID = trackID
+        rawSource = rawLRC
+        acousticRefinementKey = nil
         self.needsReview = needsReview
         status = .searching
         lines = []
@@ -97,14 +102,33 @@ final class LyricsStore {
         scrollAnchorLineID = 0
         hasWordSync = false
 
+        if let cached = refinedCache[trackID], cached.source == rawLRC {
+            lines = cached.lines
+            hasWordSync = cached.lines.contains { $0.precision == .word }
+            status = cached.lines.isEmpty ? .unavailable : .ready
+            syncNow()
+            return
+        }
+
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let parsed = EnhancedLRCParser.parse(rawLRC)
+            let refined: [TimedLyricLine]
+            if let cached = await LyricsAlignmentCache.shared.load(
+                trackID: trackID, source: rawLRC) {
+                refined = cached
+            } else {
+                let parsed = rawLRC.contains("Dialogue:")
+                    ? ASSKaraokeParser.parse(rawLRC) : EnhancedLRCParser.parse(rawLRC)
+                refined = LyricsAlignmentRefiner.refine(parsed.lines)
+                await LyricsAlignmentCache.shared.save(refined, trackID: trackID,
+                                                       source: rawLRC)
+            }
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, self.trackID == trackID else { return }
-                self.lines = parsed.lines
-                self.hasWordSync = parsed.hasWordSync
-                self.status = parsed.lines.isEmpty ? .unavailable : .ready
+                self.refinedCache[trackID] = (source: rawLRC, lines: refined)
+                self.lines = refined
+                self.hasWordSync = refined.contains { $0.precision == .word }
+                self.status = refined.isEmpty ? .unavailable : .ready
                 self.syncNow()
             }
         }
@@ -112,9 +136,50 @@ final class LyricsStore {
 
     func clear() {
         loadTask?.cancel()
+        rawSource = nil
+        acousticRefinementKey = nil
         scoring.resetForTrack()
         trackID = nil; lines = []; activeLineIndex = nil; scrollAnchorLineID = 0; hasWordSync = false
         status = .idle; needsReview = false; isPlaying = false
+    }
+
+    /// Replaces only estimated words after cached rhythm evidence arrives.
+    /// The parse and cache write stay off the main actor.
+    func refineUsing(_ dna: SongDNA, sourceURL: URL? = nil) {
+        guard let trackID, let rawSource, !lines.isEmpty,
+              !dna.onsetTimestamps.isEmpty || !dna.beatTimestamps.isEmpty else { return }
+        let key = dna.sourceRevision + ":\(dna.onsetTimestamps.count):\(dna.beatTimestamps.count)"
+        guard acousticRefinementKey != key else { return }
+        acousticRefinementKey = key
+        Task.detached(priority: .utility) { [weak self] in
+            let cacheSource = rawSource + "|" + key
+            let refined: [TimedLyricLine]
+            if let cached = await LyricsAlignmentCache.shared.load(
+                trackID: trackID, source: cacheSource) {
+                refined = cached
+            } else {
+                let parsed = rawSource.contains("Dialogue:")
+                    ? ASSKaraokeParser.parse(rawSource) : EnhancedLRCParser.parse(rawSource)
+                let vocalEnergy = sourceURL.flatMap {
+                    try? StereoVocalEnergyAnalyzer.analyze($0)
+                } ?? []
+                refined = LyricsAlignmentRefiner.refine(parsed.lines,
+                    onsets: dna.onsetTimestamps,
+                    barBeats: dna.beatTimestamps + dna.barTimestamps,
+                    vocalEnergy: vocalEnergy)
+                await LyricsAlignmentCache.shared.save(refined, trackID: trackID,
+                    source: cacheSource)
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.trackID == trackID,
+                      self.rawSource == rawSource,
+                      self.acousticRefinementKey == key else { return }
+                self.refinedCache[trackID] = (source: rawSource, lines: refined)
+                self.lines = refined
+                self.syncNow()
+            }
+        }
     }
 
     /// Chamar em onAppear da sheet.

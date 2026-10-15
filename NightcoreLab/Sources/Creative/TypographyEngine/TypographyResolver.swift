@@ -53,7 +53,7 @@ enum TypographyResolver {
             for: .glow, features: features, reaction: preset.audioReaction)
 
         let activeID: Int? = state.status == .active &&
-                             state.line.precision == .word
+                             state.line.precision == .word || state.line.precision == .estimated
             ? state.line.words.first(where: { $0.start <= now && now < $0.end })?.id
             : nil
 
@@ -63,8 +63,8 @@ enum TypographyResolver {
             case .past: fill = 1
             case .upcoming: fill = 0
             case .active:
-                if state.line.precision == .word {
-                    fill = word.progress(at: now)
+                if state.line.precision == .word || state.line.precision == .estimated {
+                    fill = word.progressFill(at: now)
                 } else if preset.style.isObjectModel {
                     let length = max(0.001, state.line.end - state.line.start)
                     let lineProgress = min(1, max(0, (now - state.line.start) / length))
@@ -93,7 +93,7 @@ enum TypographyResolver {
         let frame = TypographyFrame(
             lineID: state.line.id, lyricTime: now, preset: preset,
             status: state.status, activeWordID: activeID,
-            words: words, animations: [:])
+            words: words, animations: [:], precision: state.line.precision)
         return TypographyAnimationEngine.resolve(frame, features: features)
     }
 }

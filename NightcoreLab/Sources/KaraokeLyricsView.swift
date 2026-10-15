@@ -492,7 +492,7 @@ private struct KaraokeLineView: View {
     var body: some View {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
-        } else if status == .active && (line.precision == .word || pacingGuide) {
+        } else if status == .active && (line.precision != .line || pacingGuide) {
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
                 let _ = KaraokePerformanceProbe.shared.timelineTick(
@@ -525,8 +525,10 @@ private struct KaraokeLineView: View {
                 KaraokeWordView(
                     word: resolved.word,
                     fill: resolved.progress,
-                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
-                    glow: (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
+                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) :
+                        (accent ?? theme.fill).opacity(line.precision == .estimated ? 0.86 : 1),
+                    glow: line.precision != .estimated &&
+                        (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
                     theme: theme,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
@@ -535,7 +537,8 @@ private struct KaraokeLineView: View {
                     isCurrentLine: status == .active,
                     isPastLine: status == .past,
                     animation: frame.animation(for: resolved.id),
-                    wordSeed: resolved.seed
+                    wordSeed: resolved.seed,
+                    estimatedTiming: line.precision == .estimated
                 )
                 .gapAfter(resolved.word.spaceAfter ? 9 : 0)
             }
@@ -655,6 +658,20 @@ struct KaraokeWordView: View {
     var tracking: CGFloat = 0
     var glowRadius: CGFloat = 10
     var minimumScaleFactor: CGFloat = 0.52
+    var estimatedTiming = false
+
+    @ViewBuilder private func estimatedMask(_ progress: Double) -> some View {
+        if progress >= 1 {
+            Rectangle()
+        } else {
+            LinearGradient(stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: max(0, progress - 0.06)),
+                .init(color: .clear, location: min(1, progress + 0.04)),
+                .init(color: .clear, location: 1)
+            ], startPoint: .leading, endPoint: .trailing)
+        }
+    }
 
     /// Tracking is applied only when requested, so the karaoke Text is
     /// byte-for-byte the pre-10B glyph (nonzero tracking can alter shaping).
@@ -704,7 +721,11 @@ struct KaraokeWordView: View {
                     glyph
                         .foregroundStyle(fillColor)
                         .mask(alignment: .leading) {
-                            Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                            if estimatedTiming {
+                                estimatedMask(fill)
+                            } else {
+                                Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                            }
                         }
                         .shadow(color: glow ? theme.glow : .clear,
                                 radius: glow ? (animation?.glow ?? 1) * glowRadius : 0)
@@ -726,10 +747,14 @@ struct KaraokeWordView: View {
                 if fills && progress > 0 {
                     tile(appearance: appearance, tone: .accent)
                         .mask(alignment: .leading) {
-                            GeometryReader { geometry in
-                                Rectangle()
-                                    .frame(width: geometry.size.width * progress)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            if estimatedTiming {
+                                estimatedMask(progress)
+                            } else {
+                                GeometryReader { geometry in
+                                    Rectangle()
+                                        .frame(width: geometry.size.width * progress)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                         }
                 }
@@ -778,8 +803,12 @@ struct KaraokeWordView: View {
                         fontSize: fontSize, maxWordWidth: maxWordWidth,
                         minimumScaleFactor: minimumScaleFactor, filled: true)
                     .mask(alignment: .leading) {
-                        GeometryReader { geometry in
-                            Rectangle().frame(width: geometry.size.width * appearance.fill)
+                        if estimatedTiming {
+                            estimatedMask(appearance.fill)
+                        } else {
+                            GeometryReader { geometry in
+                                Rectangle().frame(width: geometry.size.width * appearance.fill)
+                            }
                         }
                     }
                 }

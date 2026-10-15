@@ -256,7 +256,8 @@ enum ControlMapping {
             frame = frame.withTypography(TypographyFrame(
                 lineID: typo.lineID, lyricTime: typo.lyricTime, preset: typo.preset,
                 status: typo.status, activeWordID: typo.activeWordID,
-                words: words, animations: animations))
+                words: words, animations: animations,
+                precision: typo.precision))
         }
         return frame
     }

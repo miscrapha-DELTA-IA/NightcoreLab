@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Font-family axis of a TypographyPreset, independent of the effect style.
 ///
@@ -26,13 +27,29 @@ enum TypographyFont: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     func font(size: CGFloat) -> Font {
+        let native: UIFont
         switch self {
-        case .classic: return .system(size: size, weight: .heavy, design: .rounded)
-        case .neon: return .system(size: size, weight: .black, design: .rounded)
-        case .mono: return .system(size: size * 0.90, weight: .bold, design: .monospaced)
-        case .cinematic: return .system(size: size * 1.06, weight: .bold, design: .serif)
-        case .typewriter: return .system(size: size * 0.90, weight: .semibold, design: .monospaced)
+        case .classic: native = .systemFont(ofSize: size, weight: .heavy)
+        case .neon: native = .systemFont(ofSize: size, weight: .black)
+        case .mono: native = .monospacedSystemFont(ofSize: size * 0.90, weight: .bold)
+        case .cinematic: native = .systemFont(ofSize: size * 1.06, weight: .bold)
+        case .typewriter: native = .monospacedSystemFont(ofSize: size * 0.90, weight: .semibold)
         }
+        let design: UIFontDescriptor.SystemDesign? = switch self {
+        case .classic, .neon: .rounded
+        case .cinematic: .serif
+        case .mono, .typewriter: nil
+        }
+        return Font(Self.cascaded(native, design: design))
+    }
+
+    static func cascaded(_ font: UIFont,
+                         design: UIFontDescriptor.SystemDesign? = nil) -> UIFont {
+        let fallbacks = ["PingFangSC-Regular", "GeezaPro", "AppleColorEmoji"]
+            .map { UIFontDescriptor(name: $0, size: font.pointSize) }
+        let styled = design.flatMap { font.fontDescriptor.withDesign($0) } ?? font.fontDescriptor
+        let descriptor = styled.addingAttributes([.cascadeList: fallbacks])
+        return UIFont(descriptor: descriptor, size: font.pointSize)
     }
 
     /// Story canvas size (540 pt wide).
