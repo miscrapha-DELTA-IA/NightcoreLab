@@ -1352,6 +1352,10 @@ final class Stage36RuntimePerformanceTests: XCTestCase {
         XCTAssertTrue(karaoke.contains("else if status == .active"))
         XCTAssertTrue(hud.contains("if session.isPresented"))
         XCTAssertTrue(hud.contains("karaoke.liveMicLevel"))
+        let lyricContainer = try String(contentsOf: root.appendingPathComponent("LyricsView.swift"),
+                                         encoding: .utf8)
+        XCTAssertTrue(lyricContainer.contains("if inline && lyricStore.lines.isEmpty"),
+                      "HUD must survive while the synchronized lyrics are loading")
         XCTAssertTrue(voice.contains("samples[count + i] = data[offset + i * stride]"))
     }
 }
