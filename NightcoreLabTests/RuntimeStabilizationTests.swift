@@ -6,6 +6,16 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    func testKaraokeGuideSourceTimeIsMonotonicAndBoundarySafe() {
+        let samples = stride(from: 0.0, through: 4.0, by: 0.05)
+            .map { KaraokeTimingGuide.pacing(start: 1, end: 3, at: $0 + 0.25) }
+        XCTAssertEqual(samples.first, 0)
+        XCTAssertEqual(samples.last, 1)
+        XCTAssertTrue(zip(samples, samples.dropFirst()).allSatisfy { $0 <= $1 })
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 2, end: 2, at: 2), 0)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 1, end: 3, at: .nan), 0)
+    }
+
     @MainActor
     func testKaraokePresentationPreservesLiveTransportAndQueueCompletion() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
