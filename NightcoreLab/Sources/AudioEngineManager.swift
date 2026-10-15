@@ -190,10 +190,11 @@ final class AudioEngineManager {
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
-        [player, centerCutPlayer] +
-        StemKind.allCases.compactMap { stemPlayers[$0] } +
-        StemKind.allCases.compactMap { stemGainEQs[$0] } +
-        [upmix, varispeed, timePitch, bassEQ, stemEQ, reverbNode, performanceMixer, limiter]
+        let sources: [AVAudioNode] = [player, centerCutPlayer]
+        let preparedPlayers: [AVAudioNode] = StemKind.allCases.compactMap { stemPlayers[$0] }
+        let preparedGains: [AVAudioNode] = StemKind.allCases.compactMap { stemGainEQs[$0] }
+        return sources + preparedPlayers + preparedGains +
+            [upmix, varispeed, timePitch, bassEQ, stemEQ, reverbNode, performanceMixer, limiter]
     }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
