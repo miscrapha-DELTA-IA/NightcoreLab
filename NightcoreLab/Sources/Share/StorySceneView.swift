@@ -99,12 +99,16 @@ struct StorySceneView: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    NightcoreBrandLockup(theme: request.theme,
-                                         iconSize: 27, titleSize: 17)
+                    if request.showsBrand {
+                        NightcoreBrandLockup(theme: request.theme,
+                                             iconSize: 27, titleSize: 17)
+                    }
                     Spacer()
-                    TrackIdentityPill(title: request.title, artist: request.artist,
-                                      artwork: artwork, thumbnailSize: 38)
-                        .frame(width: 205)
+                    if request.showsTrackCard {
+                        TrackIdentityPill(title: request.title, artist: request.artist,
+                                          artwork: artwork, thumbnailSize: 38)
+                            .frame(width: 205)
+                    }
                     Spacer()
                     Text(request.theme.displayName.uppercased())
                         .font(.system(size: 13, weight: .bold))
@@ -116,9 +120,9 @@ struct StorySceneView: View {
 
                 scoreBadge
 
-                if request.mode == .player {
+                if request.mode == .player || !request.showsLyrics {
                     Spacer(minLength: 25)
-                    playerCard
+                    if request.showsTrackCard { playerCard }
                     Spacer(minLength: 45)
                 } else {
                     Spacer(minLength: 70)
@@ -155,12 +159,16 @@ struct StorySceneView: View {
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             HStack {
-                NightcoreBrandLockup(theme: request.theme,
-                                     iconSize: 24, titleSize: 15)
+                if request.showsBrand {
+                    NightcoreBrandLockup(theme: request.theme,
+                                         iconSize: 24, titleSize: 15)
+                }
                 Spacer()
-                TrackIdentityPill(title: request.title, artist: request.artist,
-                                  artwork: artwork, thumbnailSize: 36)
-                    .frame(width: min(205, layout.titleArea.width * 0.43))
+                if request.showsTrackCard {
+                    TrackIdentityPill(title: request.title, artist: request.artist,
+                                      artwork: artwork, thumbnailSize: 36)
+                        .frame(width: min(205, layout.titleArea.width * 0.43))
+                }
                 Spacer()
                 Text(request.theme.displayName.uppercased())
                     .font(.system(size: 12, weight: .bold))
@@ -175,8 +183,8 @@ struct StorySceneView: View {
                 .position(x: layout.titleArea.midX,
                           y: layout.titleArea.maxY + 24)
 
-            if request.mode == .player {
-                playerCard
+            if request.mode == .player || !request.showsLyrics {
+                if request.showsTrackCard { playerCard }
                     .frame(width: layout.mainArea.width)
                     .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
             } else {
