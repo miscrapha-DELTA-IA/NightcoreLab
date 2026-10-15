@@ -103,7 +103,11 @@ final class ShareExportPipelineTests: XCTestCase {
         metadata.lightningTheme = AppTheme.ultrapink.rawValue
         metadata.reactionMode = CreativePreset.AudioReaction.responsive.rawValue
         metadata.karaokeGrade = stamp.grade
+        metadata.karaokeScore = stamp.score
+        metadata.karaokeAccuracy = stamp.accuracy
+        metadata.karaokeMode = stamp.label
         metadata.padEventCount = 2
+        metadata.sectionVisualIntensity = 0.85
         let decoded = try JSONDecoder().decode(ShareMetadata.self,
             from: JSONEncoder().encode(metadata))
         XCTAssertEqual(decoded, metadata)

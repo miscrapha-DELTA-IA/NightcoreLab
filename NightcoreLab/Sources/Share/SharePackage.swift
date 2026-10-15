@@ -39,7 +39,11 @@ struct ShareMetadata: Codable, Equatable, Sendable {
     var lightningTheme: String? = nil
     var reactionMode: String? = nil
     var karaokeGrade: String? = nil
+    var karaokeScore: Int? = nil
+    var karaokeAccuracy: Int? = nil
+    var karaokeMode: String? = nil
     var padEventCount: Int? = nil
+    var sectionVisualIntensity: Double? = nil
 }
 
 enum SharePackageError: LocalizedError {
@@ -154,9 +158,15 @@ enum SharePackageBuilder {
                 exportedAt: Date())
             metadata.lightningTheme = request.theme.rawValue
             metadata.reactionMode = request.reactionMode.rawValue
-            metadata.karaokeGrade = request.showsScoreStamp
-                ? request.scoreStamp?.grade : nil
+            metadata.karaokeGrade = request.scoreStamp?.grade
+            metadata.karaokeScore = request.scoreStamp?.score
+            metadata.karaokeAccuracy = request.scoreStamp?.accuracy
+            metadata.karaokeMode = request.scoreStamp?.label
             metadata.padEventCount = request.padPerformance?.events.count
+            metadata.sectionVisualIntensity = request.songDNA.map {
+                request.reactionMode == .off ? 1 :
+                    SongSectionCadence.at(sourceTime: request.playbackTime, dna: $0).visual
+            }
             let metadataURL = folder.appendingPathComponent("metadata.json")
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
