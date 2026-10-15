@@ -926,8 +926,9 @@ final class AudioEngineManager {
                                                      cacheFolder: cacheFolder)
             }.value
             guard let self, !Task.isCancelled,
-                  self.playbackSourceRevision == revision, let asset else { return }
+                  self.playbackSourceRevision == revision else { return }
             self.stemPrepareTask = nil
+            guard let asset else { return } // allow retry on transient cache/separation failure
             var files: [StemKind: AVAudioFile] = [:]
             for kind in StemKind.allCases {
                 guard let url = asset.urls[kind],
