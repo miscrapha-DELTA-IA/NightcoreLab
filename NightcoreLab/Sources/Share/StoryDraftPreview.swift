@@ -155,6 +155,7 @@ struct StoryDraftPreview: View {
                             HStack(spacing: 8) {
                                 ForEach(TypographyStyle.storyObjectModels) { style in
                                     Button {
+                                        CreativeHaptics.selection()
                                         selectedTypography = style
                                     } label: {
                                         Text(style.shortObjectTitle)

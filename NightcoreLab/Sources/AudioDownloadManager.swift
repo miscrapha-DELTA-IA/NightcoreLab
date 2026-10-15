@@ -89,6 +89,11 @@ final class AudioDownloadManager: ObservableObject {
         return result
     }
 
+    var quickLibraryTracks: [Track] {
+        cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
+            .prefix(8).map { cachedTrack($0.track) }
+    }
+
     func status(for track: Track) -> TrackStatus {
         TrackStatus.resolve(cached: cachedIDs.contains(track.id),
                             downloading: downloadingIDs.contains(track.id))

@@ -22,6 +22,7 @@ struct LyricsControlCenter: View {
     @AppStorage(KaraokeGuidePreference.pacing) private var pacingGuide = true
     @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
     @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
+    @AppStorage(CreativeHaptics.enabledKey) private var hapticsEnabled = true
 
     var body: some View {
         NavigationStack {
@@ -56,6 +57,8 @@ struct LyricsControlCenter: View {
                 }
 
                 Section {
+                    Toggle("Feedback tátil", isOn: $hapticsEnabled)
+                        .tint(theme.accent)
                     Toggle("Guia de Canto (Acompanhamento)", isOn: $pacingGuide)
                     Toggle("Contagem Regressiva (3-2-1)", isOn: $entranceCountdown)
                     Toggle("Prévia do Próximo Verso", isOn: $nextVersePreview)
@@ -197,6 +200,12 @@ struct LyricsControlCenter: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .onChange(of: typographyStyle) { _, _ in
+            CreativeHaptics.selection(microphoneActive: audio?.karaokeMicrophoneActive ?? false)
+        }
+        .onChange(of: theme) { _, _ in
+            CreativeHaptics.selection(microphoneActive: audio?.karaokeMicrophoneActive ?? false)
         }
     }
 }

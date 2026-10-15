@@ -7,6 +7,21 @@ import XCTest
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
     @MainActor
+    func testHapticPreferencePersistsAndRecordingMutesMechanicalFeedback() throws {
+        let suite = "stage32.haptics.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(CreativeHaptics.isAllowed(defaults: defaults))
+        defaults.set(false, forKey: CreativeHaptics.enabledKey)
+        XCTAssertFalse(CreativeHaptics.isAllowed(defaults:
+            try XCTUnwrap(UserDefaults(suiteName: suite))))
+        defaults.set(true, forKey: CreativeHaptics.enabledKey)
+        XCTAssertTrue(CreativeHaptics.isAllowed(defaults: defaults))
+        XCTAssertFalse(CreativeHaptics.isAllowed(defaults: defaults,
+                                                microphoneActive: true))
+    }
+
+    @MainActor
     func testCommittedTrackResetsScoreAndLyricsScrollIdentity() {
         let store = LyricsStore()
         let lines = karaokeLines(3)

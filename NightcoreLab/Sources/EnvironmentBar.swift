@@ -4,11 +4,12 @@ import SwiftUI
 struct EnvironmentBar: View {
     @Binding var theme: AppTheme
     let panels: [PanelID]
+    var microphoneActive = false
 
     var body: some View {
         HStack(spacing: 8) {
             PanelsMenuButton(panels: panels)
-            ThemeBoltButton(theme: $theme)
+            ThemeBoltButton(theme: $theme, microphoneActive: microphoneActive)
         }
     }
 }
@@ -23,9 +24,11 @@ extension View {
 
 struct ThemeBoltButton: View {
     @Binding var theme: AppTheme
+    var microphoneActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func select(_ next: AppTheme) {
+        CreativeHaptics.selection(microphoneActive: microphoneActive)
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.45)) { theme = next }
     }
 
@@ -45,7 +48,6 @@ struct ThemeBoltButton: View {
                 }
             }
         }
-        .sensoryFeedback(.impact(weight: .heavy), trigger: theme)
         .accessibilityLabel("Trocar tema")
         .accessibilityValue("\(theme.displayName), \(theme.dominantColorName)")
         .accessibilityHint("Alterna entre os temas. Toque e segure para escolher um.")

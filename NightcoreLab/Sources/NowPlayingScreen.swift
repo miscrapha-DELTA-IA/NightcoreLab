@@ -138,6 +138,7 @@ private struct CreatorStudioPanel: View {
     @State private var rhythm: RhythmAnalysisResult?
     @State private var harmonicKey: KeyAnalysisResult?
     @State private var loopMessage: String?
+    @AppStorage(CreativeHaptics.enabledKey) private var hapticsEnabled = true
     @State private var experiences: [CreativeExperiencePreset] =
         CreativePresetCatalog.selectableExperiences
     @Environment(\.dismiss) private var dismiss
@@ -201,6 +202,8 @@ private struct CreatorStudioPanel: View {
                     }
                     Divider()
                     Text("Quick Loops · 1 toque").font(.headline)
+                    Toggle("Feedback tátil", isOn: $hapticsEnabled)
+                        .font(.subheadline).tint(theme.accent)
                     LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], spacing: 8) {
                         ForEach(CreatorLoopSlot.allCases) { slot in
                             Button {
@@ -209,6 +212,8 @@ private struct CreatorStudioPanel: View {
                                     loopMessage = "Aguarde a análise de BPM/beat-grid desta música."
                                     return
                                 }
+                                CreativeHaptics.padStrike(
+                                    microphoneActive: audio.karaokeMicrophoneActive)
                                 loopMessage = nil
                             } label: {
                                 HStack(spacing: 6) {
@@ -437,7 +442,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         .hideablePanel(.lyrics, edge: .bottom, keepsSpace: true)
                         .transition(.lyricsReveal)
                     if KaraokeCleanLayout.showsQuickThemeBar(cleanMode: lyricsCleanMode) {
-                        KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle)
+                        KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle,
+                                         microphoneActive: audio.karaokeMicrophoneActive)
                             .padding(.bottom, 12)
                             .hideablePanel(.themes, edge: .bottom)
                             .transition(.barRise)
@@ -522,7 +528,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
         .overlay(alignment: .topLeading) {
             EnvironmentBar(theme: $appTheme,
-                           panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels)
+                           panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels,
+                           microphoneActive: audio.karaokeMicrophoneActive)
                 .padding(.top, 16)
                 .padding(.leading, 16)
         }
@@ -636,11 +643,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             lyricsStore.attach(clock: clock)
             updateKaraokePresentation(showsKaraoke)
             lyricsStore.scoringPitchShift = { [weak audio] in Double(audio?.pitch ?? 0) }
-            if let data = UserDefaults.standard.data(
-                forKey: "NightcoreLab.liveCreatorControls.v1"),
-               let controls = try? JSONDecoder().decode(CreatorControls.self, from: data) {
-                creatorControls = controls
-            }
+            creatorControls = CreativeSessionPreferences.load().creatorControls
             audio.applyVocalFX(creatorControls.vocalFX)
         }
         .onChange(of: audio.vocalSetting) { _, value in creatorControls.vocalFX = value }
@@ -1126,6 +1129,7 @@ private struct SearchDrawerHandle: View {
             Button {
                 panels.setVisible(true, for: .omnibox)
                 state.openForSearch()
+                CreativeHaptics.selection()
             } label: {
                 Image(systemName: "magnifyingglass")
                     .frame(width: 38, height: 40)
@@ -1134,6 +1138,7 @@ private struct SearchDrawerHandle: View {
 
             Button {
                 state.toggle()
+                CreativeHaptics.selection()
             } label: {
                 HStack(spacing: 8) {
                     Text("Buscar música · Biblioteca")
@@ -1348,6 +1353,7 @@ private struct BlurredCover: View {
 private struct KaraokeBottomBar: View {
     @Binding var theme: AppTheme
     @Binding var background: BackgroundStyle
+    var microphoneActive = false
     @AppStorage("karaokeTypography") private var typography: TypographyStyle = .neon
     @Namespace private var ns
 
@@ -1359,6 +1365,7 @@ private struct KaraokeBottomBar: View {
                     HStack(spacing: 12) {
                         ForEach(AppTheme.allCases) { t in
                             Button {
+                                CreativeHaptics.selection(microphoneActive: microphoneActive)
                                 withAnimation(.snappy(duration: 0.35)) { theme = t }
                             } label: { swatch(t) }
                             .buttonStyle(.plain)
@@ -1395,6 +1402,9 @@ private struct KaraokeBottomBar: View {
             }
             .accessibilityLabel("Template das letras")
             .accessibilityValue(typography.title)
+            .onChange(of: typography) { _, _ in
+                CreativeHaptics.selection(microphoneActive: microphoneActive)
+            }
 
             Button {
                 withAnimation(.smooth(duration: 0.6)) { background = background.toggled }

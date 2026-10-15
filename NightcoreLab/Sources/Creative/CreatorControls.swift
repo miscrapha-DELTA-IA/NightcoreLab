@@ -113,6 +113,46 @@ struct CreatorControls: Codable, Equatable, Sendable {
     }
 }
 
+/// Reads the same keys used by the live @AppStorage controls at cold launch.
+/// The palette position is derived from the persisted theme identity, so a
+/// reordered theme list cannot restore a different color by accident.
+struct CreativeSessionPreferences: Equatable {
+    let experienceID: String
+    let theme: AppTheme
+    let reactionMode: CreativePreset.AudioReaction
+    let lyricModel: TypographyStyle
+    let pacingGuide: Bool
+    let entranceCountdown: Bool
+    let nextVersePreview: Bool
+    let creatorControls: CreatorControls
+
+    var paletteIndex: Int { AppTheme.allCases.firstIndex(of: theme) ?? 0 }
+    var vocalFX: VocalFXSetting { creatorControls.vocalFX }
+
+    static func load(defaults: UserDefaults = .standard) -> Self {
+        let theme = defaults.string(forKey: "selectedTheme")
+            .flatMap(AppTheme.init(rawValue:)) ?? .acid
+        let reaction = defaults.string(forKey: "creativeReactionMode")
+            .flatMap(CreativePreset.AudioReaction.init(rawValue:)) ?? .off
+        let lyric = defaults.string(forKey: TypographyStyle.storageKey)
+            .flatMap(TypographyStyle.init(rawValue:)) ?? .neon
+        let controls = defaults.data(forKey: "NightcoreLab.liveCreatorControls.v1")
+            .flatMap { try? JSONDecoder().decode(CreatorControls.self, from: $0) }
+            ?? .neutral
+        func enabled(_ key: String) -> Bool {
+            defaults.object(forKey: key) as? Bool ?? true
+        }
+        return Self(
+            experienceID: defaults.string(forKey: CreativePresetCatalog.storageKey)
+                ?? CreativePresetCatalog.defaultID,
+            theme: theme, reactionMode: reaction, lyricModel: lyric,
+            pacingGuide: enabled(KaraokeGuidePreference.pacing),
+            entranceCountdown: enabled(KaraokeGuidePreference.countdown),
+            nextVersePreview: enabled(KaraokeGuidePreference.nextVerse),
+            creatorControls: controls)
+    }
+}
+
 
 /// The typed parameter boundary between editor controls and existing frames.
 /// Resolved on selection change, never inside a TimelineView.

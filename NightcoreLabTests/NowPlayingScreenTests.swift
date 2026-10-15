@@ -3,6 +3,49 @@ import XCTest
 
 final class NowPlayingScreenTests: XCTestCase {
     @MainActor
+    func testEmptyQueryShowsInstantRecentsAndQueueWhileSelectionWaitsForPlayback() throws {
+        let played = Track(id: "played", title: "Recent Song", thumbnailURL: nil)
+        let cached = Track(id: "cached", title: "Library Song", thumbnailURL: nil)
+        let next = Track(id: "next", title: "Next Song", thumbnailURL: nil)
+        var drawer = SearchDrawerState()
+        drawer.toggle()
+        XCTAssertTrue(DrawerQuickAccess.shouldShow(query: "  ", submittedQuery: nil))
+        XCTAssertFalse(DrawerQuickAccess.shouldShow(query: "Song", submittedQuery: nil))
+        XCTAssertFalse(DrawerQuickAccess.shouldShow(query: "", submittedQuery: "Song"))
+        XCTAssertEqual(DrawerQuickAccess.recents(
+            recent: [played], cached: [played, cached], current: played).map(\.id),
+            ["played", "cached"])
+        let queue = PlaybackQueue()
+        queue.replace(with: [next], excluding: played.id)
+        XCTAssertEqual(queue.upNextQueue.map(\.id), ["next"])
+        drawer.beginSelection(trackID: next.id)
+        XCTAssertTrue(drawer.isOpen, "Download must not hide the drawer")
+        XCTAssertEqual(drawer.pendingTrackID, next.id)
+        XCTAssertFalse(drawer.confirmPlayback(trackID: "stale"))
+        XCTAssertTrue(drawer.confirmPlayback(trackID: next.id))
+        XCTAssertFalse(drawer.isOpen)
+        XCTAssertNil(drawer.pendingTrackID)
+        XCTAssertTrue(queue.remove(next))
+        XCTAssertTrue(queue.upNextQueue.isEmpty)
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let search = try String(contentsOf: root.appendingPathComponent("SearchView.swift"))
+        XCTAssertTrue(search.contains("TOCADAS RECENTEMENTE"))
+        XCTAssertTrue(search.contains("FILA A SEGUIR"))
+        XCTAssertTrue(search.contains("searchDrawer.quickAccess"))
+    }
+
+    func testFailedDrawerSelectionKeepsDrawerOpenForRetry() {
+        var drawer = SearchDrawerState()
+        drawer.toggle()
+        drawer.beginSelection(trackID: "network-track")
+        XCTAssertTrue(drawer.selectionFailed(trackID: "network-track"))
+        XCTAssertTrue(drawer.isOpen)
+        XCTAssertNil(drawer.pendingTrackID)
+    }
+
+    @MainActor
     func testSearchDrawerToggleAndFocusDoNotTouchPlayerTransport() {
         let audio = AudioEngineManager()
         let clock = audio.lyricsClock
@@ -58,7 +101,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(player.contains(".hideablePanel(.player, edge: .top)"))
         XCTAssertTrue(content.contains("searchDrawerContent: { focusRequest in musicWorkspace"))
         XCTAssertTrue(content.contains("playTrack(track)"))
-        XCTAssertTrue(content.contains("searchDrawer.selectedTrack()"))
+        XCTAssertTrue(content.contains("searchDrawer.confirmPlayback(trackID: trackID)"))
         XCTAssertTrue(content.contains("#selector(UIResponder.resignFirstResponder)"))
     }
 

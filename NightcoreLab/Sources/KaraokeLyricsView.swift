@@ -324,6 +324,8 @@ struct KaraokeLyricsView: View {
                         KaraokeEntranceCue(lines: store.lines, clock: clock,
                                            offset: store.userOffset,
                                            isPlaying: store.isPlaying,
+                                           trackID: store.trackID,
+                                           microphoneActive: store.scoring.mode == .microphone,
                                            accent: accent ?? theme.fill)
                             .padding(.top, 12)
                     }
@@ -589,13 +591,18 @@ private struct KaraokeEntranceCue: View {
     let clock: PlaybackClock
     let offset: TimeInterval
     let isPlaying: Bool
+    let trackID: String?
+    let microphoneActive: Bool
     let accent: Color
+    @State private var lastTickKey: String?
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 0.08,
                                 paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
-            if let cue = KaraokeTimingGuide.entrance(lines: lines,
-                                                     at: clock.lyricTime + offset) {
+            let cue = KaraokeTimingGuide.entrance(lines: lines,
+                                                  at: clock.lyricTime + offset)
+            let tickKey = cue.map { "\(trackID ?? ""):\($0.lineID):\($0.number)" }
+            if let cue {
                 HStack(spacing: 10) {
                     Text("\(cue.number)")
                         .font(.title3.bold().monospacedDigit())
@@ -615,6 +622,12 @@ private struct KaraokeEntranceCue: View {
                 .accessibilityLabel("Entrada em \(cue.number)")
                 .accessibilityIdentifier("karaoke.entranceCountdown")
             }
+            Color.clear.frame(width: 0, height: 0)
+                .onChange(of: tickKey, initial: true) { _, key in
+                    guard isPlaying, let key, key != lastTickKey else { return }
+                    lastTickKey = key
+                    CreativeHaptics.countdown(microphoneActive: microphoneActive)
+                }
         }
     }
 }
