@@ -1169,7 +1169,7 @@ private struct SearchDrawerHandle: View {
                 CreativeHaptics.selection()
             } label: {
                 HStack(spacing: 8) {
-                    Text("Buscar música · Biblioteca")
+                    Text("Buscar música · Mix 15 · Offline")
                         .lineLimit(1)
                     Capsule().fill(accent.opacity(0.7))
                         .frame(width: 22, height: 3)

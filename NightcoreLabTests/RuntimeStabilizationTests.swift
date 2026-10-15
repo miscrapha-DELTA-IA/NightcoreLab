@@ -1407,3 +1407,68 @@ final class Stage38AlbumArtistRuntimeTests: XCTestCase {
         XCTAssertTrue(group.usedArtistFallback)
     }
 }
+
+
+final class Stage38UnifiedIntegrationTests: XCTestCase {
+    func testUnifiedPillarsCoexistInTheMountedUI() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        func read(_ name: String) throws -> String {
+            try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
+        }
+        let app = try read("NightcoreLabApp.swift")
+        let content = try read("ContentView.swift")
+        let player = try read("NowPlayingScreen.swift")
+        let drawer = try read("SearchView.swift")
+        let audio = try read("AudioEngineManager.swift")
+        let score = try read("Karaoke/KaraokeScoreHUD.swift")
+        let lyric = try read("KaraokeLyricsView.swift")
+        let share = try read("Share/StoryDraftPreview.swift")
+        let scene = try read("Share/StorySceneView.swift")
+        let export = try read("Share/StoryExportMarbleView.swift")
+        XCTAssertTrue(app.contains("ContentView("))
+        XCTAssertTrue(content.contains("NowPlayingScreen("))
+        XCTAssertTrue(content.contains("searchDrawerContent:"))
+        XCTAssertTrue(player.contains("SearchDrawerHandle(state:"))
+        XCTAssertTrue(drawer.contains("hubPill(.mix"))
+        XCTAssertTrue(drawer.contains("hubPill(.offline"))
+        XCTAssertTrue(drawer.contains("hubPill(.albumArtist"))
+        XCTAssertTrue(drawer.contains("hubPill(.queue"))
+        XCTAssertTrue(drawer.contains("onPlayMix(result.playbackTracks)"))
+        XCTAssertTrue(drawer.contains("onSaveMixOffline(result.playbackTracks)"))
+        XCTAssertTrue(audio.contains("isReconfiguringGraph"))
+        XCTAssertTrue(audio.contains("session.setCategory(.playAndRecord"))
+        XCTAssertTrue(audio.contains("input.installTap(onBus: 0, bufferSize: 1024, format: nil)"))
+        XCTAssertTrue(score.contains("karaoke.liveMicLevel"))
+        XCTAssertTrue(score.contains("karaoke.scoreHUD"))
+        XCTAssertTrue(score.contains("streakCombo"))
+        XCTAssertTrue(lyric.contains("KaraokeTimingGuide.pacing("))
+        XCTAssertTrue(lyric.contains("karaoke.entranceCountdown"))
+        XCTAssertTrue(lyric.contains("CifraClubLyricsView"))
+        XCTAssertTrue(content.contains("MusicControlPage.stems"))
+        XCTAssertTrue(content.contains("StemMixerControls(audio: audio)"))
+        XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
+        XCTAssertTrue(content.contains("v38-UNIFIED · "))
+        XCTAssertTrue(share.contains("thumbnailSize: 76"))
+        XCTAssertTrue(share.contains("Movimento do Fundo"))
+        XCTAssertTrue(share.contains("Text(\"Desligado\")"))
+        XCTAssertTrue(scene.contains("StoryExportMarbleView"))
+        XCTAssertTrue(scene.contains("NightcoreBrandLockup"))
+        XCTAssertFalse(export.contains("TimelineView("))
+        XCTAssertFalse(export.contains("Date()"))
+    }
+
+    func testUnifiedAlbumFallbackAndDeduplication() {
+        var song = Track(id: "track-1", title: "Artist - A", thumbnailURL: nil)
+        song.album = "Single"
+        let sibling = Track(id: "track-2", title: "ARTIST - B", thumbnailURL: nil)
+        let album = AlbumArtistCollectionResolver.resolve(
+            anchor: song, candidates: [song, sibling], mode: .album)
+        XCTAssertTrue(album.usedArtistFallback)
+        XCTAssertEqual(album.playbackTracks.map(\.id), ["track-1", "track-2"])
+        let both = AlbumArtistCollectionResolver.resolve(
+            anchor: song, candidates: [song, sibling, sibling], mode: .both)
+        XCTAssertEqual(Set(both.playbackTracks.map(\.id)).count,
+                       both.playbackTracks.count)
+    }
+}

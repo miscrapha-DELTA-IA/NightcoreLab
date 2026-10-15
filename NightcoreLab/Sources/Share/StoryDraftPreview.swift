@@ -167,7 +167,7 @@ struct StoryDraftPreview: View {
                                          iconSize: 27, titleSize: 18)
                     TrackIdentityPill(title: frozenRequest.title,
                                       artist: frozenRequest.artist,
-                                      artwork: artwork, thumbnailSize: 62)
+                                      artwork: artwork, thumbnailSize: 76)
                         .accessibilityIdentifier("share.trackHeader")
                     GeometryReader { proxy in
                         let canvas = StoryExportCanvas(

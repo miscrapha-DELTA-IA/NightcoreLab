@@ -172,7 +172,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
         XCTAssertTrue(content.contains(".fixedSize(horizontal: true, vertical: false)"))
         XCTAssertTrue(content.contains(".layoutPriority(2)"))
-        XCTAssertTrue(content.contains("v38 · "), "Stage 36 layout remains intact with the v37 build badge")
+        XCTAssertTrue(content.contains("v38-UNIFIED · "), "Stage 36 layout remains intact with the v38 unified badge")
         let lockup = try String(contentsOf: root.appendingPathComponent("AppIconView.swift"), encoding: .utf8)
         XCTAssertTrue(lockup.contains("Text(\"Nightcore Lab\")"))
         XCTAssertTrue(lockup.contains(".fixedSize(horizontal: true, vertical: false)"))
@@ -284,7 +284,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(search.contains("onSaveMixOffline(result.playbackTracks)"))
         XCTAssertTrue(search.contains("searchDrawer.focusAlbum."))
         XCTAssertTrue(content.contains("activeTrack: currentTrack"))
-        XCTAssertTrue(content.contains("v38 · "))
+        XCTAssertTrue(content.contains("v38-UNIFIED · "))
     }
 
 }
