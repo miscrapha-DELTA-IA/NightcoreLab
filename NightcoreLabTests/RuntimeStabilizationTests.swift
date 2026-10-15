@@ -19,7 +19,7 @@ final class RuntimeStabilizationTests: XCTestCase {
         XCTAssertTrue(migrated.isValid)
         XCTAssertEqual(migrated.barTimestamps, [])
         XCTAssertEqual(migrated.lyricSyllablesPerBeat, 0)
-        XCTAssertEqual(migrated.schemaVersion, SongDNA.schemaVersion)
+        XCTAssertEqual(migrated.schemaVersion, SongDNA.currentSchemaVersion)
     }
 
     func testCenterCutRampIsSmoothOverFiftyMilliseconds() {

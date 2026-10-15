@@ -3,7 +3,7 @@ import Foundation
 /// Immutable synthesis of existing MusicIntelligence and MusicExpressionEngine
 /// snapshots. Never analyzes audio or changes either cache.
 struct SongDNA: Codable, Equatable, Sendable {
-    static let schemaVersion = 2
+    static let currentSchemaVersion = 2
     let schemaVersion: Int
     let assetID: String
     let sourceRevision: String
@@ -28,7 +28,7 @@ struct SongDNA: Codable, Equatable, Sendable {
          lyricSyllablesPerSecond: Double = 0, lyricSyllablesPerBeat: Double = 0,
          energy: Float = 0, key: KeyAnalysisResult? = nil,
          mood: MoodHintsResult? = nil, sections: [MusicSection] = []) {
-        self.schemaVersion = Self.schemaVersion
+        self.schemaVersion = Self.currentSchemaVersion
         self.assetID = assetID
         self.sourceRevision = sourceRevision
         self.sourceDuration = sourceDuration
@@ -214,7 +214,7 @@ struct SongDNA: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let version = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
-        guard (1...Self.schemaVersion).contains(version) else {
+        guard (1...Self.currentSchemaVersion).contains(version) else {
             throw DecodingError.dataCorruptedError(forKey: .schemaVersion, in: c,
                                                     debugDescription: "Unsupported SongDNA schema")
         }
@@ -239,7 +239,7 @@ struct SongDNA: Codable, Equatable, Sendable {
               sourceDuration.isFinite, sourceDuration > 0,
               bpm.isFinite, (bpm == 0 || (55...210).contains(bpm)),
               energy.isFinite, (0...1).contains(energy),
-              schemaVersion == Self.schemaVersion,
+              schemaVersion == Self.currentSchemaVersion,
               lyricSyllablesPerSecond.isFinite, lyricSyllablesPerSecond >= 0,
               lyricSyllablesPerBeat.isFinite, lyricSyllablesPerBeat >= 0,
               beatTimestamps.count <= 5_000, onsetTimestamps.count <= 50_000,
