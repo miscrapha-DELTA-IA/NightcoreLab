@@ -167,12 +167,18 @@ enum CreativeParameterResolver {
 // MARK: - Stage 19A.1 — deterministic source-time section cadence
 
 /// Pure envelope above the existing visual equations, not a second shader
-/// or clock. MusicSectionLabel has buildup/instrumental, not a drop case.
+/// or clock. Unknown or low-confidence boundaries are always neutral.
 struct SongSectionCadence: Equatable, Sendable {
     let visual: Double
     let typography: Double
     let motion: Double
     static let neutral = SongSectionCadence(visual: 1, typography: 1, motion: 1)
+
+    /// Section-only multipliers: never couple beat release to the shader clock.
+    var flowSpeed: Double { min(1.22, max(0.65, motion)) }
+    var foldScale: Double { min(1.12, max(0.86, 0.80 + visual * 0.20)) }
+    var textDecoration: Double { min(1.2, max(0.65, typography)) }
+
 
     static func at(sourceTime: TimeInterval, dna: SongDNA?) -> SongSectionCadence {
         guard let section = dna?.section(at: sourceTime) else { return .neutral }
@@ -182,7 +188,17 @@ struct SongSectionCadence: Equatable, Sendable {
         case .verse:
             return SongSectionCadence(visual: 0.85, typography: 0.90, motion: 0.82)
         case .chorus:
-            return .neutral // Full intensity; no amplification or clipping.
+            return .neutral // Full intensity vs restrained Intro/Verse.
+        case .preChorus:
+            return SongSectionCadence(visual: 0.93, typography: 0.96, motion: 0.94)
+        case .drop:
+            // Confidence-gated structural hit; BPM/energy refine the
+            // expressive range without inventing any tempo or section labels.
+            let groove = Double(dna?.energy ?? 0)
+            let tempo = min(1, max(0, ((dna?.bpm ?? 0) - 80) / 120))
+            return SongSectionCadence(visual: 1.04 + groove * 0.06,
+                                      typography: 1.08 + groove * 0.06,
+                                      motion: 1.08 + tempo * 0.08)
         case .buildup, .instrumental:
             return SongSectionCadence(visual: 0.96, typography: 1, motion: 1)
         case .bridge:
@@ -190,6 +206,35 @@ struct SongSectionCadence: Equatable, Sendable {
         case .unknown:
             return .neutral
         }
+    }
+
+    /// Pure visual frame modulation, performed only at section boundaries.
+    /// All authored material texture knobs and stored creative data survive.
+    static func apply(_ frame: MaterialFrame,
+                      cadence: SongSectionCadence) -> MaterialFrame {
+        guard cadence != .neutral else { return frame }
+        let p = frame.parameters
+        let result = VisualParameterSet(
+            distortion: p.distortion,
+            beatPulse: p.beatPulse, pulseDecay: p.pulseDecay,
+            offbeatScale: p.offbeatScale,
+            warpAmount: p.warpAmount * cadence.foldScale,
+            brightnessBoost: p.brightnessBoost * cadence.visual,
+            stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
+            speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
+            scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
+            voidThreshold: p.voidThreshold, combStretch: p.combStretch,
+            bilateralSymmetry: p.bilateralSymmetry, halftoneGrating: p.halftoneGrating)
+        let original = frame.signals
+        let signals = MaterialReactiveSignals(
+            energy: original.energy, bass: original.bass,
+            movement: min(1, original.movement * cadence.motion),
+            brightness: min(1, original.brightness * cadence.visual))
+        return MaterialFrame(
+            materialID: frame.materialID, type: frame.type, parameters: result,
+            intensity: frame.intensity, audioResponse: frame.audioResponse,
+            timestamp: frame.timestamp, seed: frame.seed, controls: frame.controls,
+            signals: signals, viewport: frame.viewport)
     }
 
     static func apply(_ frame: CreativeParameterFrame,
