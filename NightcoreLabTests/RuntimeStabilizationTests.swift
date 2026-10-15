@@ -1018,3 +1018,65 @@ final class Stage24FlowClockTests: XCTestCase {
                                  "Foreground jump is bounded without resetting phase")
     }
 }
+
+/// Stage 25: section transitions have no audio-engine or per-render callback.
+final class Stage25SectionAwareRuntimeTests: XCTestCase {
+    func testSourceTimeTransitionsModifyVisualFlowAndMagazineDecoration() async {
+        let dna = SongDNA(assetID: "fixture", sourceRevision: "r1",
+                          sourceDuration: 50, bpm: 150, energy: 0.85,
+                          sections: [
+            MusicSection(startTime: 0, endTime: 10, label: .intro, confidence: 0.9),
+            MusicSection(startTime: 10, endTime: 20, label: .verse, confidence: 0.9),
+            MusicSection(startTime: 20, endTime: 30, label: .preChorus, confidence: 0.9),
+            MusicSection(startTime: 30, endTime: 40, label: .chorus, confidence: 0.9),
+            MusicSection(startTime: 40, endTime: 50, label: .drop, confidence: 0.9)
+        ])
+        let tracker = SongSectionTracker()
+        let intro = await tracker.modulation(for: dna, sourceTime: 1, enabled: true)
+        let verse = await tracker.modulation(for: dna, sourceTime: 10, enabled: true)
+        let pre = await tracker.modulation(for: dna, sourceTime: 20, enabled: true)
+        let chorus = await tracker.modulation(for: dna, sourceTime: 30, enabled: true)
+        let drop = await tracker.modulation(for: dna, sourceTime: 40, enabled: true)
+        XCTAssertLessThan(intro.flowSpeed, verse.flowSpeed)
+        XCTAssertLessThan(verse.flowSpeed, pre.flowSpeed)
+        XCTAssertLessThan(pre.flowSpeed, chorus.flowSpeed)
+        XCTAssertGreaterThan(drop.flowSpeed, chorus.flowSpeed)
+        XCTAssertLessThan(intro.foldScale, chorus.foldScale)
+        XCTAssertGreaterThan(drop.foldScale, chorus.foldScale)
+        XCTAssertLessThan(intro.textDecoration, drop.textDecoration)
+
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.smoke, timestamp: 2)
+        let quiet = SongSectionCadence.apply(base, cadence: intro)
+        let peak = SongSectionCadence.apply(base, cadence: drop)
+        XCTAssertLessThan(quiet.parameters.warpAmount, peak.parameters.warpAmount)
+        XCTAssertLessThan(quiet.parameters.brightnessBoost,
+                          peak.parameters.brightnessBoost)
+        XCTAssertEqual(base.parameters.stripingMix, peak.parameters.stripingMix)
+
+        let frame = TypographyFrame(
+            lineID: 1, lyricTime: 2,
+            preset: TypographyPreset(style: .magazineCutout),
+            status: .active, activeWordID: nil, words: [],
+            animations: [1: .neutral])
+        let quietType = TypographyAnimationEngine.evolve(frame, cadence: intro)
+        let peakType = TypographyAnimationEngine.evolve(frame, cadence: drop)
+        XCTAssertLessThan(quietType.animation(for: 1)!.scale,
+                          peakType.animation(for: 1)!.scale)
+        XCTAssertEqual(TypographyAnimationEngine.evolve(frame, cadence: .neutral), frame)
+        XCTAssertEqual(await tracker.modulation(
+            for: dna, sourceTime: 40, enabled: false), .neutral)
+        XCTAssertEqual(await tracker.modulation(
+            for: nil, sourceTime: 40, enabled: true), .neutral)
+    }
+
+    func testUnclassifiedSongProducesNoNewColorsOrMotion() async {
+        let dna = SongDNA(assetID: "unknown", sourceRevision: "r1",
+                          sourceDuration: 100)
+        let tracker = SongSectionTracker()
+        for second in [0.0, 10, 50, 99.9, 100] {
+            let cadence = await tracker.modulation(
+                for: dna, sourceTime: second, enabled: true)
+            XCTAssertEqual(cadence, .neutral)
+        }
+    }
+}
