@@ -184,9 +184,11 @@ struct StorySceneView: View {
                           y: layout.titleArea.maxY + 24)
 
             if request.mode == .player || !request.showsLyrics {
-                if request.showsTrackCard { playerCard }
-                    .frame(width: layout.mainArea.width)
-                    .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+                if request.showsTrackCard {
+                    playerCard
+                        .frame(width: layout.mainArea.width)
+                        .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+                }
             } else {
                 lyricsCard
                     .storyLayer(.typography, frame: resolvedCompositionFrame)
