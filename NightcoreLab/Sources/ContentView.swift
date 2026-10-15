@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import SDWebImageSwiftUI
 
@@ -133,6 +134,7 @@ struct ContentView: View {
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
     @State private var searchDrawer = SearchDrawerState()
+    @State private var karaokeSummary: KaraokeSummary?
     @AppStorage("showAudioWorkspace") private var isAudioWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
     @AppStorage("showExport") private var isExportExpanded = true
@@ -186,10 +188,12 @@ struct ContentView: View {
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
             searchDrawer: $searchDrawer,
+            karaokeSummary: $karaokeSummary,
             playerBackgroundStyle: bgStyle,
             onPlayPause: { playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID) },
             onPrevious: { goToPreviousTrack() },
             onNext: { goToNextTrack() },
+            onReplayKaraoke: { replayKaraoke() },
             header: { header },
             playerDetails: { integratedPlaybackBar },
             searchDrawerContent: { focusRequest in musicWorkspace(focusRequest: focusRequest) },
@@ -204,7 +208,8 @@ struct ContentView: View {
                         lyricsCleanMode: $lyricsCleanMode,
                         dismiss: { withAnimation { showLyrics = false } },
                         inline: true,
-                        prefetcher: lyricsPrefetcher
+                        prefetcher: lyricsPrefetcher,
+                        onShowResult: { showKaraokeResult() }
                     )
                     .id(currentTrack.id)
                 }
@@ -255,10 +260,11 @@ struct ContentView: View {
         .task(id: relatedRequestID) { await loadRelatedVideos() }
         .task { discoveryEvents = await discoveryLog.snapshot() }
         .onChange(of: audio.playbackCompletionCount) { _, _ in
+            if showLyrics { showKaraokeResult() }
             if let playingTrackID { playbackTransition.didEnd(trackID: playingTrackID) }
             finishDiscovery(reason: .completed)
             if let currentTrack { playHistory.completePlayback(trackID: currentTrack.id) }
-            advanceQueue()
+            if karaokeSummary == nil { advanceQueue() }
         }
         .onChange(of: audio.isPlaying) { _, playing in
             playbackTransition.confirmPlayback(isPlaying: playing, trackID: playingTrackID)
@@ -355,7 +361,7 @@ struct ContentView: View {
         HStack(spacing: DS.Spacing.s) {
             VStack(alignment: .leading, spacing: 1) {
                 NightcoreBrandLockup(theme: currentTheme)
-                Text("v30 · " + currentTheme.displayName.uppercased())
+                Text("v31 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -462,10 +468,7 @@ struct ContentView: View {
                     isLoadingSuggestions: isLoadingRelated,
                     canRefreshSuggestions: currentTrack != nil,
                     onRefreshSuggestions: { startRadio() },
-                    onSelect: { track, _ in
-                        playTrack(track)
-                        withAnimation(.spring(duration: 0.36)) { searchDrawer.close() }
-                    },
+                    onSelect: { track, _ in selectFromDrawer(track) },
                     onLink: { link in startDownload(link) },
                     onServerSettings: { showServerSettings = true },
                     isDiscoverExpanded: $isDiscoverExpanded,
@@ -480,8 +483,7 @@ struct ContentView: View {
                             .foregroundStyle(currentTheme.accent)
                         ForEach(libraryTracks.prefix(5)) { track in
                             Button {
-                                playTrack(track)
-                                withAnimation(.spring(duration: 0.36)) { searchDrawer.close() }
+                                selectFromDrawer(track)
                             } label: {
                                 HStack(spacing: 8) {
                                     Image(systemName: track.isCached ? "arrow.down.circle.fill" : "music.note")
@@ -512,6 +514,32 @@ struct ContentView: View {
             .sorted { $0.lastPlayed > $1.lastPlayed }
             .prefix(8)
             .map { downloader.cachedTrack($0.hit.asTrack) }
+    }
+
+    private func selectFromDrawer(_ track: Track) {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            searchDrawer.selectedTrack()
+        }
+        playTrack(track)
+    }
+
+    private func showKaraokeResult() {
+        lyricsStore.scoring.finish()
+        guard let currentTrack else { return }
+        let info = TrackInfo(track: currentTrack, fileName: audio.fileName,
+                             coverURL: coverURL)
+        karaokeSummary = KaraokeSummary(track: info,
+            snapshot: lyricsStore.scoring.snapshot, mode: lyricsStore.scoring.mode)
+    }
+
+    private func replayKaraoke() {
+        karaokeSummary = nil
+        guard currentTrack != nil else { return }
+        lyricsStore.scoring.stop()
+        audio.seek(to: 0)
+        audio.play()
     }
 
     /// Presets e controles vivem num único cartão de vidro. O olho ainda
@@ -1158,6 +1186,10 @@ struct ContentView: View {
                 // download selection time. Back/forward leave Up Next intact.
                 let priorTrack = currentTrack
                 let committedTrack = downloader.cachedTrack(track)
+                if priorTrack?.id != committedTrack.id {
+                    lyricsStore.beginLoading(trackID: committedTrack.id)
+                    karaokeSummary = nil
+                }
                 playbackTransition.commitStarted(committedTrack, replacing: priorTrack,
                     direction: navigation, queue: playbackQueue, navigation: navigationHistory)
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
@@ -1238,7 +1270,7 @@ struct ContentView: View {
         let service = lyricsPrefetcher ?? LyricsPrefetcher(store: lyricsStore)
         lyricsPrefetcher = service
         let metadata = lyricsMetadata(for: track, duration: audio.duration)
-        Task { await service.start(metadata) }
+        Task(priority: .userInitiated) { await service.start(metadata) }
     }
 
     private func prefetchUpcoming() {

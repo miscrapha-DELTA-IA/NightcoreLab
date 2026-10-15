@@ -150,6 +150,33 @@ struct StoryDraftPreview: View {
                         }
                     }
 
+                    if frozenRequest.mode == .lyrics {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(TypographyStyle.storyObjectModels) { style in
+                                    Button {
+                                        selectedTypography = style
+                                    } label: {
+                                        Text(style.shortObjectTitle)
+                                            .font(.caption.weight(.semibold))
+                                            .padding(.horizontal, 12)
+                                            .frame(minHeight: 36)
+                                            .background(selectedTypography == style ?
+                                                frozenRequest.theme.accent.opacity(0.32) :
+                                                .white.opacity(0.09), in: Capsule())
+                                            .overlay(Capsule().strokeBorder(
+                                                selectedTypography == style ?
+                                                    frozenRequest.theme.accent : .white.opacity(0.15)))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(style.title)
+                                    .accessibilityAddTraits(selectedTypography == style ? .isSelected : [])
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("share.lyricModelCycle")
+                    }
+
                     HStack(spacing: 10) {
                         Picker("Experiência", selection: $selectedExperienceID) {
                             ForEach(CreativePresetCatalog.all, id: \.id) { recipe in

@@ -96,6 +96,7 @@ struct LyricsView: View {
     let dismiss: () -> Void
     var inline = false
     var prefetcher: LyricsPrefetcher?
+    var onShowResult: (() -> Void)?
 
     @Environment(LyricsStore.self) private var lyricStore
     @State private var record: LyricsRecord?
@@ -172,7 +173,8 @@ struct LyricsView: View {
     private var synchronizedLyrics: some View {
         KaraokeLyricsView(clock: audio.lyricsClock,
                           theme: .forAppTheme(theme),
-                          accent: lyricAccent)
+                          accent: lyricAccent,
+                          onShowResult: onShowResult)
             .mask {
                 if inline { LyricsFadeMask() }
                 else { Rectangle() }

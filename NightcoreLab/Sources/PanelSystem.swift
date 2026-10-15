@@ -11,6 +11,8 @@ struct SearchDrawerState: Equatable {
         isOpen = true
         focusRequest += 1
     }
+
+    mutating func selectedTrack() { close() }
 }
 import Observation
 

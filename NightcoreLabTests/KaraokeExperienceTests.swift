@@ -4,6 +4,36 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    func testFinishedKaraokeSummaryBridgesScoreAndTrackIntoShareSnapshot() throws {
+        let artwork = URL(string: "https://example.com/performance.jpg")!
+        let track = TrackInfo(track: Track(id: "song-31", title: "Artist - Song",
+            thumbnailURL: artwork), fileName: nil, coverURL: artwork)
+        var score = KaraokeScoreSnapshot()
+        score.totalScore = 4_280
+        score.bestCombo = 9
+        score.judgedVerses = 10
+        score.accuracyPercentage = 91.4
+        score.isFinished = true
+        let summary = try XCTUnwrap(KaraokeSummary(
+            track: track, snapshot: score, mode: .microphone))
+        XCTAssertEqual(summary.grade, "S")
+        XCTAssertEqual(summary.totalScore, 4_280)
+        XCTAssertEqual(summary.maxCombo, 9)
+        XCTAssertEqual(summary.accuracy, 91)
+        let share = ShareSnapshot(trackID: track.id, title: track.title,
+            artist: track.artist, artworkURL: track.coverURL, theme: .acid,
+            visualStyle: .marble, marblePhase: 0, timestamp: .now,
+            typographyStyle: .liquidCapsule, scoreStamp: summary.stamp)
+        XCTAssertEqual(share.trackID, track.id)
+        XCTAssertEqual(share.artworkURL, artwork)
+        XCTAssertEqual(share.scoreStamp?.grade, "S")
+        XCTAssertEqual(share.scoreStamp?.score, 4_280)
+        XCTAssertEqual(share.typographyStyle, .liquidCapsule)
+        XCTAssertNil(KaraokeSummary(track: track, snapshot: score, mode: .off))
+        score.isFinished = false
+        XCTAssertNil(KaraokeSummary(track: track, snapshot: score, mode: .microphone))
+    }
+
     func testObjectModelsSweepAcrossUnsyncedLineWords() {
         let line = TimedLyricLine(id: 9, start: 4, end: 8, words: [
             WordSync(id: 0, text: "VEM", start: 4, end: 8, spaceAfter: true),

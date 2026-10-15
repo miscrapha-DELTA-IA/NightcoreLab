@@ -6,6 +6,52 @@ import XCTest
 
 final class ShareExportPipelineTests: XCTestCase {
     @MainActor
+    func testFourLyricModelsFreezeIntoShareAndRenderDistinctStoryFrames() throws {
+        let track = TrackInfo(track: Track(id: "models-31", title: "Artist - Four Styles",
+            thumbnailURL: nil), fileName: nil, coverURL: nil)
+        let line = TimedLyricLine(id: 1, start: 1, end: 8, words: [
+            WordSync(id: 0, text: "STORY", start: 1, end: 4, spaceAfter: true),
+            WordSync(id: 1, text: "CANTO", start: 4, end: 8, spaceAfter: false)
+        ], precision: .word)
+        var rendered = Set<Data>()
+        var physicalLayers = Set<String>()
+        for style in TypographyStyle.storyObjectModels {
+            let snapshot = ShareSnapshotBuilder.make(track: track, theme: .acid,
+                visualStyle: .marble, marbleStartedAt: .now, speed: 1,
+                typographyStyle: style)
+            XCTAssertEqual(snapshot.typographyStyle, style)
+            let request = try StoryRequestBuilder.make(mode: .lyrics, track: track,
+                theme: snapshot.theme, playerStyle: .turbulent,
+                karaokeBackground: .marble, marblePhase: 0,
+                playbackTime: 2, sourceDuration: 12, speed: 1,
+                lines: [line], lyricOffset: 0, typography: .classic,
+                typographyStyle: snapshot.typographyStyle, includeAudio: false)
+            let profile = StoryEncodingProfile.economical
+            let frame = StoryRenderTimeline(request: request, profile: profile).frame(index: 0)
+            let scene = StorySceneView(request: request, artwork: nil, frame: frame)
+            let typography = try XCTUnwrap(scene.typographyFrame)
+            XCTAssertEqual(typography.preset.style, style)
+            XCTAssertEqual(typography,
+                request.typographyLayer(atLyricTime: frame.lyricTime)?
+                    .resolve(at: frame.lyricTime, features: nil))
+            let word = try XCTUnwrap(typography.words.first)
+            if style == .magazineCutout {
+                XCTAssertNotNil(word.magazine)
+            } else {
+                let appearance = try XCTUnwrap(ObjectWordStyleResolver.resolve(
+                    style: style, seed: word.seed, progress: word.progress))
+                XCTAssertEqual(appearance.fill, word.progress)
+                physicalLayers.insert(appearance.material.rawValue)
+            }
+            let image = try StoryFrameRenderer.render(request: request, artwork: nil,
+                frame: frame, profile: profile)
+            rendered.insert(try XCTUnwrap(image.dataProvider?.data) as Data)
+        }
+        XCTAssertEqual(physicalLayers.count, 3)
+        XCTAssertEqual(rendered.count, 4)
+    }
+
+    @MainActor
     func testCreatorAndShareUseFrozenTrackHeaderAndOfficialBrand() throws {
         let artworkURL = URL(fileURLWithPath: "/tmp/stage28-cover.jpg")
         let track = TrackInfo(track: Track(id: "stage28", title: "Stage 28 Song",

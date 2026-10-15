@@ -320,10 +320,12 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @Binding var lyricsCleanMode: Bool
     @Binding var backgroundStyle: BackgroundStyle
     @Binding var searchDrawer: SearchDrawerState
+    @Binding var karaokeSummary: KaraokeSummary?
     let playerBackgroundStyle: PlayerBackgroundStyle
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
+    let onReplayKaraoke: () -> Void
     @ViewBuilder var header: () -> Header
     @ViewBuilder var playerDetails: () -> PlayerDetails
     @ViewBuilder var searchDrawerContent: (Int) -> DrawerContent
@@ -425,7 +427,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             VStack(spacing: 0) {
                 if showsKaraoke {
                     if isTrackLoaded {
-                        playerWithDrawer
+                        unifiedPlayerCard
                             .padding(.horizontal, 20)
                             .padding(.top, 74)
                             .hideablePanel(.player, edge: .top)
@@ -459,7 +461,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                                         .frame(maxWidth: .infinity, alignment: .center)
                                         .padding(.horizontal, 20)
                                         .hideablePanel(.player, edge: .top)
-                                    Spacer(minLength: 12)
+                                    // Reserve room for the 40 pt drawer handle above Home Indicator.
+                                    Spacer(minLength: 52)
                                 }
                                 .frame(minHeight: viewport.size.height)
                                 .padding(.bottom, searchDrawer.isOpen ? 360 : 0)
@@ -579,6 +582,24 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         .sheet(item: $storyPreview) { payload in
             StoryVideoPreview(url: payload.url, package: payload.package)
         }
+        .sheet(item: $karaokeSummary) { summary in
+            KaraokeResultCard(summary: summary, theme: appTheme,
+                onShare: {
+                    let highlight = max(0, min(audio.duration - 8,
+                        lyricsStore.lines.last?.start ?? 0))
+                    karaokeSummary = nil
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(320))
+                        shareVideo(mode: .lyrics, includeAudio: true,
+                                   startAt: highlight, scoreStamp: summary.stamp)
+                    }
+                },
+                onReplay: {
+                    karaokeSummary = nil
+                    onReplayKaraoke()
+                    updateKaraokePresentation(true)
+                })
+        }
         .overlay(alignment: .bottom) {
             if isBuildingShare && storyTask != nil {
                 VStack(spacing: 10) {
@@ -638,6 +659,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             if showsKaraoke && status == .ready { updateKaraokePresentation(true) }
         }
         .onChange(of: showsKaraoke) { _, shown in
+            if shown { searchDrawer.close() }
             updateKaraokePresentation(shown)
             if !shown {
                 audio.endKaraokeMicrophone()
@@ -919,9 +941,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             material: selectedVisualMaterial,
             reactionMode: reactionMode,
             sectionCadence: liveUniforms.sectionCadence,
-            scoreStamp: showsKaraoke ? KaraokePerformanceStamp(
+            typographyStyle: karaokeTypography,
+            scoreStamp: karaokeSummary?.stamp ?? (showsKaraoke ? KaraokePerformanceStamp(
                 snapshot: lyricsStore.scoring.snapshot,
-                mode: lyricsStore.scoring.mode) : nil
+                mode: lyricsStore.scoring.mode) : nil)
         )
         beginShare(at: capturedAt)
         Task { @MainActor in
@@ -938,7 +961,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     }
 
     /// Capture timing, DSP and lyrics before the first suspension point.
-    private func shareVideo(mode: StoryMode, includeAudio: Bool) {
+    private func shareVideo(mode: StoryMode, includeAudio: Bool,
+                            startAt: TimeInterval? = nil,
+                            scoreStamp: KaraokePerformanceStamp? = nil) {
         guard isTrackLoaded, !isBuildingShare else { return }
         let matchedLyrics = lyricsStore.trackID == track.id &&
             lyricsStore.status == .ready ? lyricsStore.lines : []
@@ -949,7 +974,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 playerStyle: playerBackgroundStyle, karaokeBackground: backgroundStyle,
                 marblePhase: Float(max(0, capturedAt.timeIntervalSince(marbleStartedAt)) *
                                    (showsKaraoke ? 0.8 : 0.6)),
-                playbackTime: audio.playbackTime, sourceDuration: audio.duration,
+                playbackTime: startAt ?? audio.playbackTime, sourceDuration: audio.duration,
                 speed: audio.speed, lines: matchedLyrics,
                 lyricOffset: lyricsStore.userOffset, typography: storyTypography,
                 typographyStyle: karaokeTypography,
@@ -963,9 +988,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 padPerformance: audio.frozenPadPerformance(),
                 reactionMode: reactionMode,
                 songDNA: liveUniforms.songDNA,
-                scoreStamp: showsKaraoke ? KaraokePerformanceStamp(
+                scoreStamp: scoreStamp ?? karaokeSummary?.stamp ?? (showsKaraoke ? KaraokePerformanceStamp(
                     snapshot: lyricsStore.scoring.snapshot,
-                    mode: lyricsStore.scoring.mode) : nil
+                    mode: lyricsStore.scoring.mode) : nil)
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,

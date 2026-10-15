@@ -19,6 +19,7 @@ struct ShareSnapshot: Sendable, Equatable {
     let material: VisualMaterial
     let reactionMode: CreativePreset.AudioReaction
     let sectionCadence: SongSectionCadence
+    let typographyStyle: TypographyStyle
     let scoreStamp: KaraokePerformanceStamp?
 
     init(trackID: String, title: String, artist: String?, artworkURL: URL?,
@@ -28,6 +29,7 @@ struct ShareSnapshot: Sendable, Equatable {
          material: VisualMaterial = .legacyMarble,
          reactionMode: CreativePreset.AudioReaction = .off,
          sectionCadence: SongSectionCadence = .neutral,
+         typographyStyle: TypographyStyle = .neon,
          scoreStamp: KaraokePerformanceStamp? = nil) {
         self.trackID = trackID
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,6 +45,7 @@ struct ShareSnapshot: Sendable, Equatable {
         self.material = material
         self.reactionMode = reactionMode
         self.sectionCadence = sectionCadence
+        self.typographyStyle = typographyStyle
         self.scoreStamp = scoreStamp
     }
 }
@@ -57,6 +60,7 @@ enum ShareSnapshotBuilder {
                      material: VisualMaterial = .legacyMarble,
                      reactionMode: CreativePreset.AudioReaction = .off,
                      sectionCadence: SongSectionCadence = .neutral,
+                     typographyStyle: TypographyStyle = .neon,
                      scoreStamp: KaraokePerformanceStamp? = nil) -> ShareSnapshot {
         ShareSnapshot(
             trackID: track.id, title: track.title, artist: track.artist,
@@ -64,7 +68,8 @@ enum ShareSnapshotBuilder {
             marblePhase: Float(max(0, capturedAt.timeIntervalSince(marbleStartedAt)) * speed),
             timestamp: capturedAt, experienceID: experienceID,
             material: material, reactionMode: reactionMode,
-            sectionCadence: sectionCadence, scoreStamp: scoreStamp
+            sectionCadence: sectionCadence, typographyStyle: typographyStyle,
+            scoreStamp: scoreStamp
         )
     }
 }
