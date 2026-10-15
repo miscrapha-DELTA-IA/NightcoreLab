@@ -65,7 +65,7 @@ struct ShareCardView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                         .foregroundStyle(.white)
-                    Text(snapshot.artist ?? "Música no NightcoreLab")
+                    Text(snapshot.artist ?? "Música no Nightcore Lab")
                         .font(.system(size: 23, weight: .medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.center)

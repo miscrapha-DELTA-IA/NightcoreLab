@@ -174,7 +174,7 @@ enum KaraokeScoreShareComposer {
     static func text(_ snapshot: KaraokeScoreSnapshot, simulation: Bool) -> String {
         let mode = simulation ? "SIMULAÇÃO de karaokê" : "Canto ao vivo"
         return [
-            "NightcoreLab · \(mode)",
+            "Nightcore Lab · \(mode)",
             "Nota \(snapshot.rank) · \(Int(snapshot.accuracyPercentage.rounded()))%",
             "\(snapshot.totalScore) pontos · maior combo \(snapshot.bestCombo)x",
             snapshot.hasHarmonicReference ? "Ritmo e afinação" : "Avaliação rítmica"
