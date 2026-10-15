@@ -6,6 +6,27 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    func testLegacySongDNACacheMigratesWithoutNewFields() throws {
+        let current = SongDNA(assetID: "legacy", sourceRevision: "r1",
+                              sourceDuration: 10, bpm: 120,
+                              beatTimestamps: [1, 1.5], energy: 0.5)
+        let data = try JSONEncoder().encode(current)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for key in ["schemaVersion", "barTimestamps", "lyricSyllablesPerSecond",
+                    "lyricSyllablesPerBeat"] { object.removeValue(forKey: key) }
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        let migrated = try JSONDecoder().decode(SongDNA.self, from: legacy)
+        XCTAssertTrue(migrated.isValid)
+        XCTAssertEqual(migrated.barTimestamps, [])
+        XCTAssertEqual(migrated.lyricSyllablesPerBeat, 0)
+        XCTAssertEqual(migrated.schemaVersion, SongDNA.schemaVersion)
+    }
+
+    func testCenterCutRampIsSmoothOverFiftyMilliseconds() {
+        XCTAssertEqual((0...5).map { CenterCutProcessor.ramp($0) },
+                       [0, 0.2, 0.4, 0.6, 0.8, 1])
+    }
+
     func testReactiveViscousEnvelopeHasNoStepAndReleasesContinuously() {
         var envelope = OrganicReactiveEnvelope()
         XCTAssertEqual(envelope.advance(warmth: 1, sustain: 1, elapsed: 0), 0)

@@ -241,7 +241,7 @@ struct CreativePresetPackage: Codable, Equatable, Sendable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let version = try c.decode(Int.self, forKey: .schemaVersion)
+        let version = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         guard version == Self.supportedSchemaVersion else {
             throw DecodingError.dataCorruptedError(
                 forKey: .schemaVersion, in: c,

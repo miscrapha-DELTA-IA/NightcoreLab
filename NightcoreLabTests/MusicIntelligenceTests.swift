@@ -4,6 +4,23 @@ import XCTest
 @testable import NightcoreLab
 
 final class MusicIntelligenceTests: XCTestCase {
+    func testOctaveRuleAndFourBeatBarGrid() {
+        let candidates = [
+            RhythmAnalysisResult.BPMCandidate(bpm: 72, confidence: 0.9),
+            RhythmAnalysisResult.BPMCandidate(bpm: 144, confidence: 0.74)
+        ]
+        XCTAssertEqual(SongDNA.resolveOctave(candidates), 144)
+        let weak = [candidates[0], .init(bpm: 144, confidence: 0.70)]
+        XCTAssertEqual(SongDNA.resolveOctave(weak), 72)
+        let beats = (0..<12).map { index in
+            RhythmAnalysisResult.BeatEvent(time: Double(index) * 0.5,
+                index: index, strength: index % 4 == 1 ? 1 : 0.2)
+        }
+        let rhythm = RhythmAnalysisResult(onsetEvents: [0.5, 2.5, 4.5],
+            bpmCandidates: candidates, beatGrid: beats, confidence: 0.9)
+        XCTAssertEqual(SongDNA.barGrid(rhythm), [0.5, 2.5, 4.5])
+    }
+
     private var directory: URL!
     private var cacheDirectory: URL { directory.appendingPathComponent("cache") }
 

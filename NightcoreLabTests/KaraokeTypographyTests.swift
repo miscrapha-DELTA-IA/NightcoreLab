@@ -5,6 +5,41 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeTypographyTests: XCTestCase {
+    func testASSKaraokeParserAndContinuousFill() throws {
+        let ass = "Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\k50}He {\\kf75}llo {\\ko25}world"
+        let output = ASSKaraokeParser.parse(ass)
+        let line = try XCTUnwrap(output.lines.first)
+        XCTAssertEqual(line.provenance, .assKaraoke)
+        XCTAssertEqual(line.words.count, 3)
+        XCTAssertEqual(line.words[1].start, 2.5, accuracy: 0.001)
+        XCTAssertEqual(line.words[1].progressFill(at: 2.875), 0.5, accuracy: 0.001)
+        XCTAssertEqual(line.words[2].progressFill(at: 3.125), 1)
+        XCTAssertEqual(line.words[0].progressFill(at: 1.99), 0)
+    }
+
+    func testEstimatedAlignmentIsMonotonicAndWithinLine() {
+        let words = ["Canta", "comigo", "agora"].enumerated().map {
+            WordSync(id: $0.offset, text: $0.element, start: 2, end: 4,
+                     spaceAfter: $0.offset < 2)
+        }
+        let line = TimedLyricLine(id: 0, start: 2, end: 4, words: words,
+                                  precision: .line)
+        let refined = LyricsAlignmentRefiner.refine([line], onsets: [2.51, 3.26])[0]
+        XCTAssertEqual(refined.precision, .estimated)
+        XCTAssertEqual(refined.provenance, .estimatedRefined)
+        XCTAssertEqual(refined.words[1].start, 2.51, accuracy: 0.18)
+        XCTAssertTrue(zip(refined.words, refined.words.dropFirst()).allSatisfy {
+            $0.0.start < $0.1.start && $0.0.end <= $0.1.start + 0.01
+        })
+        XCTAssertEqual(refined.words.last?.end, 4)
+    }
+
+    func testMultilingualFontCascadeContainsCJKArabicAndEmoji() {
+        let descriptor = TypographyFont.cascaded(.systemFont(ofSize: 24)).fontDescriptor
+        let cascade = descriptor.object(forKey: .cascadeList) as? [UIFontDescriptor]
+        XCTAssertEqual(cascade?.count, 3)
+    }
+
     private func word(_ text: String = "HEART", id: Int = 2) -> WordSync {
         WordSync(id: id, text: text, start: 2, end: 4, spaceAfter: true)
     }

@@ -112,7 +112,8 @@ enum EnhancedLRCParser {
                 }
                 lines.append(TimedLyricLine(id: i, start: lineStart,
                                        end: words.last?.end ?? lineStart,
-                                       words: words, precision: .word))
+                                       words: words, precision: .word,
+                                       provenance: .enhancedLRC))
             } else {
                 // Linha simples: divide por espaço só para quebra de linha no layout.
                 let lineEnd = nextStart.isFinite ? nextStart : lineStart + maxImpliedLastWord

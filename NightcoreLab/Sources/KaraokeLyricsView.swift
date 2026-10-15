@@ -492,7 +492,7 @@ private struct KaraokeLineView: View {
     var body: some View {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
-        } else if status == .active && (line.precision == .word || pacingGuide) {
+        } else if status == .active && (line.precision != .line || pacingGuide) {
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
                 let _ = KaraokePerformanceProbe.shared.timelineTick(
@@ -525,8 +525,10 @@ private struct KaraokeLineView: View {
                 KaraokeWordView(
                     word: resolved.word,
                     fill: resolved.progress,
-                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
-                    glow: (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
+                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) :
+                        (accent ?? theme.fill).opacity(line.precision == .estimated ? 0.86 : 1),
+                    glow: line.precision != .estimated &&
+                        (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
                     theme: theme,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,

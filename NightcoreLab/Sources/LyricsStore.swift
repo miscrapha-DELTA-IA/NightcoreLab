@@ -49,6 +49,7 @@ final class LyricsStore {
     @ObservationIgnored private var clock: PlaybackClock?
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var refinedCache: [String: (source: String, lines: [TimedLyricLine])] = [:]
 
     // MARK: Contrato
 
@@ -97,14 +98,33 @@ final class LyricsStore {
         scrollAnchorLineID = 0
         hasWordSync = false
 
+        if let cached = refinedCache[trackID], cached.source == rawLRC {
+            lines = cached.lines
+            hasWordSync = cached.lines.contains { $0.precision == .word }
+            status = cached.lines.isEmpty ? .unavailable : .ready
+            syncNow()
+            return
+        }
+
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let parsed = EnhancedLRCParser.parse(rawLRC)
+            let refined: [TimedLyricLine]
+            if let cached = await LyricsAlignmentCache.shared.load(
+                trackID: trackID, source: rawLRC) {
+                refined = cached
+            } else {
+                let parsed = rawLRC.contains("Dialogue:")
+                    ? ASSKaraokeParser.parse(rawLRC) : EnhancedLRCParser.parse(rawLRC)
+                refined = LyricsAlignmentRefiner.refine(parsed.lines)
+                await LyricsAlignmentCache.shared.save(refined, trackID: trackID,
+                                                       source: rawLRC)
+            }
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, self.trackID == trackID else { return }
-                self.lines = parsed.lines
-                self.hasWordSync = parsed.hasWordSync
-                self.status = parsed.lines.isEmpty ? .unavailable : .ready
+                self.refinedCache[trackID] = (source: rawLRC, lines: refined)
+                self.lines = refined
+                self.hasWordSync = refined.contains { $0.precision == .word }
+                self.status = refined.isEmpty ? .unavailable : .ready
                 self.syncNow()
             }
         }

@@ -40,6 +40,14 @@ struct LyricsControlCenter: View {
                             get: { Double(audio.vocalSetting.intensity) },
                             set: { var value = audio.vocalSetting; value.intensity = Float($0); audio.applyVocalFX(value) }), in: 0...1)
                             .accessibilityLabel("Intensidade Vocal FX")
+                        Toggle("Reduzir Voz da Música (Center-Cut)", isOn: Binding(
+                            get: { audio.centerCutEnabled },
+                            set: { audio.setCenterCutEnabled($0) }))
+                            .disabled(!audio.centerCutAvailable)
+                        if !audio.centerCutAvailable {
+                            Text("Center-Cut requer áudio estéreo; mono segue sem alteração.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
                         Text(audio.vocalMonitoringEnabled ? "Retorno com efeitos nos fones." : "Ative o microfone para pontuar. Retorno com efeitos disponível em fones de baixa latência.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }

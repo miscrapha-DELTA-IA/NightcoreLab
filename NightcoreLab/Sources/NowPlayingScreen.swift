@@ -340,6 +340,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.scenePhase) private var scenePhase
     @State private var marbleStartedAt = Date()
     @State private var visualEngine = AudioFeatureEngine()
@@ -701,7 +702,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 expressionCache: ExpressionCache())
             guard !Task.isCancelled, audio.playbackSourceRevision == revision,
                   audio.visualAnalysisURL == url else { return }
-            if cached.isValid { liveUniforms.setSongDNA(cached) }
+            if cached.isValid { liveUniforms.setSongDNA(cached.applyingLyrics(lyricsStore.lines)) }
 
             // Cached verified sections can animate immediately. Incomplete
             // energy/rhythm intelligence is enriched without delaying playback.
@@ -717,7 +718,12 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 }.value
                 guard !Task.isCancelled, audio.playbackSourceRevision == revision,
                       audio.visualAnalysisURL == url else { return }
-                if enriched.isValid { liveUniforms.setSongDNA(enriched) }
+                if enriched.isValid { liveUniforms.setSongDNA(enriched.applyingLyrics(lyricsStore.lines)) }
+            }
+        }
+        .onChange(of: lyricsStore.lines) { _, lines in
+            if let dna = liveUniforms.songDNA, dna.isValid {
+                liveUniforms.setSongDNA(dna.applyingLyrics(lines))
             }
         }
         // The source-time lookup is actor isolated at ~8 Hz, not in the 60 Hz
@@ -841,8 +847,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         .clipped()
                         .allowsHitTesting(searchDrawer.isOpen)
                         .accessibilityHidden(!searchDrawer.isOpen)
-                        .background(.ultraThinMaterial,
-                                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .background {
+                            if reduceTransparency {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(Color.black)
+                            } else {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            }
+                        }
                         .overlay {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .strokeBorder(appTheme.accent.opacity(0.32), lineWidth: 1)
@@ -853,7 +866,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 }
             }
             .zIndex(5)
-            .animation(reduceMotion ? .easeInOut(duration: 0.2) :
+            .animation(reduceMotion ? nil :
                        .spring(response: 0.38, dampingFraction: 0.86),
                        value: searchDrawer.isOpen)
     }

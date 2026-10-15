@@ -73,7 +73,7 @@ struct CreatorPreset: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let version = try c.decode(Int.self, forKey: .version)
+        let version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
         guard version == Self.schemaVersion else {
             throw DecodingError.dataCorruptedError(
                 forKey: .version, in: c, debugDescription: "Unsupported creator preset schema")
