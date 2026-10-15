@@ -197,6 +197,12 @@ struct LyricsView: View {
             }
 
             VStack(spacing: inline ? 10 : 18) {
+                // Scoring chrome remains visible even while timed lyrics load or
+                // when the catalog cannot provide a synchronized line list.
+                if inline && lyricStore.lines.isEmpty {
+                    KaraokeScoreHUD(session: lyricStore.scoring, accent: lyricAccent,
+                                    onResult: onShowResult)
+                }
                 if inline {
                     HStack {
                         Spacer(minLength: 0)
