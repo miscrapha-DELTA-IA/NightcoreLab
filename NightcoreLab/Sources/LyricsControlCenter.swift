@@ -84,7 +84,16 @@ struct LyricsControlCenter: View {
                     Text("Cifras medidas do áudio local aparecem sobre as palavras. Tom, capo e batida ficam no topo da letra.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Button("Autorizar transcrição local") {
-                        Task { _ = await AutoLyricsTranscriber.requestPermission() }
+                        Task {
+                            guard await AutoLyricsTranscriber.requestPermission(),
+                                  let trackID = lyricsStore.trackID,
+                                  let url = audio?.visualAnalysisURL,
+                                  lyricsStore.lines.contains(where: {
+                                      $0.provenance == .rhythmicCue }) else { return }
+                            lyricsStore.loadFallback(trackID: trackID, plainText: nil,
+                                sourceURL: url, duration: audio?.duration ?? 0,
+                                force: true, retryRecognition: true)
+                        }
                     }
                     .font(.footnote)
                 } header: {

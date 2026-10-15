@@ -70,7 +70,8 @@ enum AutoLyricsTranscriber {
         if SFSpeechRecognizer.authorizationStatus() == .authorized,
            let recognizer = SFSpeechRecognizer(locale: .current),
            recognizer.supportsOnDeviceRecognition,
-           let words = await recognize(vocalURL, recognizer: recognizer), !words.isEmpty {
+           let words = await recognizeFullTrack(vocalURL, recognizer: recognizer),
+           !words.isEmpty {
             return group(words, bars: bars)
         }
         return (try? rhythmicCues(vocalURL: vocalURL, duration: duration, bars: bars)) ??
@@ -107,6 +108,55 @@ enum AutoLyricsTranscriber {
                 continuation.resume(returning: words)
             }
         }
+    }
+
+    /// Speech tasks are bounded to 45-second local CAF slices. This keeps
+    /// long tracks from silently losing every verse after the first minute.
+    private static func recognizeFullTrack(_ url: URL,
+                                           recognizer: SFSpeechRecognizer) async -> [TimedWord]? {
+        guard let file = try? AVAudioFile(forReading: url,
+                                          commonFormat: .pcmFormatFloat32,
+                                          interleaved: false) else { return nil }
+        let rate = file.processingFormat.sampleRate
+        let duration = Double(file.length) / rate
+        if duration <= 45 { return await recognize(url, recognizer: recognizer) }
+        let chunkFrames = AVAudioFramePosition(45 * rate)
+        var words: [TimedWord] = []
+        var start: AVAudioFramePosition = 0
+        while start < file.length {
+            if Task.isCancelled { return nil }
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("nightcore_speech_\(UUID().uuidString).caf")
+            do {
+                do {
+                let writer = try AVAudioFile(forWriting: temp,
+                    settings: file.processingFormat.settings,
+                    commonFormat: .pcmFormatFloat32, interleaved: false)
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                    frameCapacity: 4096) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                file.framePosition = start
+                let end = min(file.length, start + chunkFrames)
+                while file.framePosition < end {
+                    try Task.checkCancellation()
+                    let remaining = end - file.framePosition
+                    buffer.frameLength = AVAudioFrameCount(min(4096, remaining))
+                    try file.read(into: buffer, frameCount: buffer.frameLength)
+                    if buffer.frameLength == 0 { break }
+                    try writer.write(from: buffer)
+                }
+                }
+                let part = await recognize(temp, recognizer: recognizer) ?? []
+                let offset = Double(start) / rate
+                words += part.map { TimedWord(text: $0.text,
+                                              start: $0.start + offset,
+                                              end: $0.end + offset) }
+            } catch { /* The rhythmic cue path remains available. */ }
+            try? FileManager.default.removeItem(at: temp)
+            start += chunkFrames
+        }
+        return words
     }
 
     static func group(_ words: [TimedWord], bars: [TimeInterval]) -> [TimedLyricLine] {

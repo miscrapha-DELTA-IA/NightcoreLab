@@ -507,7 +507,7 @@ private struct KaraokeLineView: View {
     let previewFrom: TimeInterval?
     let chords: [Int: String]
     let focusMode: KaraokeFocusMode
-    private let preparedTypography: TypographyPreparedLine
+    @State private var preparedTypography: TypographyPreparedLine?
     private var typographyStyle: TypographyStyle { typographyPreset.style }
 
     private var lyricState: LyricsState {
@@ -546,8 +546,6 @@ private struct KaraokeLineView: View {
         self.previewFrom = previewFrom
         self.chords = chords
         self.focusMode = focusMode
-        preparedTypography = TypographyPreparedLine(line)
-        KaraokePerformanceProbe.shared.preparedLineConstructed()
     }
 
     /// The Story's single entry point (TypographyLayer.resolve), with this
@@ -569,6 +567,7 @@ private struct KaraokeLineView: View {
     }
 
     var body: some View {
+        Group {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
         } else {
@@ -589,6 +588,14 @@ private struct KaraokeLineView: View {
                        lineFocusProgress: KaraokeStanzaCamera.focusProgress(
                            line: line, at: source + offset))
             }
+        }
+        }
+        .onAppear {
+            preparedTypography = TypographyPreparedLine(line)
+            KaraokePerformanceProbe.shared.preparedLineConstructed()
+        }
+        .onChange(of: line) { _, updated in
+            preparedTypography = TypographyPreparedLine(updated)
         }
     }
 

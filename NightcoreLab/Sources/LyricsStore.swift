@@ -89,7 +89,8 @@ final class LyricsStore {
     /// Cache-first, then utility-priority stem preparation and local speech.
     /// A later catalog result or track replacement cancels this task.
     func loadFallback(trackID: String, plainText: String?, sourceURL: URL,
-                      duration: TimeInterval, force: Bool = false) {
+                      duration: TimeInterval, force: Bool = false,
+                      retryRecognition: Bool = false) {
         guard self.trackID == trackID, force || status != .ready else { return }
         loadTask?.cancel()
         status = .searching
@@ -98,7 +99,9 @@ final class LyricsStore {
             "|" + (plainText ?? "")
         loadTask = Task.detached(priority: .utility) { [weak self] in
             if let cached = await AutoLyricsCache.shared.load(trackID: trackID,
-                                                               fingerprint: fingerprint) {
+                                                               fingerprint: fingerprint),
+               !retryRecognition || cached.contains(where: {
+                   $0.provenance == .autoTranscribed }) {
                 await self?.installFallback(cached, trackID: trackID)
                 return
             }

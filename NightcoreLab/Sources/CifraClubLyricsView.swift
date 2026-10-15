@@ -77,7 +77,7 @@ private struct MiniChordDiagram: View {
                         path.addLine(to: CGPoint(x: x, y: size.height - 2))
                         context.stroke(path, with: .color(.white.opacity(0.6)), lineWidth: 0.7)
                         if frets[string] > 0 {
-                            let y = size.height * CGFloat(frets[string] - 0.5) / 4
+                            let y = size.height * (CGFloat(frets[string]) - 0.5) / 4
                             context.fill(Path(ellipseIn: CGRect(x: x - 2.5, y: y - 2.5,
                                                                   width: 5, height: 5)),
                                          with: .color(.white))
