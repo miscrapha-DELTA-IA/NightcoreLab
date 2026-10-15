@@ -919,6 +919,7 @@ final class AudioEngineManager {
             }
             self.stemFiles = files
             self.stemsAvailable = true
+            self.applyLiveStemEQ()
             if self.stemMixEnabled {
                 self.scheduleStems(startingAt: self.currentTime)
                 self.rampStemMix()
@@ -929,16 +930,43 @@ final class AudioEngineManager {
     func applyStemPreset(_ preset: StemMixPreset) {
         stemLevels = preset.levels
         setStemMixerEnabled(true)
+        if stemsAvailable {
+            for kind in StemKind.allCases {
+                stemPlayers[kind]?.volume = stemLevels[kind] ?? 1
+            }
+        }
     }
 
+    /// Fast path: direct native AU/node parameter updates, no task or reschedule.
     func setStemLevel(_ kind: StemKind, level: Float) {
-        stemLevels[kind] = level.clamped(to: 0...1)
-        setStemMixerEnabled(true)
+        let clamped = level.clamped(to: Self.stemRange)
+        stemLevels[kind] = clamped
+        if !stemMixEnabled { setStemMixerEnabled(true) }
+        if stemsAvailable {
+            stemPlayers[kind]?.volume = clamped
+        } else {
+            applyLiveStemEQ()
+        }
+    }
+
+    func resetStemLevels() {
+        for kind in StemKind.allCases { setStemLevel(kind, level: 1) }
+    }
+
+    private func applyLiveStemEQ() {
+        let proxy = stemMixEnabled && !stemsAvailable
+        stemEQ.bands[0].gain = proxy ? Self.stemGainDB(for: stemLevels[.vocal] ?? 1) : 0
+        stemEQ.bands[1].gain = proxy ? Self.stemGainDB(for: stemLevels[.instrumental] ?? 1) : 0
+        let drums = proxy ? Self.stemGainDB(for: stemLevels[.drums] ?? 1) : 0
+        stemEQ.bands[2].gain = drums
+        stemEQ.bands[3].gain = drums
+        stemEQ.bands[4].gain = proxy ? Self.stemGainDB(for: stemLevels[.bass] ?? 1) : 0
     }
 
     func setStemMixerEnabled(_ enabled: Bool) {
         let wasEnabled = stemMixEnabled
         stemMixEnabled = enabled
+        applyLiveStemEQ()
         if enabled {
             centerCutEnabled = false
             centerCutRampTask?.cancel()
@@ -946,7 +974,8 @@ final class AudioEngineManager {
             centerCutPlayer.volume = 0
             if stemsAvailable && !wasEnabled { scheduleStems(startingAt: currentTime) }
         }
-        rampStemMix()
+        // Crossfade only for mode switches; never on slider drag.
+        if wasEnabled != enabled { rampStemMix() }
     }
 
     private func scheduleStems(startingAt time: TimeInterval) {
