@@ -25,12 +25,14 @@ final class AudioDownloadManager: ObservableObject {
     private var breakerTask: Task<Void, Never>?
     @Published private(set) var cachedIDs = Set<String>()
     @Published private(set) var downloadingIDs = Set<String>()
+    @Published private(set) var offlineDownloadProgress: [String: Double] = [:]
     var backgroundCompletionHandler: (() -> Void)?
 
     private let transfers: DownloadKit.DownloadManager
     private var cache = TrackAudioCache()
     private var memoryWarningObserver: NSObjectProtocol?
     private var tracks: [UUID: Track] = [:]
+    private var offlineWaiters: [String: [CheckedContinuation<URL, Error>]] = [:]
     private var tasks: [UUID: URLSessionDownloadTask] = [:]
     private var attempts: [String: Int] = [:]
     private var selectedID: String?
@@ -92,6 +94,39 @@ final class AudioDownloadManager: ObservableObject {
     var quickLibraryTracks: [Track] {
         cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
             .prefix(8).map { cachedTrack($0.track) }
+    }
+
+    var allCachedTracks: [Track] {
+        cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
+            .map { cachedTrack($0.track) }
+    }
+
+    /// Background save joins an existing transfer and never changes playback selection.
+    func saveOfflineAudio(_ track: Track) async throws -> URL {
+        if let local = cache.localURL(for: track.id) {
+            cache.pin(track.id)
+            return local
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            offlineWaiters[track.id, default: []].append(continuation)
+            offlineDownloadProgress[track.id] = 0
+            serialize {
+                if let local = self.cache.localURL(for: track.id) {
+                    self.completeOfflineAudio(track.id, result: .success(local))
+                    return
+                }
+                guard !self.tracks.values.contains(where: { $0.id == track.id }) else { return }
+                await self.append(track, priority: URLSessionTask.defaultPriority)
+            }
+        }
+    }
+
+    private func completeOfflineAudio(_ id: String, result: Result<URL, Error>) {
+        if case .success = result { cache.pin(id) }
+        offlineDownloadProgress[id] = nil
+        for waiter in offlineWaiters.removeValue(forKey: id) ?? [] {
+            waiter.resume(with: result)
+        }
     }
 
     func status(for track: Track) -> TrackStatus {
@@ -268,12 +303,14 @@ final class AudioDownloadManager: ObservableObject {
 
     private func append(_ track: Track, priority: Float) async {
         guard var endpoint = URLComponents(string: Self.apiBaseURL) else {
+            completeOfflineAudio(track.id, result: .failure(URLError(.badURL)))
             fail(track, message: "Endereço do servidor inválido.")
             return
         }
         endpoint.path += "/download"
         endpoint.queryItems = [URLQueryItem(name: "url", value: track.url.absoluteString)]
         guard let url = endpoint.url else {
+            completeOfflineAudio(track.id, result: .failure(URLError(.badURL)))
             fail(track, message: "Endereço do servidor inválido.")
             return
         }
@@ -491,8 +528,10 @@ extension AudioDownloadManager: DownloadManagerDelegate {
             if let selectedID { protected.insert(selectedID) }
             cache.trim(protecting: protected)
             cachedIDs = Set(cache.entries.keys)
+            completeOfflineAudio(track.id, result: .success(local))
             deliver(local, track: track)
         } catch {
+            completeOfflineAudio(track.id, result: .failure(error))
             fail(track, message: "Não foi possível salvar o áudio: \(error.localizedDescription)")
         }
         tracks[download.id] = nil
@@ -514,6 +553,7 @@ extension AudioDownloadManager: DownloadManagerDelegate {
             .flatMap(TimeInterval.init) ?? 60
         tracks[download.id] = nil
         tasks[download.id] = nil
+        completeOfflineAudio(track.id, result: .failure(error))
         serialize { await self.transfers.remove(download); self.persistPending() }
         if rateLimited { activateRateLimit(retryAfter: retryAfter) }
         // Speculative failures stay silent and can be retried on explicit selection.
@@ -544,6 +584,9 @@ extension AudioDownloadManager: DownloadManagerDelegate {
     }
 
     func downloadDidUpdateProgress(_ download: Download) async {
+        if let id = tracks[download.id]?.id, offlineWaiters[id] != nil {
+            offlineDownloadProgress[id] = download.fractionCompleted
+        }
         guard tracks[download.id]?.id == selectedID else { return }
         downloadProgress = download.fractionCompleted
     }

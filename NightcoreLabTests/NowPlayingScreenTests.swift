@@ -3,6 +3,21 @@ import XCTest
 
 final class NowPlayingScreenTests: XCTestCase {
     @MainActor
+    func testDrawerMixIsInstantDeterministicAndAlwaysHasFifteenDistinctTracks() {
+        let cached = Track(id: "cached-song", title: "Saved Song", thumbnailURL: nil)
+        let discovery = Track(id: "discovered-song", title: "Discovered", thumbnailURL: nil)
+        let first = DrawerSmartMix.resolve(history: [], cached: [cached],
+                                           discovery: [discovery], current: nil)
+        let second = DrawerSmartMix.resolve(history: [], cached: [cached],
+                                            discovery: [discovery], current: nil)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.count, 15)
+        XCTAssertEqual(Set(first.map(\.id)).count, 15)
+        XCTAssertEqual(Array(first.map(\.id).prefix(2)), [cached.id, discovery.id])
+        XCTAssertTrue(first.allSatisfy { $0.url.scheme == "https" && !$0.title.isEmpty })
+    }
+
+    @MainActor
     func testEmptyQueryShowsInstantRecentsAndQueueWhileSelectionWaitsForPlayback() throws {
         let played = Track(id: "played", title: "Recent Song", thumbnailURL: nil)
         let cached = Track(id: "cached", title: "Library Song", thumbnailURL: nil)

@@ -28,6 +28,11 @@ struct SearchView: View {
     var recentTracks: [Track] = []
     var queuedTracks: [Track] = []
     var pendingTrackID: String? = nil
+    @ObservedObject var offline: OfflineLibrary
+    var onPlayMix: ([Track]) -> Void = { _ in }
+    var onPlayOffline: ([Track]) -> Void = { _ in }
+    var onSaveOffline: (Track) -> Void = { _ in }
+    var onSaveMixOffline: ([Track]) -> Void = { _ in }
     var onPlayQueue: (Track) -> Void = { _ in }
     var onRemoveQueue: (Track) -> Void = { _ in }
     @Environment(PanelStore.self) private var panels
@@ -45,6 +50,8 @@ struct SearchView: View {
     @State private var hasSearched = false
     @State private var submittedQuery: String?
     @State private var searchRequestID = UUID()
+    @State private var hubTab: DrawerHubTab = .mix
+    @State private var shuffleSeed = 0
     @FocusState private var isFocused: Bool
 
     private var typedText: String? {
@@ -54,6 +61,20 @@ struct SearchView: View {
     private var isSearchMode: Bool { submittedQuery != nil || typedText != nil }
     private var showsQuickAccess: Bool {
         DrawerQuickAccess.shouldShow(query: query, submittedQuery: submittedQuery)
+    }
+    private var mixTracks: [Track] {
+        let base = DrawerSmartMix.resolve(history: Array(playHistory.entries.values),
+            cached: downloader.allCachedTracks, discovery: suggestedTracks,
+            current: recentTracks.first)
+        guard shuffleSeed > 0 else { return base }
+        // A stable rotation changes order without fetching or replacing songs.
+        return Array(base.enumerated().sorted {
+            ($0.offset * 7 + shuffleSeed * 3) % 15 <
+                ($1.offset * 7 + shuffleSeed * 3) % 15
+        }.map { $0.element })
+    }
+    private var offlineTracks: [Track] {
+        downloader.allCachedTracks.filter { offline.readyIDs.contains($0.id) }
     }
     private var isDiscoverVisible: Bool {
         PanelPresentation.showsDiscover(hidden: panels.hidden, isZen: panels.isZen,
@@ -141,6 +162,7 @@ struct SearchView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 9) {
                         ForEach(recentTracks) { track in
+                            VStack(spacing: 4) {
                             Button {
                                 isFocused = false
                                 onSelect(track, [])
@@ -166,6 +188,8 @@ struct SearchView: View {
                             .buttonStyle(.plain)
                             .disabled(!isEnabled)
                             .accessibilityIdentifier("searchDrawer.recent.\(track.id)")
+                            offlineControl(track)
+                            }
                         }
                     }
                 }
@@ -203,6 +227,7 @@ struct SearchView: View {
                                 .foregroundStyle(theme.accent)
                                 .accessibilityIdentifier("searchDrawer.playQueue.\(track.id)")
                         }
+                        offlineControl(track)
                         Button(role: .destructive) { onRemoveQueue(track) } label: {
                             Image(systemName: "xmark.circle.fill")
                         }
@@ -219,6 +244,118 @@ struct SearchView: View {
         .padding(11)
         .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
         .accessibilityIdentifier("searchDrawer.quickAccess")
+    }
+
+    private var quickHub: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 7) {
+                hubPill(.mix, "⚡ Mix 15")
+                hubPill(.offline, "📥 Offline (\(offlineTracks.count))")
+                hubPill(.queue, "🎵 Fila & Recentes")
+            }
+            .accessibilityIdentifier("searchDrawer.hubTabs")
+            switch hubTab {
+            case .mix:
+                HStack {
+                    Button("▶ Tocar Mix (15)") { onPlayMix(mixTracks) }
+                        .accessibilityIdentifier("searchDrawer.playMix")
+                    Spacer(minLength: 4)
+                    Button("🔀 Aleatório") { shuffleSeed += 1 }
+                        .accessibilityIdentifier("searchDrawer.shuffleMix")
+                }
+                .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                ForEach(mixTracks) { track in hubTrackRow(track) }
+            case .offline:
+                HStack {
+                    Button("▶ Tocar Offline") { onPlayOffline(offlineTracks) }
+                        .disabled(offlineTracks.isEmpty)
+                    Spacer(minLength: 4)
+                    Button("📥 Salvar Mix 15 Offline") { onSaveMixOffline(mixTracks) }
+                }
+                .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                if offlineTracks.isEmpty {
+                    Text("Nenhuma música completa offline. Salve seu Mix 15 aqui.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(offlineTracks) { track in hubTrackRow(track) }
+            case .queue:
+                quickAccess
+            }
+        }
+        .padding(11)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityIdentifier("searchDrawer.quickHub")
+    }
+
+    private func hubPill(_ tab: DrawerHubTab, _ title: String) -> some View {
+        Button { hubTab = tab } label: {
+            Text(title).font(.caption2.weight(.bold)).lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 8).padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(hubTab == tab ? theme.accent.opacity(0.23) : .white.opacity(0.07),
+                            in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(hubTab == tab ? .isSelected : [])
+        .accessibilityIdentifier("searchDrawer.tab.\(tab.rawValue)")
+    }
+
+    private func hubTrackRow(_ track: Track) -> some View {
+        HStack(spacing: 8) {
+            Button { onSelect(track, []) } label: {
+                HStack(spacing: 8) {
+                    WebImage(url: track.thumbnailURL)
+                        .resizable().scaledToFill().frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.cleanTitle ?? track.title)
+                            .font(.caption.weight(.semibold)).lineLimit(1)
+                        Text(track.cleanArtist ?? "Música")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        if offline.lyricsReadyIDs.contains(track.id) {
+                            Text("🎤 Letra").font(.caption2).foregroundStyle(theme.accent)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+            offlineControl(track)
+        }
+        .padding(7)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func offlineControl(_ track: Track) -> some View {
+        Group {
+            if offline.readyIDs.contains(track.id) {
+                Text("✓ Offline").font(.caption2.weight(.bold))
+                    .foregroundStyle(.green)
+            } else if offline.savingIDs.contains(track.id) {
+                ProgressView(value: offlineProgress(for: track))
+                    .frame(width: 42)
+                    .accessibilityLabel(offline.phases[track.id] ?? "Salvando offline")
+            } else {
+                Button(offline.failedIDs.contains(track.id) ? "Tentar novamente" : "↓ Offline") {
+                    onSaveOffline(track)
+                }
+                .font(.caption2.weight(.bold)).foregroundStyle(theme.accent)
+                .disabled(!isEnabled)
+                .accessibilityIdentifier("searchDrawer.saveOffline.\(track.id)")
+            }
+        }
+    }
+
+    private func offlineProgress(for track: Track) -> Double {
+        switch offline.phases[track.id] {
+        case "Baixando áudio":
+            return 0.7 * (downloader.offlineDownloadProgress[track.id] ?? 0)
+        case "Salvando letra": return 0.8
+        case "Analisando música": return 0.9
+        default: return 0
+        }
     }
 
     var body: some View {
@@ -274,7 +411,7 @@ struct SearchView: View {
                 }
 
                 if showsQuickAccess {
-                    quickAccess
+                    quickHub
                 }
 
                 if typedText != nil && omnibox.isShowingStaleCache {
@@ -360,6 +497,7 @@ struct SearchView: View {
                                 ForEach(displayedTracks) { result in
                                     let track = downloader.cachedTrack(result)
                                     let status = downloader.status(for: result)
+                                    VStack(alignment: .leading, spacing: 5) {
                                     Button {
                                         isFocused = false
                                         // History counts only after the audio engine confirms playback.
@@ -402,6 +540,9 @@ struct SearchView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(!isEnabled)
+                                    offlineControl(track)
+                                    }
+                                    .frame(width: 152)
                                 }
                             }
                             .padding(.vertical, 3)
@@ -448,6 +589,7 @@ struct SearchView: View {
         }
         .onChange(of: isPresented) { _, presented in
             if !presented { showSuggestions(preserveSavedQuery: true) }
+            else if showsQuickAccess { hubTab = .mix }
         }
         .onChange(of: focusRequest) { _, _ in
             if isPresented { isFocused = true }

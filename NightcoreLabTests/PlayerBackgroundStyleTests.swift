@@ -2,6 +2,21 @@ import XCTest
 @testable import NightcoreLab
 
 final class PlayerBackgroundStyleTests: XCTestCase {
+    func testOrganicResponsiveUsesExistingFoldUniformsWithoutBeatOrGeometryPulse() {
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse, timestamp: 2)
+        let quiet = MarbleLiveResponse.applyOrganic(base, energy: 0)
+        let swell = MarbleLiveResponse.applyOrganic(base, energy: 1)
+        XCTAssertEqual(quiet.parameters.beatPulse, 0)
+        XCTAssertEqual(swell.parameters.beatPulse, 0)
+        XCTAssertEqual(swell.parameters.warpAmount,
+                       base.parameters.warpAmount * 1.20, accuracy: 0.000_001)
+        XCTAssertEqual(swell.parameters.stripingMix, base.parameters.stripingMix)
+        XCTAssertEqual(swell.parameters.distortion, base.parameters.distortion)
+        XCTAssertGreaterThan(swell.parameters.brightnessBoost,
+                             quiet.parameters.brightnessBoost)
+        XCTAssertEqual(MarbleLiveResponse.apply(base, levels: .silence, mode: .off), base)
+    }
+
     func testAllBackgroundModesAreExposed() {
         XCTAssertEqual(PlayerBackgroundStyle.allCases.count, 4)
         XCTAssertEqual(PlayerBackgroundStyle.turbulent.displayName, "Turbulent Displacement")

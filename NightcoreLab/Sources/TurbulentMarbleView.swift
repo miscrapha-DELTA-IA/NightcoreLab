@@ -129,6 +129,7 @@ struct TurbulentMarbleView: View {
 
     @State private var start = Date()
     @State private var motion = MarbleMotionState()
+    @State private var organic = OrganicReactiveMotionState()
     @Environment(\.energyBudget) private var energyBudget
 
 
@@ -150,9 +151,12 @@ struct TurbulentMarbleView: View {
                         date: context.date, start: startedAt ?? start,
                         baseSpeed: speed * (reactionMode == .off
                             ? 1 : sectionCadence.flowSpeed))
+                    let responsiveEnergy = reactionMode == .responsive
+                        ? organic.advance(date: context.date, levels: levels) : 0
                     marbleFrame(
                         time: now,
-                        resolved: resolvedFrame(live: true, levels: levels))
+                        resolved: resolvedFrame(live: true, levels: levels,
+                                                responsiveEnergy: responsiveEnergy))
                 }
             }
         }
@@ -169,13 +173,19 @@ struct TurbulentMarbleView: View {
     /// (resolved once; previously uniforms and material were assembled by two
     /// parallel functions, calling the live driver twice).
     private func resolvedFrame(live: Bool,
-                               levels: LiveAudioLevels = .silence) -> MaterialFrame {
+                               levels: LiveAudioLevels = .silence,
+                               responsiveEnergy: Double = 0) -> MaterialFrame {
         if let materialFrame { return materialFrame }
         let parameters = CreativeParameterFrame(
-            playerGlow: 0, marbleDistortion: reactiveDistortion,
+            playerGlow: 0, marbleDistortion: reactionMode == .responsive ? 0 : reactiveDistortion,
             lyricKinetics: 0, particleEmission: 0)
         let resolved: MaterialFrame
-        if live, reactionMode != .off, let pulseDriver {
+        if live, reactionMode == .responsive {
+            // The responsive path starts with the same authored liquid, then
+            // lets only the PCM-derived viscous envelope open its inner folds.
+            resolved = MaterialResolver.resolve(material, timestamp: 0,
+                                                parameters: parameters)
+        } else if live, reactionMode != .off, let pulseDriver {
             // Preserve source-time beat grid fallback during quiet PCM/warm-up.
             resolved = pulseDriver.frame(parameters: parameters)
         } else {
@@ -184,11 +194,17 @@ struct TurbulentMarbleView: View {
             resolved = MaterialResolver.resolve(material, timestamp: 0, parameters: parameters)
                 .replacingBeatPulse(materialBound(beatPulse, 0...1))
         }
-        let liveOutput = live && liveMeter != nil
-            ? MarbleLiveResponse.apply(resolved, levels: levels, mode: reactionMode)
-            : resolved
+        let liveOutput: MaterialFrame
+        if live && liveMeter != nil && reactionMode == .responsive {
+            liveOutput = MarbleLiveResponse.applyOrganic(resolved, energy: responsiveEnergy)
+        } else if live && liveMeter != nil {
+            liveOutput = MarbleLiveResponse.apply(resolved, levels: levels,
+                                                  mode: reactionMode)
+        } else {
+            liveOutput = resolved
+        }
         let edited = MarbleCreatorResponse.apply(liveOutput, controls: creatorControls)
-        let sectioned = live && reactionMode != .off
+        let sectioned = live && reactionMode == .subtle
             ? SongSectionCadence.apply(edited, cadence: sectionCadence)
             : edited
         return live ? PadVisualAccentResolver.apply(
@@ -281,17 +297,6 @@ struct TurbulentMarbleView: View {
             }
             // Only the compact player card gets a restrained beat-lit rim.
             // The full-screen visual and frozen Story captures are unchanged.
-            .overlay {
-                if !extendIntoSafeArea && frozenTime == nil &&
-                   reactionMode == .responsive {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(
-                            palette.glow.opacity(
-                                materialBound(resolved.parameters.beatPulse, 0...1) * 0.20),
-                            lineWidth: 1.5)
-                        .blur(radius: 2)
-                }
-            }
     }
 }
 
@@ -321,6 +326,29 @@ private extension Color {
 /// Pure visible-output transform. Audio is sampled from the live PCM mixer;
 /// these coefficients are deliberately conservative (no flash/strobe).
 enum MarbleLiveResponse {
+    static func applyOrganic(_ frame: MaterialFrame, energy: Double) -> MaterialFrame {
+        let value = materialBound(energy, 0...1)
+        let p = frame.parameters
+        let updated = VisualParameterSet(
+            distortion: p.distortion, beatPulse: 0,
+            pulseDecay: p.pulseDecay, offbeatScale: p.offbeatScale,
+            warpAmount: p.warpAmount * (1 + value * 0.20),
+            brightnessBoost: p.brightnessBoost + value * 0.18,
+            stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
+            speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
+            scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
+            voidThreshold: p.voidThreshold, combStretch: p.combStretch,
+            bilateralSymmetry: p.bilateralSymmetry, halftoneGrating: p.halftoneGrating)
+        let s = frame.signals
+        return MaterialFrame(materialID: frame.materialID, type: frame.type,
+            parameters: updated, intensity: frame.intensity,
+            audioResponse: frame.audioResponse, timestamp: frame.timestamp,
+            seed: frame.seed, controls: frame.controls,
+            signals: MaterialReactiveSignals(energy: max(s.energy, value),
+                bass: max(s.bass, value * 0.6), movement: s.movement,
+                brightness: max(s.brightness, value)), viewport: frame.viewport)
+    }
+
     static func gain(_ mode: CreativePreset.AudioReaction) -> Double {
         switch mode {
         case .off: return 0
@@ -387,6 +415,20 @@ private final class MarbleMotionState {
         }
         lastDate = date
         return Float(flow.phase)
+    }
+}
+
+@MainActor
+private final class OrganicReactiveMotionState {
+    private var envelope = OrganicReactiveEnvelope()
+    private var lastDate: Date?
+
+    func advance(date: Date, levels: LiveAudioLevels) -> Double {
+        defer { lastDate = date }
+        guard let lastDate else { return envelope.fluid }
+        return envelope.advance(warmth: levels.bass * 0.55 + levels.mid * 0.45,
+                                sustain: levels.songEnergy,
+                                elapsed: max(0, date.timeIntervalSince(lastDate)))
     }
 }
 

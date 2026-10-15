@@ -41,6 +41,54 @@ enum DrawerQuickAccess {
             .prefix(8).map { $0 }
     }
 }
+
+enum DrawerHubTab: String, CaseIterable {
+    case mix, offline, queue
+}
+
+/// Local, deterministic fallback: no network request is needed to open the drawer.
+/// History and downloaded tracks always rank above these official catalog entries.
+enum DrawerSmartMix {
+    private static let catalog: [(String, String, String)] = [
+        ("4NRXx6U8ABQ", "Blinding Lights", "The Weeknd"),
+        ("JGwWNGJdvx8", "Shape of You", "Ed Sheeran"),
+        ("hT_nvWreIhg", "Counting Stars", "OneRepublic"),
+        ("fRh_vgS2dFE", "Sorry", "Justin Bieber"),
+        ("RgKAFK5djSk", "See You Again", "Wiz Khalifa"),
+        ("2Vv-BfVoq4g", "Perfect", "Ed Sheeran"),
+        ("OPf0YbXqDm0", "Uptown Funk", "Mark Ronson"),
+        ("CevxZvSJLk8", "Roar", "Katy Perry"),
+        ("kJQP7kiw5Fk", "Despacito", "Luis Fonsi"),
+        ("YQHsXMglC9A", "Hello", "Adele"),
+        ("60ItHLz5WEA", "Faded", "Alan Walker"),
+        ("pRpeEdMmmQ0", "Waka Waka", "Shakira"),
+        ("ktvTqknDobU", "Radioactive", "Imagine Dragons"),
+        ("e-ORhEE9VVg", "Blank Space", "Taylor Swift"),
+        ("TjfbYH7ab-c", "Flowers", "Miley Cyrus")
+    ]
+
+    static func resolve(history: [HistoryEntry], cached: [Track],
+                        discovery: [Track], current: Track?) -> [Track] {
+        let ranked = history.sorted {
+            let lhs = Double($0.plays + 2 * ($0.completions ?? 0) - 2 * ($0.earlySkips ?? 0))
+            let rhs = Double($1.plays + 2 * ($1.completions ?? 0) - 2 * ($1.earlySkips ?? 0))
+            if lhs != rhs { return lhs > rhs }
+            if $0.lastPlayed != $1.lastPlayed { return $0.lastPlayed > $1.lastPlayed }
+            return $0.hit.id < $1.hit.id
+        }.map { $0.hit.asTrack }
+        let fallback = catalog.map { item -> Track in
+            let (id, title, artist) = item
+            var track = Track(id: id, title: title,
+                thumbnailURL: URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg"))
+            track.cleanArtist = artist
+            track.cleanTitle = title
+            return track
+        }
+        var seen = Set<String>()
+        return Array((ranked + cached + [current].compactMap { $0 } + discovery + fallback)
+            .filter { seen.insert($0.id).inserted }.prefix(15))
+    }
+}
 import Observation
 
 // =============================================================================
