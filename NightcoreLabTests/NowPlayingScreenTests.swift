@@ -58,7 +58,8 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(player.contains(".hideablePanel(.player, edge: .top)"))
         XCTAssertTrue(content.contains("searchDrawerContent: { focusRequest in musicWorkspace"))
         XCTAssertTrue(content.contains("playTrack(track)"))
-        XCTAssertTrue(content.contains("searchDrawer.close()"))
+        XCTAssertTrue(content.contains("searchDrawer.selectedTrack()"))
+        XCTAssertTrue(content.contains("#selector(UIResponder.resignFirstResponder)"))
     }
 
     func testIntegratedPlayerKeepsBackgroundStylesAvailable() {
