@@ -75,6 +75,10 @@ final class PlaybackQueue: ObservableObject {
     func clear() { upNextQueue.removeAll() }
 }
 
+private enum MusicControlPage: String, CaseIterable {
+    case speedPitch, stems
+}
+
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
 
@@ -82,6 +86,7 @@ struct ContentView: View {
     @State private var reverb: Float = 0
     @State private var bass: Float = 0
     @State private var keepOriginalPitch = false
+    @State private var musicControlPage: MusicControlPage = .speedPitch
     @State private var isVertical = false
     @State private var isAdjustingSlider = false
     @State private var isDraggingTime = false
@@ -406,13 +411,17 @@ struct ContentView: View {
         HStack(spacing: DS.Spacing.s) {
             VStack(alignment: .leading, spacing: 1) {
                 NightcoreBrandLockup(theme: currentTheme)
-                Text("v35 · " + currentTheme.displayName.uppercased())
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
+                Text("v36 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
             }
             .lineLimit(1)
-            .minimumScaleFactor(0.5)
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
 
             Spacer(minLength: 0)
 
@@ -618,7 +627,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "dial.high")
-                    Text("ÁUDIO")
+                    Text("MÚSICA")
                         .font(.caption.bold())
                         .tracking(1.3)
                     Spacer()
@@ -645,7 +654,7 @@ struct ContentView: View {
                     .hideablePanel(.presets)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("CONTROLES", systemImage: "dial.high")
+                        Label("MÚSICA · AJUSTES", systemImage: "dial.high")
                             .font(.caption.bold())
                             .tracking(1.3)
                             .foregroundStyle(currentTheme.accent)
@@ -941,8 +950,18 @@ struct ContentView: View {
 
     private var controls: some View {
         VStack(spacing: DS.Spacing.l) {
-            pitchToggle
-            sliders
+            Picker("Modo da Música", selection: $musicControlPage) {
+                Text("⚡ Speed & Pitch").tag(MusicControlPage.speedPitch)
+                Text("🎚️ Stems").tag(MusicControlPage.stems)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("music.controlMode")
+            if musicControlPage == .speedPitch {
+                pitchToggle
+                sliders
+            } else {
+                StemMixerControls(audio: audio)
+            }
             creativeReactionControl
         }
         .disabled(!hasTrack)
