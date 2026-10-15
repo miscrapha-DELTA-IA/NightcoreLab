@@ -93,7 +93,7 @@ enum TypographyResolver {
         let frame = TypographyFrame(
             lineID: state.line.id, lyricTime: now, preset: preset,
             status: state.status, activeWordID: activeID,
-            words: words, animations: [:])
+            words: words, animations: [:], precision: state.line.precision)
         return TypographyAnimationEngine.resolve(frame, features: features)
     }
 }

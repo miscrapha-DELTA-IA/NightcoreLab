@@ -388,8 +388,8 @@ private struct StoryLyricLine: View {
                 KaraokeWordView(
                     word: resolved.word,
                     fill: resolved.progress,
-                    fillColor: theme.accent,
-                    glow: (animation?.glow ?? 1) > 0,
+                    fillColor: theme.accent.opacity(frame.precision == .estimated ? 0.86 : 1),
+                    glow: frame.precision != .estimated && (animation?.glow ?? 1) > 0,
                     theme: colors,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,

@@ -32,6 +32,14 @@ final class KaraokeTypographyTests: XCTestCase {
             $0.0.start < $0.1.start && $0.0.end <= $0.1.start + 0.01
         })
         XCTAssertEqual(refined.words.last?.end, 4)
+        let preset = TypographyPreset(style: .magazineCutout)
+        let state = LyricsState(line: refined, status: .active)
+        let live = TypographyResolver.resolve(state, at: 2.75, features: nil,
+                                              preset: preset)
+        let story = TypographyLayer(state: state, preset: preset)
+            .resolve(at: 2.75, features: nil)
+        XCTAssertEqual(live, story)
+        XCTAssertEqual(story.precision, .estimated)
     }
 
     func testMultilingualFontCascadeContainsCJKArabicAndEmoji() {

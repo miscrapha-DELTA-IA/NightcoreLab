@@ -146,10 +146,17 @@ struct SongDNA: Codable, Equatable, Sendable {
             }
         }
         let downbeatPhase = phase ?? 0
+        let onsets = rhythm.onsetEvents
         return stride(from: downbeatPhase, to: beats.count, by: 4).map { index in
             let time = beats[index].time
-            return rhythm.onsetEvents.min { abs($0 - time) < abs($1 - time) }
-                .flatMap { abs($0 - time) <= 0.03 ? $0 : nil } ?? time
+            var low = 0, high = onsets.count
+            while low < high {
+                let mid = low + (high - low) / 2
+                if onsets[mid] < time { low = mid + 1 } else { high = mid }
+            }
+            let nearby = [low - 1, low].filter { onsets.indices.contains($0) }
+            let nearest = nearby.min { abs(onsets[$0] - time) < abs(onsets[$1] - time) }
+            return nearest.flatMap { abs(onsets[$0] - time) <= 0.03 ? onsets[$0] : nil } ?? time
         }
     }
 

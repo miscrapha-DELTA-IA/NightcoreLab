@@ -54,12 +54,20 @@ enum LyricsAlignmentRefiner {
 
     private static func snap(_ nominal: TimeInterval, cues: [TimeInterval],
                              vocalEnergy: [(time: TimeInterval, value: Double)]) -> TimeInterval {
-        let nearby = cues.filter { abs($0 - nominal) <= 0.035 }
-        guard !nearby.isEmpty else { return nominal }
-        return nearby.max { a, b in
-            score(a, nominal: nominal, energy: vocalEnergy) <
-            score(b, nominal: nominal, energy: vocalEnergy)
-        } ?? nominal
+        var low = 0, high = cues.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if cues[mid] < nominal { low = mid + 1 } else { high = mid }
+        }
+        var best = nominal
+        var bestScore = -Double.infinity
+        for index in max(0, low - 2)..<min(cues.count, low + 2) {
+            let cue = cues[index]
+            guard abs(cue - nominal) <= 0.035 else { continue }
+            let value = score(cue, nominal: nominal, energy: vocalEnergy)
+            if value > bestScore { best = cue; bestScore = value }
+        }
+        return best
     }
 
     private static func score(_ cue: TimeInterval, nominal: TimeInterval,
