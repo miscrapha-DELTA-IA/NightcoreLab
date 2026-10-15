@@ -127,19 +127,25 @@ struct StoryVideoRequest: Sendable {
             rhythmAnalysis: rhythm, performance: padPerformance,
             padAccent: frame.padAccent)
         guard var resolved else { return nil }
-        let cadence = reactionMode == .off ? SongSectionCadence.neutral
-            : SongSectionCadence.at(sourceTime: frame.sourceTime, dna: songDNA)
+        let cadence = !liveVisualResponseEnabled || reactionMode == .off
+            ? SongSectionCadence.neutral :
+            SongSectionCadence.at(sourceTime: frame.sourceTime, dna: songDNA)
         if let typography = resolved.typographyFrame {
             resolved = resolved.withTypography(
                 TypographyAnimationEngine.evolve(typography, cadence: cadence))
         }
-        if resolved.materialFrame != nil {
-            let base = MaterialResolver.resolve(
-                (runtime ?? renderRuntime)?.material ?? .legacyMarble,
-                timestamp: frame.sourceTime, reactionGain: 0)
-            let clean = StoryExportMotion.material(base: base,
-                mode: reactionMode, sourceTime: frame.sourceTime, dna: songDNA)
-            resolved = resolved.withMaterial(clean)
+        if let material = resolved.materialFrame,
+           liveVisualResponseEnabled, reactionMode != .off {
+            let features = CompositionAudioSampler.sample(audioTimeline, at: frame.sourceTime)
+            let pulse = max(material.parameters.beatPulse,
+                            StoryBeatEnvelope.at(sourceTime: frame.sourceTime, dna: songDNA))
+            let levels = LiveAudioLevels(
+                rms: features?.energy ?? 0, bass: features?.bass ?? 0,
+                onset: 0, beatPulse: pulse,
+                songEnergy: features?.energy ?? 0)
+            let reactive = MarbleLiveResponse.apply(material, levels: levels, mode: reactionMode)
+            resolved = resolved.withMaterial(SongSectionCadence.apply(
+                reactive, cadence: cadence))
         }
         return resolved
     }

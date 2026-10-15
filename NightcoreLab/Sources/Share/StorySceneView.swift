@@ -74,6 +74,17 @@ struct StorySceneView: View {
 
     var reactiveDistortion: Double { materialFrame.parameters.distortion }
 
+    /// Only the off-screen visual surface is stabilized. Preserve the existing
+    /// composition/material result so Stage 36 previews, exported typography,
+    /// and integration consumers resolve exactly the same audio frame.
+    var exportMaterialFrame: MaterialFrame {
+        let stableBase = MaterialResolver.resolve(marbleMaterial,
+            timestamp: frame.sourceTime, reactionGain: 0)
+        return StoryExportMotion.material(base: stableBase,
+            mode: request.reactionMode, sourceTime: frame.sourceTime,
+            dna: request.songDNA)
+    }
+
     private var elapsed: TimeInterval { frame.elapsed }
     private var phase: Float { frame.marblePhase }
     private var sourceTime: TimeInterval { frame.sourceTime }
@@ -227,7 +238,7 @@ struct StorySceneView: View {
         } else {
             StoryExportMarbleView(theme: request.theme,
                 renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
-                startingPhase: request.marblePhase, materialFrame: materialFrame)
+                startingPhase: request.marblePhase, materialFrame: exportMaterialFrame)
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }

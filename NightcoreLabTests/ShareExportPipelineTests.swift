@@ -324,10 +324,10 @@ final class ShareExportPipelineTests: XCTestCase {
                                                        profile: profile).frame(index: $0) }
         for frame in frames {
             let scene = StorySceneView(request: silent, artwork: nil, frame: frame)
-            XCTAssertEqual(scene.materialFrame.parameters.beatPulse, 0)
-            XCTAssertEqual(scene.materialFrame.signals.energy, 0)
-            XCTAssertEqual(scene.materialFrame.signals.movement, 0)
-            XCTAssertEqual(scene.materialFrame.audioResponse.pulse, 0)
+            XCTAssertEqual(scene.exportMaterialFrame.parameters.beatPulse, 0)
+            XCTAssertEqual(scene.exportMaterialFrame.signals.energy, 0)
+            XCTAssertEqual(scene.exportMaterialFrame.signals.movement, 0)
+            XCTAssertEqual(scene.exportMaterialFrame.audioResponse.pulse, 0)
         }
         XCTAssertGreaterThan(frames[1].marblePhase, frames[0].marblePhase)
         XCTAssertEqual(silent.theme, clip.theme)

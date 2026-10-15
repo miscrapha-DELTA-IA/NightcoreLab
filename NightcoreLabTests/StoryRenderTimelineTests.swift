@@ -106,9 +106,12 @@ final class StoryRenderTimelineTests: XCTestCase {
             StorySceneView(request: clip, artwork: nil, frame: frames[0]).materialFrame)
         XCTAssertNotEqual(resolved[0]?.materialFrame?.parameters.beatPulse,
             resolved[1]?.materialFrame?.parameters.beatPulse)
-        XCTAssertEqual(resolved[1]?.materialFrame?.parameters.warpAmount,
-            resolved[2]?.materialFrame?.parameters.warpAmount,
-            "Beat energy must never warp the marble geometry between frames")
+        let previewMaterial = frames.map {
+            StorySceneView(request: clip, artwork: nil, frame: $0).exportMaterialFrame
+        }
+        XCTAssertEqual(previewMaterial[1].parameters.warpAmount,
+                       previewMaterial[2].parameters.warpAmount,
+                       "Export background geometry stays independent of beat impulses")
         for frame in frames {
             XCTAssertEqual(frame, timeline.frame(at: frame.elapsed))
             let image = try StoryFrameRenderer.render(request: clip, artwork: nil,
