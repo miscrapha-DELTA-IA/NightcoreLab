@@ -41,6 +41,12 @@ actor MusicAnalysisCache {
         }
     }
 
+    func hasOfflineSongDNA(for url: URL) async -> Bool {
+        guard let asset = try? AudioAssetDescriptor.read(at: url),
+              let result = load(for: asset) else { return false }
+        return result.energyTimeline != nil && result.rhythmAnalysis != nil
+    }
+
     func store(_ result: MusicAnalysisResult, for asset: AudioAssetDescriptor) throws {
         guard result.isTerminal, result.isValid(for: asset),
               result.energyTimeline != nil else { return }

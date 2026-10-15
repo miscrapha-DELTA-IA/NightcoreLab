@@ -88,6 +88,15 @@ actor LyricsPrefetcher {
     /// A tela de letras consulta a seleção persistida sem chamar a rede.
     func cachedChoice(for videoID: String) -> CachedLyricsChoice? { cache.load(videoID) }
 
+    /// Offline preparation never replaces the current Karaoke lyrics in LyricsStore.
+    func ensureSyncedLyrics(_ meta: TrackMetadata) async -> Bool {
+        if let cached = cache.load(meta.videoID) {
+            return cached.selected?.syncedLyrics?.isEmpty == false
+        }
+        await run(meta, apply: false)
+        return cache.load(meta.videoID)?.selected?.syncedLyrics?.isEmpty == false
+    }
+
     /// A tela pode aguardar o trabalho já em curso, em vez de iniciar um segundo
     /// fluxo de até 3 requisições quando o usuário abre o karaokê rapidamente.
     func awaitChoice(for videoID: String) async -> CachedLyricsChoice? {

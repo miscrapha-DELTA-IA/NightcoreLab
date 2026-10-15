@@ -41,7 +41,8 @@ enum AudioVisualMapper {
         let word = clamp((energy * 0.55 + mid * 0.25 + onset * 0.20) * intensity)
 
         return VisualResponse(
-            scale: 1 + 0.06 * bass * intensity,
+            scale: preset.audioReaction == .responsive
+                ? 1 : 1 + 0.06 * bass * intensity,
             glow: glow,
             distortion: distortion,
             intensity: power,

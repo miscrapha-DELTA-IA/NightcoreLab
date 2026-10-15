@@ -108,6 +108,7 @@ struct ContentView: View {
 
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
+    @StateObject private var offlineLibrary = OfflineLibrary()
     @StateObject private var playbackQueue = PlaybackQueue()
     @StateObject private var playbackTransition = PlaybackCoordinator()
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
@@ -142,6 +143,7 @@ struct ContentView: View {
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
     @State private var searchDrawer = SearchDrawerState()
     @State private var drawerToast: String?
+    @State private var pendingMix: [Track]?
     @State private var karaokeSummary: KaraokeSummary?
     @AppStorage("showAudioWorkspace") private var isAudioWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
@@ -297,6 +299,18 @@ struct ContentView: View {
         .onChange(of: playbackQueue.upNextQueue.map(\.id)) { _, _ in
             synchronizeRemoteAvailability()
         }
+        .onChange(of: searchDrawer.isOpen) { _, open in
+            if open, let lyricsPrefetcher {
+                offlineLibrary.refresh(downloader.allCachedTracks,
+                    downloader: downloader, lyrics: lyricsPrefetcher)
+            }
+        }
+        .onChange(of: downloader.cachedIDs) { _, _ in
+            if searchDrawer.isOpen, let lyricsPrefetcher {
+                offlineLibrary.refresh(downloader.allCachedTracks,
+                    downloader: downloader, lyrics: lyricsPrefetcher)
+            }
+        }
         .onChange(of: navigationHistory.previousTrack?.id) { _, _ in
             synchronizeRemoteAvailability()
         }
@@ -388,7 +402,7 @@ struct ContentView: View {
         HStack(spacing: DS.Spacing.s) {
             VStack(alignment: .leading, spacing: 1) {
                 NightcoreBrandLockup(theme: currentTheme)
-                Text("v32 · " + currentTheme.displayName.uppercased())
+                Text("v33 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -505,6 +519,15 @@ struct ContentView: View {
                     recentTracks: quickLibraryTracks,
                     queuedTracks: playbackQueue.upNextQueue,
                     pendingTrackID: searchDrawer.pendingTrackID,
+                    offline: offlineLibrary,
+                    onPlayMix: { tracks in playMix(tracks) },
+                    onPlayOffline: { tracks in playMix(tracks) },
+                    onSaveOffline: { track in saveOffline(track) },
+                    onSaveMixOffline: { tracks in
+                        guard let lyricsPrefetcher else { return }
+                        offlineLibrary.saveMix(tracks, downloader: downloader,
+                                               lyrics: lyricsPrefetcher)
+                    },
                     onPlayQueue: { track in selectFromDrawer(track) },
                     onRemoveQueue: { track in _ = playbackQueue.remove(track) }
                 )
@@ -524,11 +547,24 @@ struct ContentView: View {
 
     private func selectFromDrawer(_ track: Track) {
         guard !audio.isExporting else { return }
+        if pendingMix?.first?.id != track.id { pendingMix = nil }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
         searchDrawer.beginSelection(trackID: track.id)
         drawerToast = nil
         playTrack(track)
+    }
+
+    private func playMix(_ tracks: [Track]) {
+        guard tracks.count == 15 || !tracks.isEmpty,
+              let first = tracks.first else { return }
+        pendingMix = tracks
+        selectFromDrawer(first)
+    }
+
+    private func saveOffline(_ track: Track) {
+        guard let lyricsPrefetcher else { return }
+        offlineLibrary.save(track, downloader: downloader, lyrics: lyricsPrefetcher)
     }
 
     private func finishDrawerSelection(_ trackID: String) {
@@ -541,6 +577,7 @@ struct ContentView: View {
 
     private func failDrawerSelection(_ trackID: String, message: String) -> Bool {
         guard searchDrawer.selectionFailed(trackID: trackID) else { return false }
+        if pendingMix?.first?.id == trackID { pendingMix = nil }
         drawerToast = message
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
@@ -1209,6 +1246,7 @@ struct ContentView: View {
                     return
                 }
                 guard playbackTransition.didStart(token, trackID: track.id) else { return }
+                let wasMixStart = pendingMix?.first?.id == track.id
                 // History changes only after a successful start, never at
                 // download selection time. Back/forward leave Up Next intact.
                 let priorTrack = currentTrack
@@ -1219,6 +1257,11 @@ struct ContentView: View {
                 }
                 playbackTransition.commitStarted(committedTrack, replacing: priorTrack,
                     direction: navigation, queue: playbackQueue, navigation: navigationHistory)
+                if wasMixStart, let pendingMix {
+                    playbackQueue.replace(with: Array(pendingMix.dropFirst()),
+                                          excluding: track.id)
+                    self.pendingMix = nil
+                }
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
@@ -1231,7 +1274,7 @@ struct ContentView: View {
                                     (automaticAdvance ? .completed : .nextButton))
                     discoveryTracker.start(currentTrack.id, duration: audio.duration,
                                            speed: Double(speed))
-                    if isManualSkip {
+                    if isManualSkip && !wasMixStart {
                         let recentIDs = playHistory.entries.values.sorted {
                             $0.lastPlayed > $1.lastPlayed
                         }.prefix(10).map { $0.hit.id }

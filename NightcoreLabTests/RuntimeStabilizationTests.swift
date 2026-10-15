@@ -6,6 +6,45 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    func testReactiveViscousEnvelopeHasNoStepAndReleasesContinuously() {
+        var envelope = OrganicReactiveEnvelope()
+        XCTAssertEqual(envelope.advance(warmth: 1, sustain: 1, elapsed: 0), 0)
+        let rise = (0..<60).map { _ in
+            envelope.advance(warmth: 1, sustain: 1, elapsed: 1.0 / 60)
+        }
+        XCTAssertTrue(rise.allSatisfy { (0...1).contains($0) })
+        XCTAssertTrue(zip(rise, rise.dropFirst()).allSatisfy {
+            $0.1 >= $0.0 && $0.1 - $0.0 < 0.10
+        })
+        let peak = envelope.fluid
+        let release = (0..<60).map { _ in
+            envelope.advance(warmth: 0, sustain: 0, elapsed: 1.0 / 60)
+        }
+        XCTAssertLessThan(release[0], peak)
+        XCTAssertTrue(zip(release, release.dropFirst()).allSatisfy {
+            $0.1 <= $0.0 && $0.0 - $0.1 < 0.10
+        })
+        XCTAssertGreaterThan(release.last ?? 0, 0)
+    }
+
+    func testOfflineBadgeRequiresAudioSyncedLyricsAndSongDNA() throws {
+        for audio in [false, true] {
+            for lyrics in [false, true] {
+                for dna in [false, true] {
+                    XCTAssertEqual(OfflineReadiness(audio: audio, syncedLyrics: lyrics,
+                                                    songDNA: dna).isReady,
+                                   audio && lyrics && dna)
+                }
+            }
+        }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage33-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var cache = TrackAudioCache(folder: folder)
+        cache.pin("saved-song")
+        XCTAssertTrue(TrackAudioCache(folder: folder).pinnedIDs.contains("saved-song"))
+    }
+
     @MainActor
     func testHapticPreferencePersistsAndRecordingMutesMechanicalFeedback() throws {
         let suite = "stage32.haptics.\(UUID().uuidString)"
