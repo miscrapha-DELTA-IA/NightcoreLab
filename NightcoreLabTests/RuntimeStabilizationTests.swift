@@ -1359,3 +1359,24 @@ final class Stage36RuntimePerformanceTests: XCTestCase {
         XCTAssertTrue(voice.contains("samples[count + i] = data[offset + i * stride]"))
     }
 }
+
+final class Stage37ExportStabilizationTests: XCTestCase {
+    func testExportMarbleIsFrameTimeOnlyWithoutRuntimeAnimation() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let export = try String(contentsOf: root.appendingPathComponent("Share/StoryExportMarbleView.swift"),
+                                encoding: .utf8)
+        let scene = try String(contentsOf: root.appendingPathComponent("Share/StorySceneView.swift"),
+                               encoding: .utf8)
+        XCTAssertTrue(export.contains("StoryExportMotion.phase"))
+        XCTAssertFalse(export.contains("TimelineView("))
+        XCTAssertFalse(export.contains("Date()"))
+        XCTAssertFalse(export.contains("CADisplayLink"))
+        XCTAssertTrue(scene.contains("StoryExportMarbleView"))
+        XCTAssertTrue(scene.contains("frame.elapsed"))
+        XCTAssertTrue(scene.contains("request.marbleSpeed"))
+        XCTAssertTrue(scene.contains("request.showsBrand"))
+        XCTAssertTrue(scene.contains("request.showsTrackCard"))
+        XCTAssertTrue(scene.contains("request.showsLyrics"))
+    }
+}
