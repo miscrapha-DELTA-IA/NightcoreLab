@@ -86,6 +86,11 @@ enum TypographyAnimationEngine {
                     word.magazine?.toneIndex,
                 magazineFillEnabled: tileActive && word.progress > 0)
 
+        case .vinylSticker, .dymoTicket, .liquidCapsule:
+            // The substrate, tilt and fill come from a stable word seed and
+            // source timestamp. Avoid frame-index noise in preview/export.
+            return state(scale: scaled, glow: glowing, intensity: effect)
+
         case .glitch:
             let magnitude: Double = isActiveWord ? effect : 0
             let flicker = -magnitude * 0.18 * abs(alternate)

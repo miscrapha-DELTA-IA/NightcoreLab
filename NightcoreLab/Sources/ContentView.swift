@@ -132,7 +132,7 @@ struct ContentView: View {
     @AppStorage("lyricsCleanMode") private var lyricsCleanMode = true
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
-    @AppStorage("showMusicWorkspace") private var isMusicWorkspaceExpanded = true
+    @State private var searchDrawer = SearchDrawerState()
     @AppStorage("showAudioWorkspace") private var isAudioWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
     @AppStorage("showExport") private var isExportExpanded = true
@@ -148,9 +148,6 @@ struct ContentView: View {
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
     private var hasTrack: Bool { audio.fileName != nil }
-    private var hasMusicPanels: Bool {
-        PanelID.discoveryPanels.contains { panels.isVisible($0) }
-    }
     private var hasAudioPanels: Bool {
         PanelID.audioPanels.contains { panels.isVisible($0) }
     }
@@ -188,12 +185,14 @@ struct ContentView: View {
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
+            searchDrawer: $searchDrawer,
             playerBackgroundStyle: bgStyle,
             onPlayPause: { playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID) },
             onPrevious: { goToPreviousTrack() },
             onNext: { goToNextTrack() },
             header: { header },
             playerDetails: { integratedPlaybackBar },
+            searchDrawerContent: { focusRequest in musicWorkspace(focusRequest: focusRequest) },
             normalExtras: { mainScrollContent },
             karaokeContent: {
                 if let currentTrack {
@@ -356,7 +355,7 @@ struct ContentView: View {
         HStack(spacing: DS.Spacing.s) {
             VStack(alignment: .leading, spacing: 1) {
                 NightcoreBrandLockup(theme: currentTheme)
-                Text("v29 · " + currentTheme.displayName.uppercased())
+                Text("v30 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -422,7 +421,7 @@ struct ContentView: View {
     // Pull the long list out of body, keeping the view hierarchy unchanged.
     private var mainScrollContent: some View {
                 VStack(spacing: DS.Spacing.l) {
-                    musicWorkspace
+                    if !hasTrack { musicWorkspace(focusRequest: 0) }
                     resumeSection
                     if downloader.isDownloading {
                         Text(downloadStatusText)
@@ -452,30 +451,8 @@ struct ContentView: View {
 
     /// Uma superfície única para busca, descoberta e próximas faixas.
     /// Mantém a SearchView montada mesmo recolhida para preservar busca e cache.
-    private var musicWorkspace: some View {
+    private func musicWorkspace(focusRequest: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button {
-                withAnimation(.smooth(duration: 0.32)) {
-                    isMusicWorkspaceExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "square.stack.3d.up")
-                    Text("MÚSICAS")
-                        .font(.caption.bold())
-                        .tracking(1.3)
-                    Spacer()
-                    Image(systemName: isMusicWorkspaceExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2.weight(.bold))
-                }
-                .foregroundStyle(currentTheme.accent)
-                .frame(minHeight: 30)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Área de busca, descoberta e fila")
-            .accessibilityValue(isMusicWorkspaceExpanded ? "Expandida" : "Recolhida")
-
             VStack(alignment: .leading, spacing: 10) {
                 SearchView(
                     downloader: downloader, theme: currentTheme,
@@ -485,35 +462,56 @@ struct ContentView: View {
                     isLoadingSuggestions: isLoadingRelated,
                     canRefreshSuggestions: currentTrack != nil,
                     onRefreshSuggestions: { startRadio() },
-                    onSelect: { track, _ in playTrack(track) },
+                    onSelect: { track, _ in
+                        playTrack(track)
+                        withAnimation(.spring(duration: 0.36)) { searchDrawer.close() }
+                    },
                     onLink: { link in startDownload(link) },
                     onServerSettings: { showServerSettings = true },
                     isDiscoverExpanded: $isDiscoverExpanded,
-                    isPresented: !(hasTrack && currentTrack != nil && showLyrics),
+                    isPresented: !hasTrack || searchDrawer.isOpen,
+                    focusRequest: focusRequest,
                     integrated: true
                 )
+                if !libraryTracks.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("BIBLIOTECA · RECENTES")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(currentTheme.accent)
+                        ForEach(libraryTracks.prefix(5)) { track in
+                            Button {
+                                playTrack(track)
+                                withAnimation(.spring(duration: 0.36)) { searchDrawer.close() }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: track.isCached ? "arrow.down.circle.fill" : "music.note")
+                                        .foregroundStyle(currentTheme.accent)
+                                    Text(track.title).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "play.fill").font(.caption2)
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.vertical, 5)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(audio.isExporting)
+                        }
+                    }
+                    .padding(10)
+                    .background(.white.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 12))
+                }
                 relatedSection.hideablePanel(.queue)
             }
-            .frame(height: isMusicWorkspaceExpanded ? nil : 0, alignment: .top)
-            .opacity(isMusicWorkspaceExpanded ? 1 : 0)
-            .clipped()
-            .allowsHitTesting(isMusicWorkspaceExpanded)
-            .accessibilityHidden(!isMusicWorkspaceExpanded)
         }
-        .padding(14)
-        .background(.ultraThinMaterial,
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        // Hide the whole workspace without unmounting the omnibox and its state.
-        .frame(height: hasMusicPanels ? nil : 0, alignment: .top)
-        .opacity(hasMusicPanels ? 1 : 0)
-        .clipped()
-        .allowsHitTesting(hasMusicPanels)
-        .accessibilityHidden(!hasMusicPanels)
+    }
+
+    private var libraryTracks: [Track] {
+        playHistory.entries.values
+            .sorted { $0.lastPlayed > $1.lastPlayed }
+            .prefix(8)
+            .map { downloader.cachedTrack($0.hit.asTrack) }
     }
 
     /// Presets e controles vivem num único cartão de vidro. O olho ainda

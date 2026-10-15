@@ -11,7 +11,8 @@ final class KaraokeTypographyTests: XCTestCase {
 
     func testSelectionIsCodableAndPersistsAcrossDefaultsReopen() throws {
         XCTAssertEqual(TypographyStyle.allCases,
-                       [.neon, .magazineCutout, .glitch, .kinetic, .minimal])
+                       [.neon, .magazineCutout, .glitch, .kinetic, .minimal,
+                        .vinylSticker, .dymoTicket, .liquidCapsule])
         let suite = "nightcore.typography.\(UUID().uuidString)"
         guard let first = UserDefaults(suiteName: suite) else {
             return XCTFail("Missing isolated defaults")
@@ -28,6 +29,29 @@ final class KaraokeTypographyTests: XCTestCase {
         let data = try JSONEncoder().encode(TypographyStyle.magazineCutout)
         XCTAssertEqual(try JSONDecoder().decode(TypographyStyle.self, from: data),
                        .magazineCutout)
+    }
+
+    func testObjectModelsHaveDistinctStablePhysicalParametersAndFill() throws {
+        let styles: [TypographyStyle] = [.vinylSticker, .dymoTicket, .liquidCapsule]
+        let seed = TypographyResolver.stableSeed(lineID: 4, word: word())
+        let appearances = try styles.map { style in
+            try XCTUnwrap(ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: 0.4))
+        }
+        XCTAssertEqual(Set(appearances.map(\.material)).count, 3)
+        XCTAssertEqual(Set(appearances.map(\.borderWidth)).count, 3)
+        XCTAssertEqual(Set(appearances.map(\.shadowRadius)).count, 3)
+        for (style, appearance) in zip(styles, appearances) {
+            XCTAssertEqual(appearance.fill, 0.4)
+            XCTAssertEqual(appearance, ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: 0.4))
+            XCTAssertEqual(ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: -1)?.fill, 0)
+            XCTAssertEqual(ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: 2)?.fill, 1)
+        }
+        XCTAssertNil(ObjectWordStyleResolver.resolve(
+            style: .magazineCutout, seed: seed, progress: 0.4))
     }
 
     func testDeterministicIdentityAndStableMagazineAppearance() {

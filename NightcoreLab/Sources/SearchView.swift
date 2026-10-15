@@ -23,6 +23,7 @@ struct SearchView: View {
     let onServerSettings: () -> Void
     @Binding var isDiscoverExpanded: Bool
     let isPresented: Bool
+    var focusRequest: Int = 0
     var integrated: Bool = false
     @Environment(PanelStore.self) private var panels
     @Environment(PlayHistoryStore.self) private var playHistory
@@ -311,6 +312,9 @@ struct SearchView: View {
         }
         .onChange(of: isPresented) { _, presented in
             if !presented { isFocused = false }
+        }
+        .onChange(of: focusRequest) { _, _ in
+            if isPresented { isFocused = true }
         }
         .onChange(of: query) { _, value in
             searchExpansionOverride = nil
