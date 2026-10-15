@@ -140,3 +140,14 @@ struct SongDNA: Codable, Equatable, Sendable {
             item.confidence <= 1 ? item : nil
     }
 }
+
+
+/// All section lookups execute on a background actor. The SwiftUI/audio paths
+/// receive only the last immutable modulation; no per-frame cache traversal.
+actor SongSectionTracker {
+    func modulation(for dna: SongDNA?, sourceTime: TimeInterval,
+                    enabled: Bool) -> SongSectionCadence {
+        guard enabled, let dna, dna.isValid else { return .neutral }
+        return SongSectionCadence.at(sourceTime: sourceTime, dna: dna)
+    }
+}
