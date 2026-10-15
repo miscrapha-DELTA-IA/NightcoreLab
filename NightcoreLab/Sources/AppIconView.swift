@@ -31,8 +31,12 @@ struct NightcoreBrandLockup: View {
             Text("Nightcore Lab")
                 .font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
         }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(2)
         .foregroundStyle(.white)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("brand.nightcoreLab")

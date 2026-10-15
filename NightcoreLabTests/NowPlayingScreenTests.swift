@@ -160,4 +160,54 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertEqual(info.artist, "YouTube")
         XCTAssertEqual(info.coverURL, downloaded)
     }
+
+    @MainActor
+    func testStage36MusicStemSwitcherAndUntruncatedHeaderContract() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let content = try String(contentsOf: root.appendingPathComponent("ContentView.swift"),
+                                 encoding: .utf8)
+        let player = try String(contentsOf: root.appendingPathComponent("NowPlayingScreen.swift"),
+                                encoding: .utf8)
+        XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
+        XCTAssertTrue(content.contains(".fixedSize(horizontal: true, vertical: false)"))
+        XCTAssertTrue(content.contains(".layoutPriority(2)"))
+        XCTAssertTrue(content.contains("v36 · "))
+        let lockup = try String(contentsOf: root.appendingPathComponent("AppIconView.swift"), encoding: .utf8)
+        XCTAssertTrue(lockup.contains("Text(\"Nightcore Lab\")"))
+        XCTAssertTrue(lockup.contains(".fixedSize(horizontal: true, vertical: false)"))
+        XCTAssertTrue(lockup.contains(".layoutPriority(2)"))
+        XCTAssertFalse(lockup.contains(".minimumScaleFactor(0.75)"))
+        XCTAssertTrue(content.contains("music.controlMode"))
+        XCTAssertTrue(content.contains("MusicControlPage.stems"))
+        XCTAssertTrue(content.contains("StemMixerControls(audio: audio)"))
+        XCTAssertFalse(player.contains("StemMixerControls(audio: audio)"),
+                       "Stem controls must not remain inside Criar")
+        let mixer = try String(contentsOf: root.appendingPathComponent("StemMixerControls.swift"),
+                               encoding: .utf8)
+        XCTAssertTrue(mixer.contains("music.stemMixer"))
+        XCTAssertTrue(mixer.contains("stem.reset"))
+        XCTAssertTrue(mixer.contains("in: 0...2"))
+    }
+
+    @MainActor
+    func testStage36FourDirectStemGainChangesNeverRestartTransport() {
+        let audio = AudioEngineManager()
+        let generation = audio.scheduleGeneration
+        let initialEngine = audio.isAudioEngineRunning
+        for kind in StemKind.allCases {
+            audio.setStemLevel(kind, level: 0)
+            XCTAssertEqual(audio.stemLevels[kind], 0)
+            XCTAssertEqual(audio.liveStemEQGain(kind), -18, accuracy: 0.01)
+            audio.setStemLevel(kind, level: 2)
+            XCTAssertEqual(audio.stemLevels[kind], 2)
+            XCTAssertEqual(audio.liveStemEQGain(kind), 9, accuracy: 0.01)
+        }
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+        XCTAssertEqual(audio.isAudioEngineRunning, initialEngine)
+        audio.resetStemLevels()
+        XCTAssertTrue(audio.stemLevels.values.allSatisfy { $0 == 1 })
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+    }
+
 }

@@ -245,7 +245,6 @@ private struct CreatorStudioPanel: View {
                         get: { controls.vocalFX },
                         set: { controls.vocalFX = $0 }),
                         monitoringSafe: audio.vocalMonitoringEnabled)
-                    StemMixerControls(audio: audio)
                     Divider()
                     Picker("Ritmo visual", selection: $reactionMode) {
                         Text("Desligado").tag(CreativePreset.AudioReaction.off)

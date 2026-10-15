@@ -8,7 +8,7 @@ enum StemKind: String, CaseIterable, Codable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .vocal: return "🎤 Voz"
-        case .instrumental: return "🎸 Inst"
+        case .instrumental: return "🎸 Instrumental"
         case .drums: return "🥁 Bateria"
         case .bass: return "🔊 Baixo"
         }
@@ -59,7 +59,9 @@ enum StemSplitterEngine {
             highA = exp(-2 * .pi * 4200 / rate)
             transientA = exp(-2 * .pi * 28 / rate)
         }
-        mutating func split(left: Float, right: Float) -> [StemKind: (Float, Float)] {
+        mutating func split(left: Float, right: Float) -> (
+            vocal: (Float, Float), instrumental: (Float, Float),
+            drums: (Float, Float), bass: (Float, Float)) {
             let l = Double(left), r = Double(right), mid = (l + r) * 0.5
             bass = bassA * bass + (1 - bassA) * mid
             low = lowA * low + (1 - lowA) * mid
@@ -72,10 +74,10 @@ enum StemSplitterEngine {
             let drum = highBand * min(0.85, change / max(0.001, transient * 3))
             let bedL = l - bass - vocal - drum
             let bedR = r - bass - vocal - drum
-            return [.vocal: (Float(vocal), Float(vocal)),
-                    .bass: (Float(bass), Float(bass)),
-                    .drums: (Float(drum), Float(drum)),
-                    .instrumental: (Float(bedL), Float(bedR))]
+            return (vocal: (Float(vocal), Float(vocal)),
+                    instrumental: (Float(bedL), Float(bedR)),
+                    drums: (Float(drum), Float(drum)),
+                    bass: (Float(bass), Float(bass)))
         }
     }
 
@@ -133,13 +135,20 @@ enum StemSplitterEngine {
                 if count == 0 { break }
                 for buffer in outputBuffers.values { buffer.frameLength = AVAudioFrameCount(count) }
                 let inputR = inputBuffer.floatChannelData?[input.processingFormat.channelCount == 2 ? 1 : 0] ?? inputL
+                // Resolve buffers once per chunk: no per-sample Dictionary allocations.
+                guard let vocals = outputBuffers[.vocal]?.floatChannelData,
+                      let instruments = outputBuffers[.instrumental]?.floatChannelData,
+                      let drums = outputBuffers[.drums]?.floatChannelData,
+                      let bass = outputBuffers[.bass]?.floatChannelData else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
                 for frame in 0..<count {
-                    let values = filters.split(left: inputL[frame], right: inputR[frame])
-                    for kind in StemKind.allCases {
-                        guard let value = values[kind], let channels = outputBuffers[kind]?.floatChannelData else { continue }
-                        channels[0][frame] = value.0
-                        channels[1][frame] = value.1
-                    }
+                    let value = filters.split(left: inputL[frame], right: inputR[frame])
+                    vocals[0][frame] = value.vocal.0; vocals[1][frame] = value.vocal.1
+                    instruments[0][frame] = value.instrumental.0
+                    instruments[1][frame] = value.instrumental.1
+                    drums[0][frame] = value.drums.0; drums[1][frame] = value.drums.1
+                    bass[0][frame] = value.bass.0; bass[1][frame] = value.bass.1
                 }
                 for kind in StemKind.allCases {
                     try writers[kind]!.write(from: outputBuffers[kind]!)

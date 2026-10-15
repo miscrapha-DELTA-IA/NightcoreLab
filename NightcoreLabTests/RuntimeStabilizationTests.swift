@@ -1314,3 +1314,48 @@ final class Stage26StoryBeatRuntimeTests: XCTestCase {
         XCTAssertEqual(StoryBeatEnvelope.at(sourceTime: .nan, dna: dna), 0)
     }
 }
+
+final class Stage36RuntimePerformanceTests: XCTestCase {
+
+    @MainActor
+    func testStage36HardwareStemGainsUseSignedDbAndDoNotSchedulePlayback() {
+        XCTAssertEqual(AudioEngineManager.stemGainDB(for: 0), -18)
+        XCTAssertEqual(AudioEngineManager.stemGainDB(for: 1), 0)
+        XCTAssertEqual(AudioEngineManager.stemGainDB(for: 2), 9)
+        XCTAssertEqual(AudioEngineManager.stemGainDB(for: 3), 9)
+        let audio = AudioEngineManager()
+        let generation = audio.scheduleGeneration
+        audio.setStemLevel(.vocal, level: 0.25)
+        audio.setStemLevel(.instrumental, level: 1.75)
+        audio.setStemLevel(.drums, level: 0)
+        audio.setStemLevel(.bass, level: 2)
+        XCTAssertEqual(audio.liveStemEQGain(.vocal), -13.5, accuracy: 0.01)
+        XCTAssertEqual(audio.liveStemEQGain(.instrumental), 6.75, accuracy: 0.01)
+        XCTAssertEqual(audio.liveStemEQGain(.drums), -18, accuracy: 0.01)
+        XCTAssertEqual(audio.liveStemEQGain(.bass), 9, accuracy: 0.01)
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+    }
+
+    func testStage36KaraokeHasNoWholeListDisplayLinkCamera() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let karaoke = try String(contentsOf: root.appendingPathComponent("KaraokeLyricsView.swift"),
+                                 encoding: .utf8)
+        let hud = try String(contentsOf: root.appendingPathComponent("Karaoke/KaraokeScoreHUD.swift"),
+                              encoding: .utf8)
+        let voice = try String(contentsOf: root.appendingPathComponent("Karaoke/KaraokeVoiceAnalyzer.swift"),
+                                encoding: .utf8)
+        XCTAssertFalse(karaoke.contains("KaraokeScrollCamera("))
+        XCTAssertFalse(karaoke.contains("cameraTargetY(at:"))
+        XCTAssertTrue(karaoke.contains("reason: .automatic"))
+        XCTAssertTrue(karaoke.contains(".easeOut(duration: 0.28)"))
+        XCTAssertTrue(karaoke.contains("else if status == .active"))
+        XCTAssertTrue(hud.contains("if session.isPresented"))
+        XCTAssertTrue(hud.contains("karaoke.liveMicLevel"))
+        let lyricContainer = try String(contentsOf: root.appendingPathComponent("LyricsView.swift"),
+                                         encoding: .utf8)
+        XCTAssertTrue(lyricContainer.contains("if inline && lyricStore.lines.isEmpty"),
+                      "HUD must survive while the synchronized lyrics are loading")
+        XCTAssertTrue(voice.contains("samples[count + i] = data[offset + i * stride]"))
+    }
+}
