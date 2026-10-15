@@ -27,6 +27,46 @@ final class RuntimeStabilizationTests: XCTestCase {
                        [0, 0.2, 0.4, 0.6, 0.8, 1])
     }
 
+    func testCenterCutReducesCenteredVocalBandAndKeepsBass() {
+        func remaining(at frequency: Double) -> Double {
+            var state = CenterCutProcessor.BandState(sampleRate: 44_100)
+            var before = 0.0, after = 0.0
+            for frame in 0..<44_100 {
+                let signal = Float(0.4 * sin(2 * Double.pi * frequency *
+                                               Double(frame) / 44_100))
+                let output = state.process(left: signal, right: signal)
+                if frame > 4_410 {
+                    before += Double(signal * signal)
+                    after += Double(output.0 * output.0)
+                }
+            }
+            return (after / before).squareRoot()
+        }
+        XCTAssertGreaterThan(remaining(at: 80), 0.85)
+        XCTAssertLessThan(remaining(at: 1_000), 0.35)
+    }
+
+    func testLyricsAlignmentCacheReadsLegacyPayload() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lyrics-migration-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = LyricsAlignmentCache(folder: folder)
+        let line = TimedLyricLine(id: 0, start: 1, end: 2,
+            words: [WordSync(id: 0, text: "Canta", start: 1, end: 2,
+                             spaceAfter: false)], precision: .estimated,
+            provenance: .estimatedRefined)
+        await cache.save([line], trackID: "fixture", source: "[00:01]Canta")
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil).first)
+        let data = try Data(contentsOf: file)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "schemaVersion")
+        let migrated = try JSONSerialization.data(withJSONObject: payload)
+        try migrated.write(to: file)
+        let restored = await cache.load(trackID: "fixture", source: "[00:01]Canta")
+        XCTAssertEqual(restored, [line])
+    }
+
     func testReactiveViscousEnvelopeHasNoStepAndReleasesContinuously() {
         var envelope = OrganicReactiveEnvelope()
         XCTAssertEqual(envelope.advance(warmth: 1, sustain: 1, elapsed: 0), 0)

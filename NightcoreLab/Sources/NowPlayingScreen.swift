@@ -702,7 +702,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 expressionCache: ExpressionCache())
             guard !Task.isCancelled, audio.playbackSourceRevision == revision,
                   audio.visualAnalysisURL == url else { return }
-            if cached.isValid { liveUniforms.setSongDNA(cached.applyingLyrics(lyricsStore.lines)) }
+            if cached.isValid {
+                liveUniforms.setSongDNA(cached.applyingLyrics(lyricsStore.lines))
+                lyricsStore.refineUsing(cached)
+            }
 
             // Cached verified sections can animate immediately. Incomplete
             // energy/rhythm intelligence is enriched without delaying playback.
@@ -718,12 +721,16 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 }.value
                 guard !Task.isCancelled, audio.playbackSourceRevision == revision,
                       audio.visualAnalysisURL == url else { return }
-                if enriched.isValid { liveUniforms.setSongDNA(enriched.applyingLyrics(lyricsStore.lines)) }
+                if enriched.isValid {
+                    liveUniforms.setSongDNA(enriched.applyingLyrics(lyricsStore.lines))
+                    lyricsStore.refineUsing(enriched)
+                }
             }
         }
         .onChange(of: lyricsStore.lines) { _, lines in
             if let dna = liveUniforms.songDNA, dna.isValid {
                 liveUniforms.setSongDNA(dna.applyingLyrics(lines))
+                lyricsStore.refineUsing(dna)
             }
         }
         // The source-time lookup is actor isolated at ~8 Hz, not in the 60 Hz

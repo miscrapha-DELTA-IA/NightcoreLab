@@ -937,8 +937,7 @@ final class AudioEngineManager {
         guard let sourceURL else { throw AudioEngineError.noFileLoaded }
         let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb, bass: bass,
                                       reverbPresetRaw: Self.defaultReverbPreset.rawValue)
-        return StoryAudioSource(url: centerCutEnabled ? centerCutURL ?? sourceURL : sourceURL,
-                                settings: settings)
+        return StoryAudioSource(url: sourceURL, settings: settings)
     }
 
     /// Standalone offline graph. Does not seek, pause or replace the live player.

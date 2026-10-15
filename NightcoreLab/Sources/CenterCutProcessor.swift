@@ -4,6 +4,32 @@ import Foundation
 /// Offline preparation for an opt-in live playback lane. The original lane
 /// remains the transport clock; the two lanes crossfade without graph rebuilds.
 enum CenterCutProcessor {
+    struct BandState {
+        private let bassAlpha: Double
+        private let highAlpha: Double
+        private var bass = 0.0
+        private var lowHigh1 = 0.0
+        private var lowHigh2 = 0.0
+
+        init(sampleRate: Double) {
+            bassAlpha = exp(-2 * Double.pi * 150 / sampleRate)
+            highAlpha = exp(-2 * Double.pi * 4200 / sampleRate)
+        }
+
+        mutating func process(left: Float, right: Float) -> (Float, Float) {
+            let l = Double(left), r = Double(right)
+            let center = (l + r) * 0.5
+            let side = (l - r) * 0.5
+            bass = bassAlpha * bass + (1 - bassAlpha) * center
+            lowHigh1 = highAlpha * lowHigh1 + (1 - highAlpha) * center
+            let high1 = center - lowHigh1
+            lowHigh2 = highAlpha * lowHigh2 + (1 - highAlpha) * high1
+            let preservedCenter = bass + high1 - lowHigh2
+            return (Float(max(-1, min(1, preservedCenter + side))),
+                    Float(max(-1, min(1, preservedCenter - side))))
+        }
+    }
+
     static func prepare(source: URL) throws -> URL? {
         let input = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32,
                                     interleaved: false)
@@ -19,23 +45,16 @@ enum CenterCutProcessor {
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096),
               let left = buffer.floatChannelData?[0],
               let right = buffer.floatChannelData?[1] else { return nil }
-        let hpAlpha = exp(-2 * Double.pi * 220 / rate)
-        let lpAlpha = exp(-2 * Double.pi * 4200 / rate)
-        var low220 = 0.0
-        var low4200 = 0.0
+        var state = BandState(sampleRate: rate)
         while true {
             try Task.checkCancellation()
             try input.read(into: buffer)
             let frames = Int(buffer.frameLength)
             if frames == 0 { break }
             for index in 0..<frames {
-                let l = Double(left[index]), r = Double(right[index])
-                let center = (l + r) * 0.5
-                low220 = hpAlpha * low220 + (1 - hpAlpha) * center
-                low4200 = lpAlpha * low4200 + (1 - lpAlpha) * center
-                let vocalBand = low4200 - low220
-                left[index] = Float(max(-1, min(1, l - vocalBand)))
-                right[index] = Float(max(-1, min(1, r - vocalBand)))
+                let output = state.process(left: left[index], right: right[index])
+                left[index] = output.0
+                right[index] = output.1
             }
             try writer.write(from: buffer)
         }

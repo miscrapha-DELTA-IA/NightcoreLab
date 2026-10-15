@@ -11,6 +11,7 @@ struct SongDNA: Codable, Equatable, Sendable {
     /// Zero means unknown; no BPM is invented during background analysis.
     let bpm: Double
     let beatTimestamps: [TimeInterval]
+    let onsetTimestamps: [TimeInterval]
     let barTimestamps: [TimeInterval]
     let lyricSyllablesPerSecond: Double
     let lyricSyllablesPerBeat: Double
@@ -22,6 +23,7 @@ struct SongDNA: Codable, Equatable, Sendable {
 
     init(assetID: String, sourceRevision: String, sourceDuration: TimeInterval,
          bpm: Double = 0, beatTimestamps: [TimeInterval] = [],
+         onsetTimestamps: [TimeInterval] = [],
          barTimestamps: [TimeInterval] = [],
          lyricSyllablesPerSecond: Double = 0, lyricSyllablesPerBeat: Double = 0,
          energy: Float = 0, key: KeyAnalysisResult? = nil,
@@ -32,6 +34,7 @@ struct SongDNA: Codable, Equatable, Sendable {
         self.sourceDuration = sourceDuration
         self.bpm = bpm
         self.beatTimestamps = beatTimestamps
+        self.onsetTimestamps = onsetTimestamps
         self.barTimestamps = barTimestamps
         self.lyricSyllablesPerSecond = lyricSyllablesPerSecond
         self.lyricSyllablesPerBeat = lyricSyllablesPerBeat
@@ -73,6 +76,7 @@ struct SongDNA: Codable, Equatable, Sendable {
                      candidateRhythm?.quality == .medium ? candidateRhythm : nil
         let bpm = rhythm.map { Self.resolveOctave($0.bpmCandidates, lyrics: lyrics) } ?? 0
         let beats = rhythm?.beatGrid.map(\.time) ?? []
+        let onsets = rhythm?.onsetEvents ?? []
         let bars = rhythm.map(Self.barGrid) ?? []
         let density = Self.lyricDensity(lyrics, bpm: bpm)
         let points = music?.energyTimeline?.points ?? []
@@ -85,7 +89,8 @@ struct SongDNA: Codable, Equatable, Sendable {
         }
         return SongDNA(assetID: asset.assetID, sourceRevision: asset.sourceRevision,
                        sourceDuration: asset.duration, bpm: bpm,
-                       beatTimestamps: beats, barTimestamps: bars,
+                       beatTimestamps: beats, onsetTimestamps: onsets,
+                       barTimestamps: bars,
                        lyricSyllablesPerSecond: density.perSecond,
                        lyricSyllablesPerBeat: density.perBeat, energy: energy,
                        key: accepted(.key, expr?.key?.provenance) ? expr?.key : nil,
@@ -185,7 +190,8 @@ struct SongDNA: Codable, Equatable, Sendable {
         let density = Self.lyricDensity(lyrics, bpm: bpm)
         return SongDNA(assetID: assetID, sourceRevision: sourceRevision,
                        sourceDuration: sourceDuration, bpm: bpm,
-                       beatTimestamps: beatTimestamps, barTimestamps: barTimestamps,
+                       beatTimestamps: beatTimestamps,
+                       onsetTimestamps: onsetTimestamps, barTimestamps: barTimestamps,
                        lyricSyllablesPerSecond: density.perSecond,
                        lyricSyllablesPerBeat: density.perBeat, energy: energy,
                        key: key, mood: mood,
@@ -194,7 +200,7 @@ struct SongDNA: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, assetID, sourceRevision, sourceDuration, bpm
-        case beatTimestamps, barTimestamps, lyricSyllablesPerSecond
+        case beatTimestamps, onsetTimestamps, barTimestamps, lyricSyllablesPerSecond
         case lyricSyllablesPerBeat, energy, key, mood, sections
     }
 
@@ -210,6 +216,8 @@ struct SongDNA: Codable, Equatable, Sendable {
                   sourceDuration: try c.decode(TimeInterval.self, forKey: .sourceDuration),
                   bpm: try c.decode(Double.self, forKey: .bpm),
                   beatTimestamps: try c.decode([TimeInterval].self, forKey: .beatTimestamps),
+                  onsetTimestamps: try c.decodeIfPresent([TimeInterval].self,
+                      forKey: .onsetTimestamps) ?? [],
                   barTimestamps: try c.decodeIfPresent([TimeInterval].self, forKey: .barTimestamps) ?? [],
                   lyricSyllablesPerSecond: try c.decodeIfPresent(Double.self, forKey: .lyricSyllablesPerSecond) ?? 0,
                   lyricSyllablesPerBeat: try c.decodeIfPresent(Double.self, forKey: .lyricSyllablesPerBeat) ?? 0,
@@ -227,7 +235,8 @@ struct SongDNA: Codable, Equatable, Sendable {
               schemaVersion == Self.schemaVersion,
               lyricSyllablesPerSecond.isFinite, lyricSyllablesPerSecond >= 0,
               lyricSyllablesPerBeat.isFinite, lyricSyllablesPerBeat >= 0,
-              beatTimestamps.count <= 5_000, barTimestamps.count <= 1_250,
+              beatTimestamps.count <= 5_000, onsetTimestamps.count <= 50_000,
+              barTimestamps.count <= 1_250,
               sections.count <= 8_192,
               key?.isValid(sourceDuration: sourceDuration) ?? true,
               mood?.isValid(sourceDuration: sourceDuration) ?? true else { return false }
@@ -236,6 +245,12 @@ struct SongDNA: Codable, Equatable, Sendable {
             guard beat.isFinite, beat >= 0, beat <= sourceDuration,
                   beat > previousBeat else { return false }
             previousBeat = beat
+        }
+        var previousOnset = -Double.infinity
+        for onset in onsetTimestamps {
+            guard onset.isFinite, onset >= 0, onset <= sourceDuration,
+                  onset > previousOnset else { return false }
+            previousOnset = onset
         }
         var previousBar = -Double.infinity
         for bar in barTimestamps {
