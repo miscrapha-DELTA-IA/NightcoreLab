@@ -43,7 +43,7 @@ enum DrawerQuickAccess {
 }
 
 enum DrawerHubTab: String, CaseIterable {
-    case mix, offline, queue
+    case mix, offline, queue, albumArtist
 }
 
 /// Local, deterministic fallback: no network request is needed to open the drawer.

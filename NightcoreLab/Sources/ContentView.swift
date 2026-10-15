@@ -147,6 +147,8 @@ struct ContentView: View {
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
     @State private var searchDrawer = SearchDrawerState()
+    @State private var albumFocusTrack: Track?
+    @State private var albumFocusRequest = 0
     @State private var drawerToast: String?
     @State private var pendingMix: [Track]?
     @State private var karaokeSummary: KaraokeSummary?
@@ -414,7 +416,7 @@ struct ContentView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(2)
-                Text("v37 · " + currentTheme.displayName.uppercased())
+                Text("v38 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -559,6 +561,9 @@ struct ContentView: View {
                     focusRequest: focusRequest,
                     integrated: true,
                     recentTracks: quickLibraryTracks,
+                    activeTrack: currentTrack,
+                    requestedAlbumTrack: albumFocusTrack,
+                    requestedAlbumFocus: albumFocusRequest,
                     queuedTracks: playbackQueue.upNextQueue,
                     pendingTrackID: searchDrawer.pendingTrackID,
                     offline: offlineLibrary,
@@ -897,6 +902,7 @@ struct ContentView: View {
                 ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
                     let track = playbackQueue.upNextQueue[index]
                     let status = downloader.status(for: track)
+                    HStack(spacing: 8) {
                     Button {
                         playFromQueue(track)
                     } label: {
@@ -926,6 +932,16 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(audio.isExporting)
+                    Button("💿") {
+                        albumFocusTrack = track
+                        albumFocusRequest += 1
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(currentTheme.accent)
+                    .disabled(audio.isExporting)
+                    .accessibilityLabel("Álbum e artista de \(track.title)")
+                    }
                 }
             }
             }
