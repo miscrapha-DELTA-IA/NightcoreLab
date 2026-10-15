@@ -652,7 +652,9 @@ final class RuntimeStabilizationTests: XCTestCase {
         for i in 0..<1024 {
             channel[i] = 0.45 * sin(Float(i) * 2 * .pi * 120 / 48_000)
         }
-        meter.consume(buffer)
+        meter.consume(buffer) // 1024 / 48000 = 21.3 ms, below the Stage 39 publication window.
+        XCTAssertEqual(meter.snapshot(), .silence)
+        meter.consume(buffer) // 42.7 ms accumulated: the first visual publication is available.
         let level = meter.snapshot()
         XCTAssertGreaterThan(level.rms, 0)
         XCTAssertGreaterThan(level.bass, 0)

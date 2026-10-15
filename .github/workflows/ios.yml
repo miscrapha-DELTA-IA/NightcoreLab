@@ -128,6 +128,27 @@ jobs:
             -resultBundlePath AudioQuality.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-test.log
 
+      - name: Collect compact visual and test evidence
+        if: always()
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          log = Path('xcodebuild-test.log')
+          lines = log.read_text(errors='replace').splitlines() if log.exists() else []
+          selected = [line for line in lines if any(marker in line for marker in (
+              'Stage40 pixels:', 'error:', 'Test Suite ', 'Executed ',
+              'testStage40', 'TEST SUCCEEDED', 'TEST FAILED'))]
+          Path('stage40-validation.txt').write_text('\n'.join(selected) + '\n')
+          PYCODE
+
+      - name: Save visual and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stage40-Validation
+          path: stage40-validation.txt
+          retention-days: 7
+
       - name: Resumo de falhas como anotações
         if: failure()
         run: |
