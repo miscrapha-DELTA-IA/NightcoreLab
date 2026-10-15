@@ -41,7 +41,7 @@ struct StoryVideoRequest: Sendable {
     let title: String
     let artist: String
     let artworkURL: URL?
-    let theme: AppTheme
+    var theme: AppTheme
     let playerStyle: PlayerBackgroundStyle
     let karaokeBackground: BackgroundStyle
     let marblePhase: Float
@@ -85,6 +85,9 @@ struct StoryVideoRequest: Sendable {
     var songDNA: SongDNA? = nil
     var scoreStamp: KaraokePerformanceStamp? = nil
     var showsScoreStamp = true
+    var showsTrackCard = true
+    var showsBrand = true
+    var showsLyrics = true
 
     /// The active line's typography layer at a lyric time. The ONE builder
     /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).
@@ -124,25 +127,13 @@ struct StoryVideoRequest: Sendable {
             rhythmAnalysis: rhythm, performance: padPerformance,
             padAccent: frame.padAccent)
         guard var resolved else { return nil }
-        let cadence = !liveVisualResponseEnabled || reactionMode == .off
-            ? SongSectionCadence.neutral :
-            SongSectionCadence.at(sourceTime: frame.sourceTime, dna: songDNA)
-        if let typography = resolved.typographyFrame {
-            resolved = resolved.withTypography(
-                TypographyAnimationEngine.evolve(typography, cadence: cadence))
-        }
-        if let material = resolved.materialFrame,
-           liveVisualResponseEnabled, reactionMode != .off {
-            let features = CompositionAudioSampler.sample(audioTimeline, at: frame.sourceTime)
-            let pulse = max(material.parameters.beatPulse,
-                            StoryBeatEnvelope.at(sourceTime: frame.sourceTime, dna: songDNA))
-            let levels = LiveAudioLevels(
-                rms: features?.energy ?? 0, bass: features?.bass ?? 0,
-                onset: 0, beatPulse: pulse,
-                songEnergy: features?.energy ?? 0)
-            let reactive = MarbleLiveResponse.apply(material, levels: levels, mode: reactionMode)
-            resolved = resolved.withMaterial(SongSectionCadence.apply(
-                reactive, cadence: cadence))
+        if resolved.materialFrame != nil {
+            let base = MaterialResolver.resolve(
+                (runtime ?? renderRuntime)?.material ?? .legacyMarble,
+                timestamp: frame.sourceTime, reactionGain: 0)
+            let clean = StoryExportMotion.material(base: base,
+                mode: reactionMode, sourceTime: frame.sourceTime, dna: songDNA)
+            resolved = resolved.withMaterial(clean)
         }
         return resolved
     }
@@ -162,7 +153,7 @@ struct StoryVideoRequest: Sendable {
         sourceTime(at: elapsed) + lyricOffset
     }
     func marbleTime(at elapsed: TimeInterval) -> Float {
-        marblePhase + Float(elapsed) * marbleSpeed
+        StoryExportMotion.phase(at: elapsed, start: marblePhase, speed: marbleSpeed)
     }
     func activeLine(at elapsed: TimeInterval) -> TimedLyricLine? {
         let t = lyricTime(at: elapsed)

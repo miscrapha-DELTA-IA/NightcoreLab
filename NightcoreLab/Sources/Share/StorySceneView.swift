@@ -215,11 +215,9 @@ struct StorySceneView: View {
                 .blur(radius: 50)
                 .clipped()
         } else {
-            TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
-                                speed: 0, maxFPS: 1, isPaused: true,
-                                extendIntoSafeArea: false, frozenTime: phase,
-                                // The resolved MaterialFrame is the whole contract.
-                                materialFrame: materialFrame)
+            StoryExportMarbleView(theme: request.theme,
+                renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
+                startingPhase: request.marblePhase, materialFrame: materialFrame)
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }
