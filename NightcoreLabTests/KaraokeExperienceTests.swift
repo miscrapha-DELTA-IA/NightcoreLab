@@ -389,4 +389,44 @@ final class KaraokeExperienceTests: XCTestCase {
             XCTFail("Focus presentation must not alter precision")
         }
     }
+
+    @MainActor
+    func testStage36RealMicPresenceDrivesPointsAndSilenceNeverScores() {
+        let line = TimedLyricLine(id: 0, start: 0, end: 4, words: [
+            WordSync(id: 0, text: "CANTAR", start: 0, end: 4, spaceAfter: false)
+        ], precision: .word)
+        let session = KaraokeScoringSession()
+        session.present(true)
+        XCTAssertTrue(session.isPresented, "HUD remains visible before permission arrives")
+        session.start(mode: .microphone, lines: [line], at: 0)
+        session.microphoneFrame = { _ in .silence }
+        for i in 1...12 {
+            session.advance(time: Double(i) * 0.1, playing: true, lines: [line])
+        }
+        XCTAssertEqual(session.snapshot.totalScore, 0)
+        XCTAssertEqual(session.liveMicLevel, 0)
+        session.microphoneFrame = { _ in
+            KaraokeVoiceFrame(rms: 0.25, frequency: 220, confidence: 0.92)
+        }
+        for i in 13...29 {
+            session.advance(time: Double(i) * 0.1, playing: true, lines: [line])
+        }
+        XCTAssertGreaterThan(session.snapshot.totalScore, 0)
+        XCTAssertGreaterThan(session.liveMicLevel, 0)
+        session.stop(message: "Microfone interrompido")
+        XCTAssertEqual(session.snapshot.totalScore, 0)
+        XCTAssertEqual(session.liveMicLevel, 0)
+        XCTAssertTrue(session.isPresented)
+    }
+
+    func testStage36AccompanimentSweepRespectsOriginalSourceTimeAtThreeRates() {
+        for rate in [0.8, 1.0, 1.25] {
+            for elapsed in stride(from: 0.0, through: 1.0, by: 0.1) {
+                let sourceTime = 2.0 + elapsed * rate
+                let progress = KaraokeTimingGuide.pacing(start: 2, end: 4, at: sourceTime)
+                XCTAssertEqual(progress, elapsed * rate / 2, accuracy: 0.00001)
+            }
+        }
+    }
+
 }
