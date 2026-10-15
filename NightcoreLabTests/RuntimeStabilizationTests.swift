@@ -1063,10 +1063,10 @@ final class Stage25SectionAwareRuntimeTests: XCTestCase {
         XCTAssertLessThan(quietType.animation(for: 1)!.scale,
                           peakType.animation(for: 1)!.scale)
         XCTAssertEqual(TypographyAnimationEngine.evolve(frame, cadence: .neutral), frame)
-        XCTAssertEqual(await tracker.modulation(
-            for: dna, sourceTime: 40, enabled: false), .neutral)
-        XCTAssertEqual(await tracker.modulation(
-            for: nil, sourceTime: 40, enabled: true), .neutral)
+        let disabled = await tracker.modulation(for: dna, sourceTime: 40, enabled: false)
+        let missing = await tracker.modulation(for: nil, sourceTime: 40, enabled: true)
+        XCTAssertEqual(disabled, .neutral)
+        XCTAssertEqual(missing, .neutral)
     }
 
     func testUnclassifiedSongProducesNoNewColorsOrMotion() async {
