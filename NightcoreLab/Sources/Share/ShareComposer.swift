@@ -24,9 +24,8 @@ struct ShareCardView: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    Label("NIGHTCORELAB", systemImage: "waveform")
-                        .font(.system(size: 19, weight: .heavy, design: .rounded))
-                        .tracking(2.5)
+                    NightcoreBrandLockup(theme: snapshot.theme,
+                                         iconSize: 28, titleSize: 19)
                     Spacer()
                     Text(snapshot.theme.displayName.uppercased())
                         .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -37,6 +36,10 @@ struct ShareCardView: View {
                         .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 1))
                 }
                 .foregroundStyle(.white)
+                TrackIdentityPill(title: snapshot.title,
+                                  artist: snapshot.artist ?? "Música",
+                                  artwork: artwork, thumbnailSize: 46)
+                    .padding(.top, 16)
 
                 if let stamp = snapshot.scoreStamp {
                     Text("\(stamp.label) · \(stamp.grade) · \(stamp.accuracy)%")
@@ -62,7 +65,7 @@ struct ShareCardView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                         .foregroundStyle(.white)
-                    Text(snapshot.artist ?? "Música no NightcoreLab")
+                    Text(snapshot.artist ?? "Música no Nightcore Lab")
                         .font(.system(size: 23, weight: .medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.center)

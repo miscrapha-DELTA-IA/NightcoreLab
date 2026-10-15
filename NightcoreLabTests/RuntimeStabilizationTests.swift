@@ -29,7 +29,7 @@ final class RuntimeStabilizationTests: XCTestCase {
         for _ in 0..<3 {
             session.setKaraokePresented(true, lines: karaokeLines(5), at: clock.lyricTime,
                                        trackEnergy: { 0.1 })
-            XCTAssertEqual(session.mode, .passive)
+            XCTAssertEqual(session.mode, .off)
             session.setKaraokePresented(false, lines: [], at: clock.lyricTime, trackEnergy: { 0 })
         }
         try await Task.sleep(for: .milliseconds(100))
@@ -40,6 +40,7 @@ final class RuntimeStabilizationTests: XCTestCase {
         XCTAssertEqual(audio.scheduleGeneration, generation)
         XCTAssertEqual(audio.playbackCompletionCount, 0)
         XCTAssertEqual(AVAudioSession.sharedInstance().category, category)
+        XCTAssertEqual(category, .playAndRecord)
 
         // A stop-triggered callback can arrive while guarded OR after resuming.
         audio.beginGraphReconfiguration()

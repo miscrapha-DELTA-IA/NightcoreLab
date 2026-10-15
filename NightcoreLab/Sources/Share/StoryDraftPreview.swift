@@ -111,6 +111,15 @@ struct StoryDraftPreview: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 13) {
+                    HStack {
+                        NightcoreBrandLockup(theme: frozenRequest.theme,
+                                             iconSize: 25, titleSize: 18)
+                        Spacer()
+                    }
+                    TrackIdentityPill(title: frozenRequest.title,
+                                      artist: frozenRequest.artist,
+                                      artwork: artwork, thumbnailSize: 40)
+                        .accessibilityIdentifier("share.trackHeader")
                     GeometryReader { proxy in
                         let canvas = StoryExportCanvas(
                             request: frozenRequest, artwork: artwork,

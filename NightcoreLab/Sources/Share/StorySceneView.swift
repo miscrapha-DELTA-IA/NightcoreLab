@@ -99,12 +99,16 @@ struct StorySceneView: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    Text("NIGHTCORELAB")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .tracking(2.0)
+                    NightcoreBrandLockup(theme: request.theme,
+                                         iconSize: 27, titleSize: 17)
+                    Spacer()
+                    TrackIdentityPill(title: request.title, artist: request.artist,
+                                      artwork: artwork, thumbnailSize: 38)
+                        .frame(width: 205)
                     Spacer()
                     Text(request.theme.displayName.uppercased())
                         .font(.system(size: 13, weight: .bold))
+                        .lineLimit(1).minimumScaleFactor(0.55)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(.black.opacity(0.45), in: Capsule())
                 }
@@ -151,12 +155,16 @@ struct StorySceneView: View {
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             HStack {
-                Text("NIGHTCORELAB")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .tracking(2)
+                NightcoreBrandLockup(theme: request.theme,
+                                     iconSize: 24, titleSize: 15)
+                Spacer()
+                TrackIdentityPill(title: request.title, artist: request.artist,
+                                  artwork: artwork, thumbnailSize: 36)
+                    .frame(width: min(205, layout.titleArea.width * 0.43))
                 Spacer()
                 Text(request.theme.displayName.uppercased())
                     .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1).minimumScaleFactor(0.55)
                     .padding(.horizontal, 10).padding(.vertical, 7)
                     .background(.black.opacity(0.45), in: Capsule())
             }
