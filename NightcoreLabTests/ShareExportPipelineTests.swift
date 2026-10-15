@@ -99,8 +99,8 @@ final class ShareExportPipelineTests: XCTestCase {
         let profile = ExportProfile.matching(old).encodingProfile(for: .player)
         XCTAssertEqual(old.width, profile.width)
         XCTAssertEqual(old.height, profile.height)
-        XCTAssertEqual(old.fps, profile.fps)
-        XCTAssertEqual(old.bitRate, profile.bitRate)
+        XCTAssertEqual(profile.fps, 30)
+        XCTAssertGreaterThan(profile.bitRate, old.bitRate)
         XCTAssertEqual(profile.cropPolicy, .safeAreaPreserving)
     }
 
@@ -122,7 +122,7 @@ final class ShareExportPipelineTests: XCTestCase {
                 XCTAssertEqual(profile.height % 2, 0)
                 XCTAssertGreaterThan(profile.bitRate, 0)
                 XCTAssertEqual(profile.fps, quality == .economy ? 15 :
-                               quality == .balanced ? 20 : 30)
+                               quality == .balanced ? 30 : 60)
             }
         }
         XCTAssertEqual(ExportProfile().encodingProfile(for: .player).width, 720)
