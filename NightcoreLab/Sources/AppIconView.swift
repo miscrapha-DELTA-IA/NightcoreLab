@@ -50,6 +50,7 @@ struct TrackIdentityPill: View {
     var artwork: UIImage? = nil
     var artworkURL: URL? = nil
     var thumbnailSize: CGFloat = 44
+    var titleLineLimit: Int = 1
 
     var body: some View {
         HStack(spacing: 9) {
@@ -60,7 +61,9 @@ struct TrackIdentityPill: View {
                 Text(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?
                      "Música sem título" : title)
                     .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .lineLimit(1)
+                    .lineLimit(titleLineLimit)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(artist)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))

@@ -74,6 +74,7 @@ enum StoryFrameRenderer {
                        profile: StoryEncodingProfile,
                        visualTimeline: AudioFeatureTimeline? = nil,
                        visualRhythm: RhythmAnalysisResult? = nil) throws -> CGImage {
+        StoryMetalSurface.shared.beginFrame()
         let scene = StoryExportCanvas(request: request, artwork: artwork,
                                       frame: frame, profile: profile,
                                       visualTimeline: visualTimeline,
@@ -84,6 +85,7 @@ enum StoryFrameRenderer {
         guard let image = renderer.uiImage?.cgImage,
               image.width == profile.width, image.height == profile.height
         else { throw StoryVideoError.renderFailed }
+        if let error = StoryMetalSurface.shared.lastError { throw error }
         return image
     }
 }

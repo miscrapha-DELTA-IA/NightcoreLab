@@ -105,8 +105,7 @@ struct StorySceneView: View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
-            Color.black.opacity(0.40)
-                .storyLayer(.overlay, frame: resolvedCompositionFrame)
+            edgeVignette
 
             VStack(spacing: 0) {
                 HStack {
@@ -117,7 +116,7 @@ struct StorySceneView: View {
                     Spacer()
                     if request.showsTrackCard {
                         TrackIdentityPill(title: request.title, artist: request.artist,
-                                          artwork: artwork, thumbnailSize: 38)
+                                          artwork: artwork, thumbnailSize: 32, titleLineLimit: 2)
                             .frame(width: 205)
                     }
                     Spacer()
@@ -166,8 +165,7 @@ struct StorySceneView: View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
-            Color.black.opacity(0.40)
-                .storyLayer(.overlay, frame: resolvedCompositionFrame)
+            edgeVignette
 
             HStack {
                 if request.showsBrand {
@@ -177,7 +175,7 @@ struct StorySceneView: View {
                 Spacer()
                 if request.showsTrackCard {
                     TrackIdentityPill(title: request.title, artist: request.artist,
-                                      artwork: artwork, thumbnailSize: 36)
+                                      artwork: artwork, thumbnailSize: 32, titleLineLimit: 2)
                         .frame(width: min(205, layout.titleArea.width * 0.43))
                 }
                 Spacer()
@@ -233,7 +231,7 @@ struct StorySceneView: View {
                 .resizable().scaledToFill()
                 .frame(width: layoutPolicy?.canvasSize.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.canvasSize.height ?? StoryVideoRequest.size.height)
-                .blur(radius: 50)
+
                 .clipped()
         } else {
             StoryExportMarbleView(theme: request.theme,
@@ -242,6 +240,17 @@ struct StorySceneView: View {
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }
+    }
+
+    /// Only the header/footer edges are shaded; the center stays untouched.
+    private var edgeVignette: some View {
+        LinearGradient(stops: [
+            .init(color: .black.opacity(0.18), location: 0),
+            .init(color: .clear, location: 0.18),
+            .init(color: .clear, location: 0.82),
+            .init(color: .black.opacity(0.18), location: 1)
+        ], startPoint: .top, endPoint: .bottom)
+        .allowsHitTesting(false)
     }
 
     private var playerCard: some View {

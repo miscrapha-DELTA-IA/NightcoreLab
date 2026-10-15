@@ -297,3 +297,30 @@ half4 texturedMarble(float2 position, half4 currentColor,
          clamp(pulseGlow, 0.0f, 0.3f) * 0.18f);
     return half4(half3(saturate(col)), 1.0h);
 }
+
+// Stage 40: off-screen entry point CALLS the live functions above. Keeping the
+// math in one place prevents export from drifting into a generic approximation.
+kernel void storyMarbleFrame(texture2d<float, access::write> output [[texture(0)]],
+                             constant float *v [[buffer(0)]],
+                             constant float4 *c [[buffer(1)]],
+                             uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+    float2 size(v[0], v[1]);
+    float2 position = (float2(gid) + 0.5f) * size /
+        float2(output.get_width(), output.get_height());
+    half4 color;
+    if (v[3] > 1.5f) {
+        color = texturedMarble(position, half4(0), size, v[2],
+            half4(c[0]), half4(c[1]), half4(c[2]), half4(c[3]), half4(c[4]),
+            v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12],
+            v[13], v[14], v[15], v[16], v[17], 1.0f);
+    } else if (v[3] < 0.5f) {
+        color = liquidMarble(position, half4(0), size, v[2],
+            half4(c[0]), half4(c[1]), half4(c[2]), v[14], v[15], v[16], v[17]);
+    } else {
+        color = proceduralMaterial(position, half4(0), size, v[2],
+            half4(c[0]), half4(c[1]), half4(c[2]), v[18], v[19], v[20],
+            v[21], v[22], v[15], v[23], v[24], v[25], v[26], v[27]);
+    }
+    output.write(float4(color), gid);
+}

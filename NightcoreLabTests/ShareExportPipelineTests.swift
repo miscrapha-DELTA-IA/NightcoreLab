@@ -361,3 +361,80 @@ final class ShareExportPipelineTests: XCTestCase {
     }
 
 }
+
+extension ShareExportPipelineTests {
+    /// Measure only the unobstructed center: titles, lyric tiles and logos
+    /// must not let an empty/blurred background pass the contrast gate.
+    private func centerPixels(_ image: CGImage) throws -> [Double] {
+        let w = image.width, h = image.height
+        var rgba = [UInt8](repeating: 0, count: w * h * 4)
+        let context = try XCTUnwrap(CGContext(data: &rgba, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var result: [Double] = []
+        for y in h/4..<h*3/4 {
+            for x in w/4..<w*3/4 {
+                let i = (y * w + x) * 4
+                result.append(contentsOf: rgba[i..<i+3].map { Double($0) / 255 })
+            }
+        }
+        return result
+    }
+
+    @MainActor
+    func testStage40RealMetalContrastPaletteAndContinuousFrames() throws {
+        defer { StoryMetalSurface.shared.releaseTarget() }
+        let track = TrackInfo(track: Track(id: "crisp", title: "The Adults Are Talking",
+            thumbnailURL: nil), fileName: nil, coverURL: nil)
+        let profile = StoryEncodingProfile(width: 270, height: 480, fps: 30, bitRate: 700_000)
+        for experience in CreativePresetCatalog.selectableExperiences {
+            for theme in [AppTheme.lagoon, .cyber] {
+                var request = try StoryRequestBuilder.make(mode: .player, track: track,
+                    theme: theme, playerStyle: .turbulent, karaokeBackground: .marble,
+                    marblePhase: 2.1, playbackTime: 0, sourceDuration: 10, speed: 1,
+                    lines: [], lyricOffset: 0, typography: .classic, includeAudio: false,
+                    creativePresetID: experience.id, reactionMode: .off)
+                request.showsTrackCard = false
+                request.showsBrand = false
+                request.showsLyrics = false
+                let timeline = StoryRenderTimeline(request: request, profile: profile)
+                func pixels(_ index: Int) throws -> [Double] {
+                    try centerPixels(StoryFrameRenderer.render(request: request, artwork: nil,
+                        frame: timeline.frame(index: index), profile: profile))
+                }
+                let first = try pixels(0)
+                let next = try pixels(1)
+                let third = try pixels(2)
+                XCTAssertEqual(first, try pixels(0), "Out-of-order render must be deterministic")
+                var luminance: [Double] = []
+                var saturation = 0.0
+                for i in stride(from: 0, to: first.count, by: 3) {
+                    let r = first[i], g = first[i+1], b = first[i+2]
+                    luminance.append(0.2126*r + 0.7152*g + 0.0722*b)
+                    let high = max(r, max(g, b)), low = min(r, min(g, b))
+                    saturation += high > 0 ? (high-low)/high : 0
+                }
+                let mean = luminance.reduce(0,+) / Double(luminance.count)
+                let variance = luminance.reduce(0) { $0 + pow($1-mean, 2) } / Double(luminance.count)
+                let rowWidth = profile.width*3/4 - profile.width/4
+                var gradient = 0.0, count = 0
+                for i in 0..<luminance.count where i % rowWidth < rowWidth-4 {
+                    gradient += abs(luminance[i+4] - luminance[i]); count += 1
+                }
+                gradient /= Double(count)
+                let label = "\(experience.id)/\(theme): variance=\(variance), gradient=\(gradient)"
+                print("Stage40 pixels: \(label)")
+                XCTAssertGreaterThan(variance, 0.0005, label)
+                XCTAssertGreaterThan(gradient, 0.002, label)
+                XCTAssertGreaterThan(saturation/Double(luminance.count), 0.15, label)
+                for pair in [(first, next), (next, third)] {
+                    let delta = zip(pair.0, pair.1).reduce(0.0) { $0 + abs($1.0-$1.1) } / Double(first.count)
+                    XCTAssertGreaterThan(delta, 0.00001, "Frozen frame: \(label)")
+                    XCTAssertLessThan(delta, 0.08, "Discontinuous frame: \(label)")
+                }
+            }
+        }
+    }
+}

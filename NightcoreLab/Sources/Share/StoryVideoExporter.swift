@@ -211,6 +211,7 @@ enum StoryVideoExporter {
         visualRhythm: RhythmAnalysisResult?,
         onProgress: @escaping @MainActor (Double) -> Void
     ) async throws -> URL {
+        defer { StoryMetalSurface.shared.releaseTarget() }
         let timeline = StoryRenderTimeline(request: request, profile: profile)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("NightcoreStory-\(UUID().uuidString).mp4")

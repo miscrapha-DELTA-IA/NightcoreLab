@@ -124,3 +124,25 @@ final class Stage24LiveExperienceTests: XCTestCase {
         }
     }
 }
+
+extension PlayerBackgroundStyleTests {
+    @MainActor
+    func testStage40ExportUsesEveryLivePaletteAndNativeResolution() throws {
+        defer { StoryMetalSurface.shared.releaseTarget() }
+        for experience in CreativePresetCatalog.selectableExperiences {
+            let frame = MaterialResolver.resolve(experience.visualMaterial, timestamp: 0)
+            var palettes = Set<Data>()
+            for theme in AppTheme.allCases {
+                let image = try StoryMetalSurface.shared.render(
+                    size: CGSize(width: 48, height: 80), theme: theme,
+                    frame: frame, phase: 2.1)
+                palettes.insert(try XCTUnwrap(image.dataProvider?.data) as Data)
+            }
+            XCTAssertEqual(palettes.count, AppTheme.allCases.count, experience.id)
+        }
+        let image = try StoryMetalSurface.shared.render(size: CGSize(width: 540, height: 960),
+            theme: .lagoon, frame: MaterialResolver.resolve(.legacyMarble, timestamp: 0), phase: 2.1)
+        XCTAssertEqual(image.width, 1080)
+        XCTAssertEqual(image.height, 1920)
+    }
+}
