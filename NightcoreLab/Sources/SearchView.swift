@@ -404,15 +404,8 @@ struct SearchView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track.cleanTitle ?? track.title)
                             .font(.caption.weight(.semibold)).lineLimit(1)
-                        Button {
-                            focusAlbumArtist(track)
-                        } label: {
-                            Label(AlbumArtistCollectionResolver.artistName(for: track) ?? "Álbum & Artista",
-                                  systemImage: "opticaldisc")
-                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
+                        Text(AlbumArtistCollectionResolver.artistName(for: track) ?? "Música")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         if offline.lyricsReadyIDs.contains(track.id) {
                             Text("🎤 Letra").font(.caption2).foregroundStyle(theme.accent)
                         }
@@ -422,6 +415,11 @@ struct SearchView: View {
             }
             .buttonStyle(.plain)
             .disabled(!isEnabled)
+            Button("💿") { focusAlbumArtist(track) }
+                .font(.caption2)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Álbum e artista de \(track.title)")
+                .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
             offlineControl(track)
         }
         .padding(7)
@@ -694,7 +692,13 @@ struct SearchView: View {
         }
         .onChange(of: isPresented) { _, presented in
             if !presented { showSuggestions(preserveSavedQuery: true) }
-            else if showsQuickAccess { hubTab = .mix }
+            else if showsQuickAccess {
+                collectionAnchor = nil
+                hubTab = .mix
+            }
+        }
+        .onChange(of: activeTrack?.id) { _, _ in
+            collectionAnchor = nil
         }
         .onChange(of: focusRequest) { _, _ in
             if isPresented { isFocused = true }
