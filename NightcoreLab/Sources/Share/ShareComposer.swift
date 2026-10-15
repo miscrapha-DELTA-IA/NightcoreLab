@@ -24,9 +24,8 @@ struct ShareCardView: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    Label("NIGHTCORELAB", systemImage: "waveform")
-                        .font(.system(size: 19, weight: .heavy, design: .rounded))
-                        .tracking(2.5)
+                    NightcoreBrandLockup(theme: snapshot.theme,
+                                         iconSize: 28, titleSize: 19)
                     Spacer()
                     Text(snapshot.theme.displayName.uppercased())
                         .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -37,6 +36,19 @@ struct ShareCardView: View {
                         .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 1))
                 }
                 .foregroundStyle(.white)
+                TrackIdentityPill(title: snapshot.title,
+                                  artist: snapshot.artist ?? "Música",
+                                  artwork: artwork, thumbnailSize: 46)
+                    .padding(.top, 16)
+
+                if let stamp = snapshot.scoreStamp {
+                    Text("\(stamp.label) · \(stamp.grade) · \(stamp.accuracy)%")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .padding(.horizontal, 16).padding(.vertical, 9)
+                        .background(snapshot.theme.accent.opacity(0.28), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(.top, 18)
+                }
 
                 Spacer(minLength: 80)
                 artworkTile
@@ -53,7 +65,7 @@ struct ShareCardView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                         .foregroundStyle(.white)
-                    Text(snapshot.artist ?? "Música no NightcoreLab")
+                    Text(snapshot.artist ?? "Música no Nightcore Lab")
                         .font(.system(size: 23, weight: .medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
@@ -99,7 +111,13 @@ struct ShareCardView: View {
                 maxFPS: 1,
                 isPaused: true,
                 extendIntoSafeArea: false,
-                frozenTime: snapshot.marblePhase
+                frozenTime: snapshot.marblePhase,
+                materialFrame: snapshot.reactionMode == .off
+                    ? MaterialResolver.resolve(snapshot.material, timestamp: 0, reactionGain: 0)
+                    : SongSectionCadence.apply(
+                        MaterialResolver.resolve(snapshot.material, timestamp: 0,
+                            reactionGain: CreativeReactionProfile.gain(snapshot.reactionMode)),
+                        cadence: snapshot.sectionCadence)
             )
             .frame(width: Self.size.width, height: Self.size.height)
         }
@@ -120,16 +138,5 @@ struct ShareCardView: View {
                         .padding(130)
                 }
         }
-    }
-}
-
-/// Compact result uses the existing share surface; no voice recording or lyric
-/// content is exported. Simulation and missing harmonic evidence stay explicit.
-enum KaraokeScoreShareComposer {
-    static func text(_ score: KaraokeScoreSnapshot, simulation: Bool) -> String {
-        let mode = simulation ? "SIMULAÇÃO" : "Karaokê"
-        let evidence = score.hasHarmonicReference ? "Ritmo + afinação" : "Ritmo e presença (sem referência tonal)"
-        return "NightcoreLab · \(mode)\nNota \(score.rank) · \(score.totalScore) pontos\n" +
-            "Maior combo: \(score.bestCombo) · Precisão: \(Int(score.accuracyPercentage.rounded()))%\n\(evidence)"
     }
 }

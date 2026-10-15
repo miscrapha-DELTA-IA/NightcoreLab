@@ -173,6 +173,13 @@ struct KaraokeLyricsView: View {
     @AppStorage("story.lyricTypography") private var typography: TypographyFont = .classic
     @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
+    @AppStorage(KaraokeGuidePreference.pacing) private var pacingGuide = true
+    @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
+    @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
+    @AppStorage("karaokeChordMode") private var chordMode = false
+    @State private var chordPlacements: [ChordPlacement] = []
+    @State private var chordTranspose = 0
+    @State private var simplifyChords = false
     @AppStorage(CreativePresetCatalog.storageKey)
     private var creativePresetID = CreativePresetCatalog.defaultID
     @AppStorage("creativeReactionMode")
@@ -187,6 +194,8 @@ struct KaraokeLyricsView: View {
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
+    var onShowResult: (() -> Void)? = nil
+    var sourceURL: URL? = nil
 
     /// Same catalog helpers the StoryRequestBuilder freezes (Stage 12.5).
     private var typographyPreset: TypographyPreset {
@@ -204,6 +213,10 @@ struct KaraokeLyricsView: View {
     var body: some View {
         let preset = typographyPreset
         let mapping = typographyMapping
+        let activeLine = store.lines.first { $0.id == store.activeLineIndex }
+        let nextLineID = activeLine.flatMap { active in
+            store.lines.first { $0.start >= active.end && !$0.words.isEmpty }?.id
+        }
         GeometryReader { viewport in
             let inset = KaraokeLayoutMetrics.horizontalInset(for: viewport.size.width)
             let wordLimit = KaraokeLayoutMetrics.textWidth(for: viewport.size.width)
@@ -218,6 +231,7 @@ struct KaraokeLyricsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 24) {
+                        Color.clear.frame(height: 1).id("karaoke-top")
                         ForEach(store.lines) { line in
                             let emphasis = KaraokeFocusResolver.emphasis(
                                 lineID: line.id, activeID: store.activeLineIndex,
@@ -235,11 +249,13 @@ struct KaraokeLyricsView: View {
                                 typographyPreset: preset,
                                 typographyMapping: mapping,
                                 liveUniforms: liveUniforms,
-                                allowStatusAnimation: animateLineTransition
+                                allowStatusAnimation: animateLineTransition,
+                                pacingGuide: pacingGuide,
+                                nextPreviewEnabled: nextVersePreview,
+                                previewFrom: line.id == nextLineID ? activeLine?.end : nil,
+                                chords: chords(for: line), focusMode: focusMode
                             )
                             .frame(maxWidth: .infinity)
-                            .opacity(emphasis.opacity)
-                            .scaleEffect(emphasis.scale)
                             .overlay(alignment: .leading) {
                                 if emphasis.showsIndicator && !line.words.isEmpty {
                                     Capsule()
@@ -261,9 +277,6 @@ struct KaraokeLyricsView: View {
                             .accessibilityLabel(line.text)
                             .accessibilityAddTraits(.isButton)
                             .accessibilityHint("Toque para reproduzir a partir desta linha")
-                            .animation(reduceMotion || !energyBudget.allowsDecorativeMotion ||
-                                       !animateLineTransition ? nil : .easeOut(duration: 0.12),
-                                       value: store.activeLineIndex)
                         }
                     }
                     .padding(.horizontal, inset)
@@ -307,6 +320,27 @@ struct KaraokeLyricsView: View {
                         .accessibilityIdentifier("karaoke.returnToLive")
                     }
                 }
+                .overlay(alignment: .top) {
+                    if entranceCountdown {
+                        KaraokeEntranceCue(lines: store.lines, clock: clock,
+                                           offset: store.userOffset,
+                                           isPlaying: store.isPlaying,
+                                           trackID: store.trackID,
+                                           microphoneActive: store.scoring.mode == .microphone,
+                                           accent: accent ?? theme.fill)
+                            .padding(.top, 12)
+                    }
+                }
+                .safeAreaInset(edge: .top) {
+                    if chordMode {
+                        CifraClubLyricsView(placements: chordPlacements,
+                                            dna: liveUniforms?.songDNA,
+                                            clock: clock, accent: accent ?? theme.fill,
+                                            transpose: $chordTranspose,
+                                            simplify: $simplifyChords)
+                            .padding(.horizontal, 12)
+                    }
+                }
                 .onChange(of: store.activeLineIndex) { _, new in
                     guard followsPlayback, let new else { return }
                     scrollTo(new, proxy: proxy, reason: .automatic)
@@ -316,6 +350,13 @@ struct KaraokeLyricsView: View {
                     followsPlayback = true
                     lastRequestedLineID = nil
                     animateLineTransition = false
+                    proxy.scrollTo("karaoke-top", anchor: .top)
+                }
+                .onChange(of: store.lines) { _, lines in
+                    if store.scrollAnchorLineID == 0, let first = lines.first,
+                       lastRequestedLineID == nil {
+                        proxy.scrollTo(first.id, anchor: .top)
+                    }
                 }
                 .task(id: store.trackID) {
                     // Reopen at the current line, even if the active index
@@ -326,10 +367,28 @@ struct KaraokeLyricsView: View {
                 }
             }
         }
-        .overlay(alignment: .top) {
-            KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill)
+        .safeAreaInset(edge: .top, spacing: 8) {
+            KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill,
+                            onResult: onShowResult)
         }
-        .onAppear { store.startTracking() }
+        .onAppear {
+            store.scoring.present(true)
+            store.startTracking()
+        }
+        .task(id: "\(store.trackID ?? "")|\(chordMode)|\(store.lines.count)|\(liveUniforms?.songDNA?.barTimestamps.count ?? 0)") {
+            guard chordMode, let sourceURL,
+                  let dna = liveUniforms?.songDNA, !dna.barTimestamps.isEmpty else {
+                chordPlacements = []
+                return
+            }
+            let lines = store.lines
+            let frames = await Task.detached(priority: .utility) {
+                try? ChordProgressionResolver.analyze(source: sourceURL,
+                    bars: dna.barTimestamps, duration: dna.sourceDuration)
+            }.value ?? []
+            guard !Task.isCancelled else { return }
+            chordPlacements = ChordProgressionResolver.resolve(lines: lines, chroma: frames)
+        }
         .onChange(of: store.isPlaying) { _, playing in
             if !playing { KaraokePerformanceProbe.shared.timelineSuspended() }
         }
@@ -354,7 +413,7 @@ struct KaraokeLyricsView: View {
             animatedDuration: decision.duration,
             automatic: reason == .automatic)
         if decision.animated {
-            withAnimation(.smooth(duration: decision.duration)) {
+            withAnimation(.easeOut(duration: 0.28)) {
                 proxy.scrollTo(id, anchor: .center)
             }
         } else {
@@ -372,6 +431,18 @@ struct KaraokeLyricsView: View {
         guard let a = store.activeLineIndex else { return .upcoming }
         return line.id < a ? .past : (line.id == a ? .active : .upcoming)
     }
+
+    private func chords(for line: TimedLyricLine) -> [Int: String] {
+        guard chordMode else { return [:] }
+        var result: [Int: String] = [:]
+        for placement in chordPlacements where placement.lineID == line.id {
+            result[placement.wordID] = placement.chord.transposed(chordTranspose,
+                                                       simplify: simplifyChords)
+        }
+        return result
+    }
+
+
 }
 
 // MARK: - Linha
@@ -397,7 +468,12 @@ private struct KaraokeLineView: View {
     let typographyMapping: CreativeAudioMapping
     let liveUniforms: CreativeLiveUniforms?
     let allowStatusAnimation: Bool
-    private let preparedTypography: TypographyPreparedLine
+    let pacingGuide: Bool
+    let nextPreviewEnabled: Bool
+    let previewFrom: TimeInterval?
+    let chords: [Int: String]
+    let focusMode: KaraokeFocusMode
+    @State private var preparedTypography: TypographyPreparedLine?
     private var typographyStyle: TypographyStyle { typographyPreset.style }
 
     private var lyricState: LyricsState {
@@ -414,7 +490,10 @@ private struct KaraokeLineView: View {
          offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
          accent: Color?, maxWordWidth: CGFloat, fontSize: CGFloat,
          typographyPreset: TypographyPreset, typographyMapping: CreativeAudioMapping,
-         liveUniforms: CreativeLiveUniforms?, allowStatusAnimation: Bool) {
+         liveUniforms: CreativeLiveUniforms?, allowStatusAnimation: Bool,
+         pacingGuide: Bool, nextPreviewEnabled: Bool,
+         previewFrom: TimeInterval?, chords: [Int: String],
+         focusMode: KaraokeFocusMode) {
         self.line = line
         self.status = status
         self.isPlaying = isPlaying
@@ -428,8 +507,11 @@ private struct KaraokeLineView: View {
         self.typographyMapping = typographyMapping
         self.liveUniforms = liveUniforms
         self.allowStatusAnimation = allowStatusAnimation
-        preparedTypography = TypographyPreparedLine(line)
-        KaraokePerformanceProbe.shared.preparedLineConstructed()
+        self.pacingGuide = pacingGuide
+        self.nextPreviewEnabled = nextPreviewEnabled
+        self.previewFrom = previewFrom
+        self.chords = chords
+        self.focusMode = focusMode
     }
 
     /// The Story's single entry point (TypographyLayer.resolve), with this
@@ -438,10 +520,12 @@ private struct KaraokeLineView: View {
         // Profiling is opt-in. No per-frame logging, I/O or observable state.
         let probe = KaraokePerformanceProbe.shared
         let start = probe.enabled ? ProcessInfo.processInfo.systemUptime : 0
-        let frame = TypographyLayer(state: lyricState, preset: typographyPreset,
-                                    lyricOffset: offset, prepared: preparedTypography,
-                                    experienceMapping: typographyMapping)
+        let original = TypographyLayer(state: lyricState, preset: typographyPreset,
+                                       lyricOffset: offset, prepared: preparedTypography,
+                                       experienceMapping: typographyMapping)
             .resolve(at: sourceTime + offset, features: features)
+        let frame = TypographyAnimationEngine.evolve(
+            original, cadence: liveUniforms?.sectionCadence ?? .neutral)
         if probe.enabled {
             probe.typographyResolved(in: ProcessInfo.processInfo.systemUptime - start)
         }
@@ -449,33 +533,55 @@ private struct KaraokeLineView: View {
     }
 
     var body: some View {
+        Group {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
-        } else if status == .active && line.precision == .word {
+        } else if status == .active {
+            // Only the current row subscribes to display cadence, never the stanza list.
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
+                let source = clock.lyricTime
                 let _ = KaraokePerformanceProbe.shared.timelineTick(
                     expectedInterval: energyBudget.visualInterval)
-                let source = clock.lyricTime                // lido direto do engine, a cada frame
                 layout(frame: resolve(sourceTime: source,
-                                      features: liveUniforms?.typographyFeatures(at: source)))
+                                      features: liveUniforms?.typographyFeatures(at: source)),
+                       pacing: KaraokeTimingGuide.pacing(
+                           start: line.start, end: line.end, at: source + offset),
+                       preview: nextPreviewEnabled && previewFrom.map {
+                           KaraokeTimingGuide.previewsNext(activeEnd: $0,
+                                                            at: source + offset)
+                       } == true,
+                       lineFocusProgress: 1)
             }
         } else {
-            layout(frame: resolve(sourceTime: -offset, features: nil))
-            .scaleEffect(status == .upcoming ? 0.96 : 1.0)
-            .animation(allowStatusAnimation && energyBudget.allowsDecorativeMotion
-                       ? .easeOut(duration: 0.12) : nil, value: status)
+            // A static row has no per-frame clock read, active animation or layout work.
+            layout(frame: resolve(sourceTime: (status == .past ? line.end : line.start) - offset,
+                                  features: nil),
+                   lineFocusProgress: status == .past ? 1 : 0)
+                .drawingGroup()
+        }
+        }
+        .onAppear {
+            preparedTypography = TypographyPreparedLine(line)
+            KaraokePerformanceProbe.shared.preparedLineConstructed()
+        }
+        .onChange(of: line) { _, updated in
+            preparedTypography = TypographyPreparedLine(updated)
         }
     }
 
-    private func layout(frame: TypographyFrame) -> some View {
+    private func layout(frame: TypographyFrame, pacing: Double = 0,
+                        preview: Bool = false,
+                        lineFocusProgress: CGFloat = 0) -> some View {
         FlowLayout(lineSpacing: 6) {
             ForEach(frame.words) { resolved in
                 KaraokeWordView(
                     word: resolved.word,
                     fill: resolved.progress,
-                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) : (accent ?? theme.fill),
-                    glow: (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
+                    fillColor: status == .past ? (accent ?? theme.fill).opacity(theme.pastOpacity) :
+                        (accent ?? theme.fill).opacity(line.precision == .estimated ? 0.86 : 1),
+                    glow: line.precision != .estimated &&
+                        (frame.animation(for: resolved.id)?.glow ?? (status == .active ? 1 : 0)) > 0,
                     theme: theme,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
@@ -483,10 +589,115 @@ private struct KaraokeLineView: View {
                     magazineAppearance: resolved.magazine?.legacy,
                     isCurrentLine: status == .active,
                     isPastLine: status == .past,
-                    animation: frame.animation(for: resolved.id)
+                    animation: frame.animation(for: resolved.id),
+                    wordSeed: resolved.seed,
+                    estimatedTiming: line.precision == .estimated
                 )
+                .overlay(alignment: .topLeading) {
+                    if let chord = chords[resolved.word.id] {
+                        Text(chord)
+                            .font(.system(size: 12, weight: .heavy, design: .rounded))
+                            .foregroundStyle(accent ?? theme.fill)
+                            .fixedSize()
+                            .offset(y: -14)
+                            .accessibilityLabel("Acorde \(chord)")
+                    }
+                }
                 .gapAfter(resolved.word.spaceAfter ? 9 : 0)
             }
+        }
+        .modifier(KaraokeGuideDecoration(
+            pacing: status == .active && pacingGuide ? pacing : nil,
+            preview: preview, accent: accent ?? theme.fill))
+        .scaleEffect(focusMode == .spotlight ? 0.95 + 0.05 * lineFocusProgress : 1)
+        .opacity(focusMode == .spotlight ? 0.32 + 0.68 * Double(lineFocusProgress) : 1)
+        .shadow(color: (accent ?? theme.fill).opacity(Double(lineFocusProgress) * 0.25),
+                radius: 8 * lineFocusProgress)
+    }
+}
+
+private struct KaraokeGuideDecoration: ViewModifier {
+    let pacing: Double?
+    let preview: Bool
+    let accent: Color
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if preview {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(accent.opacity(0.13))
+                }
+            }
+            .background(alignment: .leading) {
+                if let pacing {
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(accent.opacity(0.12))
+                            .frame(width: geometry.size.width * pacing)
+                    }
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let pacing {
+                    GeometryReader { geometry in
+                        Capsule().fill(accent.opacity(0.78))
+                            .frame(width: geometry.size.width * pacing, height: 3)
+                    }
+                    .frame(height: 3)
+                    .offset(y: 7)
+                }
+            }
+            .shadow(color: preview ? accent.opacity(0.35) : .clear,
+                    radius: preview ? 10 : 0)
+            .padding(.bottom, 9)
+    }
+}
+
+private struct KaraokeEntranceCue: View {
+    @Environment(\.energyBudget) private var energyBudget
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let lines: [TimedLyricLine]
+    let clock: PlaybackClock
+    let offset: TimeInterval
+    let isPlaying: Bool
+    let trackID: String?
+    let microphoneActive: Bool
+    let accent: Color
+    @State private var lastTickKey: String?
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.08,
+                                paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
+            let cue = KaraokeTimingGuide.entrance(lines: lines,
+                                                  at: clock.lyricTime + offset)
+            let tickKey = cue.map { "\(trackID ?? ""):\($0.lineID):\($0.number)" }
+            if let cue {
+                HStack(spacing: 10) {
+                    Text("\(cue.number)")
+                        .font(.title3.bold().monospacedDigit())
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { index in
+                            Circle()
+                                .fill(index < cue.litDots ? accent : .white.opacity(0.24))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(accent.opacity(0.45)))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: cue.number)
+                .accessibilityLabel("Entrada em \(cue.number)")
+                .accessibilityIdentifier("karaoke.entranceCountdown")
+            }
+            Color.clear.frame(width: 0, height: 0)
+                .onChange(of: tickKey, initial: true) { _, key in
+                    guard isPlaying, let key, key != lastTickKey else { return }
+                    lastTickKey = key
+                    CreativeHaptics.countdown(microphoneActive: microphoneActive)
+                }
         }
     }
 }
@@ -508,11 +719,26 @@ struct KaraokeWordView: View {
     /// All creative decisions are resolved by TypographyAnimationEngine.
     /// nil is reserved for external callers using the existing legacy API.
     var animation: TypographyAnimationState? = nil
+    var wordSeed: UInt64? = nil
     /// Appearance-only inputs so the Story can reuse this exact renderer.
     /// Defaults are the live karaoke values and leave its pixels unchanged.
     var tracking: CGFloat = 0
     var glowRadius: CGFloat = 10
     var minimumScaleFactor: CGFloat = 0.52
+    var estimatedTiming = false
+
+    @ViewBuilder private func estimatedMask(_ progress: Double) -> some View {
+        if progress >= 1 {
+            Rectangle()
+        } else {
+            LinearGradient(stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: max(0, progress - 0.06)),
+                .init(color: .clear, location: min(1, progress + 0.04)),
+                .init(color: .clear, location: 1)
+            ], startPoint: .leading, endPoint: .trailing)
+        }
+    }
 
     /// Tracking is applied only when requested, so the karaoke Text is
     /// byte-for-byte the pre-10B glyph (nonzero tracking can alter shaping).
@@ -533,6 +759,11 @@ struct KaraokeWordView: View {
     @ViewBuilder var body: some View {
         if typographyStyle == .magazineCutout, let magazineAppearance {
             cutout(appearance: magazineAppearance)
+        } else if let appearance = ObjectWordStyleResolver.resolve(
+            style: typographyStyle,
+            seed: wordSeed ?? TypographyResolver.stableSeed(lineID: 0, word: word),
+            progress: fill) {
+            objectWord(appearance: appearance)
         } else if let animation, !animation.isTransformNeutral {
             // Generic transform output can render future Glitch/Kinetic/Minimal
             // without adding temporal equations or timers to the view.
@@ -557,7 +788,11 @@ struct KaraokeWordView: View {
                     glyph
                         .foregroundStyle(fillColor)
                         .mask(alignment: .leading) {
-                            Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                            if estimatedTiming {
+                                estimatedMask(fill)
+                            } else {
+                                Rectangle().scaleEffect(x: fill, y: 1, anchor: .leading)
+                            }
                         }
                         .shadow(color: glow ? theme.glow : .clear,
                                 radius: glow ? (animation?.glow ?? 1) * glowRadius : 0)
@@ -579,10 +814,14 @@ struct KaraokeWordView: View {
                 if fills && progress > 0 {
                     tile(appearance: appearance, tone: .accent)
                         .mask(alignment: .leading) {
-                            GeometryReader { geometry in
-                                Rectangle()
-                                    .frame(width: geometry.size.width * progress)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            if estimatedTiming {
+                                estimatedMask(progress)
+                            } else {
+                                GeometryReader { geometry in
+                                    Rectangle()
+                                        .frame(width: geometry.size.width * progress)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                         }
                 }
@@ -616,6 +855,35 @@ struct KaraokeWordView: View {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(tone.background(theme: theme))
             }
+    }
+
+    private func objectWord(appearance: ObjectWordAppearance) -> some View {
+        let tile = ObjectWordTile(
+            text: word.text, appearance: appearance, accent: fillColor,
+            fontSize: fontSize, maxWordWidth: maxWordWidth,
+            minimumScaleFactor: minimumScaleFactor, filled: false)
+        return tile
+            .overlay(alignment: .leading) {
+                if appearance.fill > 0 {
+                    ObjectWordTile(
+                        text: word.text, appearance: appearance, accent: fillColor,
+                        fontSize: fontSize, maxWordWidth: maxWordWidth,
+                        minimumScaleFactor: minimumScaleFactor, filled: true)
+                    .mask(alignment: .leading) {
+                        if estimatedTiming {
+                            estimatedMask(appearance.fill)
+                        } else {
+                            GeometryReader { geometry in
+                                Rectangle().frame(width: geometry.size.width * appearance.fill)
+                            }
+                        }
+                    }
+                }
+            }
+            .rotationEffect(.degrees(appearance.rotation))
+            .scaleEffect((animation?.scale ?? 1) *
+                         (1 + 0.07 * sin(.pi * appearance.fill)))
+            .opacity(isPastLine ? 0.55 : (isCurrentLine ? 1 : 0.72))
     }
 }
 

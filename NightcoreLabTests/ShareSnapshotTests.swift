@@ -53,6 +53,45 @@ final class ShareSnapshotTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testLiveExperienceLightningPaletteAndRealKaraokeStampAreFrozen() {
+        var score = KaraokeScoreSnapshot()
+        score.judgedVerses = 3
+        score.totalScore = 4_200
+        score.accuracyPercentage = 93
+        let stamp = KaraokePerformanceStamp(snapshot: score, mode: .microphone)
+        let material = CreativePresetCatalog.material(selection: "cyber-night")
+        let info = TrackInfo(track: nil, fileName: "demo.m4a", coverURL: nil)
+        let snapshot = ShareSnapshotBuilder.make(
+            track: info, theme: .ultrapink, visualStyle: .marble,
+            marbleStartedAt: Date(timeIntervalSince1970: 0), speed: 0.6,
+            capturedAt: Date(timeIntervalSince1970: 10),
+            experienceID: "cyber-night", material: material,
+            reactionMode: .responsive, scoreStamp: stamp)
+        XCTAssertEqual(snapshot.experienceID, "cyber-night")
+        XCTAssertEqual(snapshot.material, material)
+        XCTAssertEqual(snapshot.theme, .ultrapink)
+        XCTAssertEqual(snapshot.reactionMode, .responsive)
+        XCTAssertEqual(snapshot.scoreStamp?.grade, "S")
+        XCTAssertEqual(snapshot.scoreStamp?.label, "CANTO AO VIVO")
+    }
+
+    @MainActor
+    func testEveryVisibleExperienceSurvivesStillCardCapture() {
+        let info = TrackInfo(track: nil, fileName: "demo.m4a", coverURL: nil)
+        XCTAssertEqual(CreativePresetCatalog.selectableExperiences.count, 7)
+        for experience in CreativePresetCatalog.selectableExperiences {
+            let captured = ShareSnapshotBuilder.make(
+                track: info, theme: .volt, visualStyle: .marble,
+                marbleStartedAt: .now, speed: 0.6,
+                experienceID: experience.id, material: experience.visualMaterial,
+                reactionMode: .subtle)
+            XCTAssertEqual(captured.experienceID, experience.id)
+            XCTAssertEqual(captured.material, experience.visualMaterial)
+            XCTAssertEqual(captured.theme, .volt)
+        }
+    }
+
     /// Attach the portrait image for every theme to the CI test bundle for visual review.
     @MainActor
     func testShareCardVisualCatalogForAllSeventeenThemes() async throws {

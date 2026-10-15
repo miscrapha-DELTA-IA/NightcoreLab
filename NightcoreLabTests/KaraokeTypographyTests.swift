@@ -5,13 +5,124 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeTypographyTests: XCTestCase {
+    func testStanzaCameraHasContinuousAdvanceAndBackwardSeekHysteresis() {
+        let lines = (0..<3).map { index in
+            TimedLyricLine(id: index, start: Double(index) * 2,
+                end: Double(index) * 2 + 1.8,
+                words: [WordSync(id: 0, text: "sing", start: Double(index) * 2,
+                                 end: Double(index) * 2 + 1.8, spaceAfter: false)],
+                precision: .word)
+        }
+        let positions = stride(from: 1.5, through: 2.6, by: 1.0 / 120).compactMap {
+            KaraokeStanzaCamera.interpolatedIndex(lines: lines, at: $0)
+        }
+        XCTAssertTrue(zip(positions, positions.dropFirst()).allSatisfy {
+            $0.1 >= $0.0 && $0.1 - $0.0 < 0.04
+        })
+        let focus = (0...30).map {
+            KaraokeStanzaCamera.focusProgress(line: lines[1], at: 1.8 + Double($0) / 100)
+        }
+        XCTAssertTrue(zip(focus, focus.dropFirst()).allSatisfy { $0.1 >= $0.0 })
+        XCTAssertEqual(KaraokeStanzaCamera.stableIndex(candidate: 0, previous: 1,
+            time: 1.98, previousTime: 2.01, lines: lines), 1)
+        XCTAssertEqual(KaraokeStanzaCamera.stableIndex(candidate: 0, previous: 1,
+            time: 1.0, previousTime: 2.01, lines: lines), 0)
+        var position = 0.0, velocity = 0.0
+        var samples: [Double] = []
+        for _ in 0..<120 {
+            let step = KaraokeStanzaCamera.springStep(position: position,
+                velocity: velocity, target: 100, dt: 1.0 / 120)
+            position = step.0; velocity = step.1; samples.append(position)
+        }
+        XCTAssertTrue(zip(samples, samples.dropFirst()).allSatisfy {
+            $0.1 - $0.0 <= 24.001
+        })
+        XCTAssertEqual(position, 100, accuracy: 1)
+    }
+
+    func testASSKaraokeParserAndContinuousFill() throws {
+        let ass = "Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\k50}He {\\kf75}llo {\\ko25}world"
+        let output = ASSKaraokeParser.parse(ass)
+        let line = try XCTUnwrap(output.lines.first)
+        XCTAssertEqual(line.provenance, .assKaraoke)
+        XCTAssertEqual(line.words.count, 3)
+        XCTAssertEqual(line.words[1].start, 2.5, accuracy: 0.001)
+        XCTAssertEqual(line.words[1].progressFill(at: 2.875), 0.5, accuracy: 0.001)
+        XCTAssertEqual(line.words[2].progressFill(at: 3.3), 1)
+        XCTAssertEqual(line.words[0].progressFill(at: 1.99), 0)
+    }
+
+    func testEstimatedAlignmentIsMonotonicAndWithinLine() {
+        let words = ["Canta", "comigo", "agora"].enumerated().map {
+            WordSync(id: $0.offset, text: $0.element, start: 2, end: 4,
+                     spaceAfter: $0.offset < 2)
+        }
+        let line = TimedLyricLine(id: 0, start: 2, end: 4, words: words,
+                                  precision: .line)
+        let refined = LyricsAlignmentRefiner.refine([line], onsets: [2.51, 3.26])[0]
+        XCTAssertEqual(refined.precision, .estimated)
+        XCTAssertEqual(refined.provenance, .estimatedRefined)
+        XCTAssertEqual(refined.words[1].start, 2.51, accuracy: 0.18)
+        XCTAssertTrue(zip(refined.words, refined.words.dropFirst()).allSatisfy {
+            $0.0.start < $0.1.start && $0.0.end <= $0.1.start + 0.01
+        })
+        XCTAssertEqual(refined.words.last?.end, 4)
+        let preset = TypographyPreset(style: .magazineCutout)
+        let state = LyricsState(line: refined, status: .active)
+        let live = TypographyResolver.resolve(state, at: 2.75, features: nil,
+                                              preset: preset)
+        let story = TypographyLayer(state: state, preset: preset)
+            .resolve(at: 2.75, features: nil)
+        XCTAssertEqual(live, story)
+        XCTAssertEqual(story.precision, .estimated)
+    }
+
+    func testMultilingualFontCascadeContainsCJKArabicAndEmoji() {
+        let descriptor = TypographyFont.cascaded(.systemFont(ofSize: 24)).fontDescriptor
+        let cascade = descriptor.object(forKey: .cascadeList) as? [UIFontDescriptor]
+        XCTAssertEqual(cascade?.count, 3)
+        for text in ["東京", "coração", "مرحبا", "🎤"] {
+            let shaped = (text as NSString).size(withAttributes: [
+                .font: TypographyFont.cascaded(.systemFont(ofSize: 24))])
+            XCTAssertGreaterThan(shaped.width, 0)
+            let word = WordSync(id: 0, text: text, start: 1, end: 2,
+                                spaceAfter: false)
+            let seed = TypographyResolver.stableSeed(lineID: 1, word: word)
+            for style in [TypographyStyle.magazineCutout, .vinylSticker,
+                          .dymoTicket, .liquidCapsule] {
+                if style != .magazineCutout {
+                    XCTAssertNotNil(ObjectWordStyleResolver.resolve(
+                        style: style, seed: seed, progress: 0.5))
+                }
+            }
+        }
+    }
+
+    func testLineOnlyDegradationAgainstEnhancedLRCGroundTruth() throws {
+        let precise = EnhancedLRCParser.parse(
+            "[00:01.00]<00:01.00>We <00:01.50>sing <00:02.10>tonight <00:03.00>\n[00:03.00]Next")
+        let degraded = EnhancedLRCParser.parse(
+            "[00:01.00]We sing tonight\n[00:03.00]Next")
+        let truth = try XCTUnwrap(precise.lines.first)
+        let estimated = try XCTUnwrap(LyricsAlignmentRefiner.refine(degraded.lines).first)
+        XCTAssertEqual(estimated.precision, .estimated)
+        let error = zip(truth.words, estimated.words).reduce(0.0) {
+            $0 + abs($1.0.start - $1.1.start)
+        } / Double(truth.words.count)
+        XCTAssertLessThan(error, 0.18)
+        XCTAssertTrue(zip(estimated.words, estimated.words.dropFirst()).allSatisfy {
+            $0.0.start < $0.1.start && $0.0.end <= $0.1.start + 0.01
+        })
+    }
+
     private func word(_ text: String = "HEART", id: Int = 2) -> WordSync {
         WordSync(id: id, text: text, start: 2, end: 4, spaceAfter: true)
     }
 
     func testSelectionIsCodableAndPersistsAcrossDefaultsReopen() throws {
         XCTAssertEqual(TypographyStyle.allCases,
-                       [.neon, .magazineCutout, .glitch, .kinetic, .minimal])
+                       [.neon, .magazineCutout, .glitch, .kinetic, .minimal,
+                        .vinylSticker, .dymoTicket, .liquidCapsule])
         let suite = "nightcore.typography.\(UUID().uuidString)"
         guard let first = UserDefaults(suiteName: suite) else {
             return XCTFail("Missing isolated defaults")
@@ -28,6 +139,29 @@ final class KaraokeTypographyTests: XCTestCase {
         let data = try JSONEncoder().encode(TypographyStyle.magazineCutout)
         XCTAssertEqual(try JSONDecoder().decode(TypographyStyle.self, from: data),
                        .magazineCutout)
+    }
+
+    func testObjectModelsHaveDistinctStablePhysicalParametersAndFill() throws {
+        let styles: [TypographyStyle] = [.vinylSticker, .dymoTicket, .liquidCapsule]
+        let seed = TypographyResolver.stableSeed(lineID: 4, word: word())
+        let appearances = try styles.map { style in
+            try XCTUnwrap(ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: 0.4))
+        }
+        XCTAssertEqual(Set(appearances.map(\.material)).count, 3)
+        XCTAssertEqual(Set(appearances.map(\.borderWidth)).count, 3)
+        XCTAssertEqual(Set(appearances.map(\.shadowRadius)).count, 3)
+        for (style, appearance) in zip(styles, appearances) {
+            XCTAssertEqual(appearance.fill, 0.4)
+            XCTAssertEqual(appearance, ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: 0.4))
+            XCTAssertEqual(ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: -1)?.fill, 0)
+            XCTAssertEqual(ObjectWordStyleResolver.resolve(
+                style: style, seed: seed, progress: 2)?.fill, 1)
+        }
+        XCTAssertNil(ObjectWordStyleResolver.resolve(
+            style: .magazineCutout, seed: seed, progress: 0.4))
     }
 
     func testDeterministicIdentityAndStableMagazineAppearance() {

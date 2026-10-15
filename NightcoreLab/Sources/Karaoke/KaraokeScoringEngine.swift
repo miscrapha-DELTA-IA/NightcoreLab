@@ -8,8 +8,17 @@ struct KaraokeVoiceFrame: Sendable, Equatable {
     var confidence: Double
     static let silence = Self(rms: 0, frequency: nil, confidence: 0)
     var isVoiced: Bool {
-        rms.isFinite && rms >= 0.008 && confidence.isFinite && confidence >= 0.65 &&
+        rms.isFinite && rms >= KaraokeVoiceGate.threshold && confidence.isFinite && confidence >= 0.65 &&
         frequency.map { $0.isFinite && (65...1_100).contains($0) } == true
+    }
+}
+
+enum KaraokeVoiceGate {
+    static let threshold = 0.06
+
+    static func level(for frame: KaraokeVoiceFrame) -> Double {
+        guard frame.rms.isFinite, frame.rms >= threshold else { return 0 }
+        return min(1, max(0, (frame.rms - threshold) / 0.30))
     }
 }
 
@@ -23,6 +32,7 @@ struct KaraokeScoreSnapshot: Equatable, Sendable {
     var multiplier = 1
     var bestCombo = 0
     var lastVerseRating: KaraokeVerseRating?
+    var lastVerseWasSilent = false
     var judgedVerses = 0
     var accuracyPercentage = 0.0
     var vocalAccuracy = 0.0
@@ -102,7 +112,8 @@ struct KaraokeScoringEngine {
         return max(0, min(1, 1 - max(0, distance - 0.35) / 0.75))
     }
 
-    mutating func advance(to time: Double, voice: KaraokeVoiceFrame, playing: Bool) {
+    mutating func advance(to time: Double, voice: KaraokeVoiceFrame, playing: Bool,
+                          trackPresence: Bool? = nil) {
         guard !snapshot.isFinished, time.isFinite else { return }
         guard playing else { lastTime = time; priorVoice = .silence; return }
         let delta = time - lastTime
@@ -111,7 +122,7 @@ struct KaraokeScoringEngine {
         guard delta <= 0.5 else { lastTime = time; priorVoice = .silence; return }
         let from = lastTime
         lastTime = time
-        let voiced = voice.isVoiced
+        let voiced = trackPresence ?? voice.isVoiced
         if voiced && !priorVoice.isVoiced { attackTime = time }
         snapshot.hasHarmonicReference = reliableKey != nil
         snapshot.vocalAccuracy = 0
@@ -172,6 +183,7 @@ struct KaraokeScoringEngine {
     private mutating func judgeVerse() {
         guard verseElapsed > 0 else { return }
         let accuracy = verseEarned / verseElapsed
+        snapshot.lastVerseWasSilent = verseEarned == 0
         snapshot.lastVerseRating = accuracy >= 0.9 ? .perfect : accuracy >= 0.75 ? .great :
             accuracy >= 0.55 ? .good : .almost
         snapshot.judgedVerses += 1

@@ -11,6 +11,7 @@ enum KaraokeVoiceAnalyzer {
         let values = samples.prefix(count).map { Double($0.isFinite ? $0 : 0) - mean }
         let rms = sqrt(values.reduce(0) { $0 + $1 * $1 } / Double(count))
         guard rms >= 0.008 else { return .silence }
+        let voiceLevel = min(1, max(0, (rms - 0.008) * 6))
         let minimum = max(2, Int(sampleRate / 1_100))
         let maximum = min(count / 2, Int(sampleRate / 65))
         guard maximum > minimum + 2 else { return .silence }
@@ -29,11 +30,11 @@ enum KaraokeVoiceAnalyzer {
               let lag = ((minimum + 1)..<maximum).first(where: {
                   correlations[$0] >= max(0.65, peak * 0.92) &&
                   correlations[$0] >= correlations[$0 - 1] && correlations[$0] > correlations[$0 + 1]
-              }) else { return .init(rms: rms, frequency: nil, confidence: 0) }
+              }) else { return .init(rms: voiceLevel, frequency: nil, confidence: 0) }
         let a = correlations[lag - 1], b = correlations[lag], c = correlations[lag + 1]
         let denominator = a - 2 * b + c
         let correction = abs(denominator) > 1e-9 ? max(-0.5, min(0.5, 0.5 * (a - c) / denominator)) : 0
-        return .init(rms: rms, frequency: sampleRate / (Double(lag) + correction), confidence: b)
+        return .init(rms: voiceLevel, frequency: sampleRate / (Double(lag) + correction), confidence: b)
     }
 }
 
@@ -44,7 +45,7 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
     private let lock = NSLock()
     private let worker = DispatchQueue(label: "NightcoreLab.karaoke.voice", qos: .userInitiated)
     private var timer: DispatchSourceTimer?
-    private var samples = [Float](repeating: 0, count: 2_048)
+    private var samples = [Float](repeating: 0, count: 1_024)
     private var count = 0
     private var sampleRate = 0.0
     private var pendingTime = 0.0
@@ -56,7 +57,7 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
 
     init() {
         let timer = DispatchSource.makeTimerSource(queue: worker)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(50))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
         timer.setEventHandler { [weak self] in self?.analyzeLatest() }
         self.timer = timer
         timer.resume()
@@ -68,15 +69,17 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
         guard !stopped, buffer.frameLength > 0 else { return }
         let rate = buffer.format.sampleRate
         guard rate >= 4_000, rate.isFinite else { return }
-        // Box low-pass/downsample to ~8 kHz. Bounded to the latest 2,048 bins.
+        // Sparse PCM downsample into preallocated storage. No heap allocation,
+        // FFT or nested DSP loops on CoreAudio's real-time render callback.
+        // Voice pitch analysis remains on the separate 10 Hz worker.
         let stride = max(1, Int(rate / 8_000))
-        count = min(samples.count, Int(buffer.frameLength) / stride)
-        let offset = max(0, Int(buffer.frameLength) - count * stride)
-        for i in 0..<count {
-            var sum: Float = 0
-            for j in 0..<stride { sum += data[offset + i * stride + j] }
-            samples[i] = sum / Float(stride)
+        let produced = min(samples.count, Int(buffer.frameLength) / stride)
+        if count + produced > samples.count { count = 0 }
+        let offset = max(0, Int(buffer.frameLength) - produced * stride)
+        for i in 0..<produced {
+            samples[count + i] = data[offset + i * stride]
         }
+        count += produced
         sampleRate = rate / Double(stride)
         pendingTime = sourceTime
         capturedAt = ProcessInfo.processInfo.systemUptime

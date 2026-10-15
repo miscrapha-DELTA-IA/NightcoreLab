@@ -93,6 +93,45 @@ final class AudioEngineManager {
     // player → upmix → varispeed → timePitch (só quando necessário) → EQ → reverb → limiter → saída
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
+    private let centerCutPlayer = AVAudioPlayerNode()
+    private let stemPlayers = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
+        ($0, AVAudioPlayerNode())
+    })
+    /// Native gain after each prepared stem, so 200% is a real +6.02 dB boost
+    /// instead of relying on AVAudioPlayerNode.volume (nominal range 0...1).
+    private let stemGainEQs = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
+        ($0, AVAudioUnitEQ(numberOfBands: 1))
+    })
+    private(set) var stemMixEnabled = false
+    private(set) var stemLevels: [StemKind: Float] = Dictionary(
+        uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
+    private(set) var stemsAvailable = false
+    @ObservationIgnored private var stemFiles: [StemKind: AVAudioFile] = [:]
+    @ObservationIgnored private var stemPrepareTask: Task<Void, Never>?
+    @ObservationIgnored private var stemRampTask: Task<Void, Never>?
+    /// Live spectral proxy (EQ cannot truly isolate instruments).
+    private let stemEQ = AVAudioUnitEQ(numberOfBands: 5)
+    static let stemRange: ClosedRange<Float> = 0...2
+    nonisolated static func stemGainDB(for level: Float) -> Float {
+        let v = min(2, max(0, level))
+        return v <= 1 ? (v - 1) * 18 : (v - 1) * 9
+    }
+    func liveStemEQGain(_ kind: StemKind) -> Float {
+        let index: Int
+        switch kind {
+        case .vocal: index = 0
+        case .instrumental: index = 1
+        case .drums: index = 2
+        case .bass: index = 4
+        }
+        return stemEQ.bands[index].gain
+    }
+    private(set) var centerCutEnabled = false
+    private(set) var centerCutAvailable = true
+    @ObservationIgnored private var centerCutFile: AVAudioFile?
+    @ObservationIgnored private var centerCutURL: URL?
+    @ObservationIgnored private var centerCutPrepareTask: Task<Void, Never>?
+    @ObservationIgnored private var centerCutRampTask: Task<Void, Never>?
     @ObservationIgnored lazy var lyricsClock = EnginePlaybackClock(player: player)
     private let upmix = AVAudioMixerNode()
     private let varispeed = AVAudioUnitVarispeed()
@@ -111,6 +150,39 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    /// Shared with the Creator/Performance sheet and the Story snapshot.
+    @ObservationIgnored let performanceRecorder = PerformanceRecorder()
+    @ObservationIgnored let padAccentEmitter = PadVisualAccentEmitter()
+    @ObservationIgnored private(set) var performanceRecordingSourceRevision: Int?
+    @ObservationIgnored var padQuantizeStrength: Float = 0
+    /// Read by the visible Player at visual FPS; published nowhere on the
+    /// render/audio thread. Uses the existing main mixer output, not a second graph.
+    @ObservationIgnored let liveVisualMeter = AudioVisualLiveMeter()
+    @ObservationIgnored private var liveMeterTapInstalled = false
+
+    /// The *same* live AVAudioEngine houses all four loop voices and native
+    /// vocal units. Mic monitoring is gated after processing, before limiter.
+    @ObservationIgnored let creatorLoops = CreatorLoopEngine()
+    private(set) var activeCreatorLoops: Set<CreatorLoopSlot> = []
+    private(set) var vocalCaptureActive = false
+    private(set) var vocalMonitoringEnabled = false
+    private(set) var vocalSetting = VocalFXSetting()
+    @ObservationIgnored private let vocalInputAdapter = AVAudioMixerNode()
+    @ObservationIgnored private let vocalPitch = AVAudioUnitTimePitch()
+    @ObservationIgnored private let vocalEQ = AVAudioUnitEQ(numberOfBands: 2)
+    @ObservationIgnored private let vocalDelay = AVAudioUnitDelay()
+    @ObservationIgnored private let vocalReverb = AVAudioUnitReverb()
+    @ObservationIgnored private let vocalGate = AVAudioMixerNode()
+    @ObservationIgnored private var microphoneCapture: KaraokeMicrophoneCapture?
+    private(set) var karaokeCaptureActive = false
+    @ObservationIgnored private var karaokeCapture: KaraokeMicrophoneCapture?
+    @ObservationIgnored private var karaokeInput: AVAudioInputNode?
+    @ObservationIgnored private var karaokeGeneration = 0
+    /// Never read engine.inputNode just to initialize the engine or clean up
+    /// headless CI; retained only after a hardware-format validation.
+    @ObservationIgnored private var connectedVocalInput: AVAudioInputNode?
+    @ObservationIgnored private var vocalGeneration = 0
+    @ObservationIgnored var karaokeCompletion: (() -> Void)?
 
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
@@ -118,16 +190,26 @@ final class AudioEngineManager {
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
-        [player, upmix, varispeed, timePitch, bassEQ, reverbNode, performanceMixer, limiter]
+        let sources: [AVAudioNode] = [player, centerCutPlayer]
+        let preparedPlayers: [AVAudioNode] = StemKind.allCases.compactMap { stemPlayers[$0] }
+        let preparedGains: [AVAudioNode] = StemKind.allCases.compactMap { stemGainEQs[$0] }
+        return sources + preparedPlayers + preparedGains +
+            [upmix, varispeed, timePitch, bassEQ, stemEQ, reverbNode, performanceMixer, limiter]
     }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
-    /// Read-only source for opt-in utility-priority visual analysis.
-    /// No audio node or tap is installed.
+    /// Read-only source for offline visual evidence. Live RMS/bass are
+    /// independently obtained from the existing mixer through liveVisualMeter.
     var visualAnalysisURL: URL? { sourceURL }
     @ObservationIgnored private var needsScheduling = true
-    @ObservationIgnored private var scheduleGeneration = 0
+    @ObservationIgnored private(set) var scheduleGeneration = 0
+    private(set) var isReconfiguringGraph = false
+    var microphonePermissionDenied: Bool {
+        Self.shouldShowMicrophonePermissionError(AVAudioApplication.shared.recordPermission)
+    }
+    nonisolated static func shouldShowMicrophonePermissionError(
+        _ permission: AVAudioApplication.recordPermission) -> Bool { permission == .denied }
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
     @ObservationIgnored private weak var remoteRelay: RemotePlaybackRelay?
@@ -157,6 +239,8 @@ final class AudioEngineManager {
     /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
+        // Microphone DSP units are attached only after permission and a
+        // valid hardware input format. The simulator needs no input graph.
         padRuntime.attach(to: engine)
         // Pads can sound before a song has been selected.
         let standaloneFormat = AVAudioFormat(
@@ -164,17 +248,44 @@ final class AudioEngineManager {
         engine.connect(performanceMixer, to: limiter, format: standaloneFormat)
         engine.connect(limiter, to: engine.mainMixerNode, format: standaloneFormat)
         padRuntime.connect(to: engine, mixer: performanceMixer)
+        creatorLoops.attach(to: engine, output: performanceMixer,
+                            format: standaloneFormat)
         engine.mainMixerNode.outputVolume = pow(10, Self.outputHeadroomDB / 20)
         engine.prepare()
 
         Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
         bassEQ.bands[0].gain = bass
         reverbNode.wetDryMix = reverb
+        let frequencies: [Float] = [1_600, 520, 90, 7_000, 105]
+        for (index, band) in stemEQ.bands.enumerated() {
+            band.filterType = index == 3 ? .highShelf :
+                (index == 4 ? .lowShelf : .parametric)
+            band.frequency = frequencies[index]
+            band.bandwidth = index == 0 ? 1.5 : 1.0
+            band.gain = 0
+            band.bypass = false
+        }
     }
 
     // MARK: Carregar arquivo
 
     func load(url: URL) throws {
+        stemPrepareTask?.cancel()
+        stemPrepareTask = nil
+        stemRampTask?.cancel()
+        stemPlayers.values.forEach { $0.stop() }
+        stemFiles = [:]
+        stemMixEnabled = false
+        stemsAvailable = false
+        stemLevels = Dictionary(uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
+        applyLiveStemEQ()
+        centerCutPrepareTask?.cancel()
+        centerCutRampTask?.cancel()
+        centerCutPlayer.stop()
+        centerCutFile = nil
+        if let centerCutURL { try? FileManager.default.removeItem(at: centerCutURL) }
+        centerCutURL = nil
+        centerCutEnabled = false
         interruptedSourceURL = nil // A replacement must never resume a prior source.
         // Core Audio decodifica MP3/AAC para PCM float; não há conversão com perdas na importação.
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
@@ -183,13 +294,20 @@ final class AudioEngineManager {
             throw AudioEngineError.unsupportedAudio
         }
         endKaraokeMicrophone()
+        endVocalCapture()
+        stopAllCreatorLoops()
         stopPlayback()
         audioFile = file
+        centerCutAvailable = file.processingFormat.channelCount == 2
         sourceURL = url
         playbackSourceRevision &+= 1
+        performanceRecorder.clearAll()
+        performanceRecordingSourceRevision = nil
+        padAccentEmitter.clear()
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
+        removeVisualMeterTap()
         engine.stop()
         padRuntime.clearSourceClip()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
@@ -202,8 +320,23 @@ final class AudioEngineManager {
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
                           varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
-                          performanceMixer: performanceMixer)
+                          performanceMixer: performanceMixer, stemEQ: stemEQ)
+        engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
+        centerCutPlayer.volume = 0
+        for kind in StemKind.allCases {
+            guard let node = stemPlayers[kind] else { continue }
+            guard let gainEQ = stemGainEQs[kind] else { continue }
+            engine.connect(node, to: gainEQ, format: graphFormat)
+            engine.connect(gainEQ, to: upmix, format: graphFormat)
+            gainEQ.bands[0].bypass = true
+            gainEQ.globalGain = 0
+            node.volume = 0
+        }
+        player.volume = 1
         padRuntime.connect(to: engine, mixer: performanceMixer)
+        // No mic FX wiring during load/prepare/offline tests. It is done on
+        // opt-in activation, after validating actual hardware input.
+        creatorLoops.attach(to: engine, output: performanceMixer, format: graphFormat)
         engine.prepare()
         if performanceModePresented {
             do {
@@ -217,86 +350,238 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+        // Deferred to Stems tab: normal playback and karaoke do not run separation.
     }
 
-    // MARK: Opt-in karaoke microphone (the existing live engine only)
+    /// One tap, no transport mutation and no AVAudioSession query.
+    func beginPadTake(overdub: Bool = false) {
+        if !overdub || performanceRecorder.events.isEmpty {
+            performanceRecordingSourceRevision = playbackSourceRevision
+            performanceRecorder.start()
+        } else if performanceRecordingSourceRevision == playbackSourceRevision {
+            performanceRecorder.overdub()
+        }
+    }
 
-    private(set) var karaokeMicrophoneActive = false
-    @ObservationIgnored private var karaokeCapture: KaraokeMicrophoneCapture?
-    @ObservationIgnored private var karaokeMicGeneration = 0
-    @ObservationIgnored var karaokeCompletion: (() -> Void)?
+    func stopPadTake() { performanceRecorder.stop() }
+    func clearLastPadTake() { performanceRecorder.clearLastTake() }
 
-    func beginKaraokeMicrophone() async -> Bool {
-        guard !karaokeMicrophoneActive else { return true }
-        karaokeMicGeneration &+= 1
-        let generation = karaokeMicGeneration
-        let allowed = await AVAudioApplication.requestRecordPermission()
-        guard allowed, generation == karaokeMicGeneration, !Task.isCancelled else { return false }
+    /// Frozen, source-identity-matched snapshot for Story preview/export.
+    func frozenPadPerformance(quantizeStrength: Float? = nil) -> PerformanceTimeline? {
+        guard !performanceRecorder.isRecording,
+              performanceRecordingSourceRevision == playbackSourceRevision,
+              !performanceRecorder.events.isEmpty else { return nil }
+        let result = performanceRecorder.timeline(
+            sourceClip: padRuntime.sourceClip,
+            quantizeStrength: quantizeStrength ?? padQuantizeStrength)
+        return result.isValid ? result : nil
+    }
+
+    // MARK: Mic and Creator loops (one pre-existing audio graph)
+
+    func applyVocalFX(_ settings: VocalFXSetting) {
+        guard settings.isValid else { return }
+        vocalSetting = settings
+        guard vocalPitch.engine != nil else { return }
+        let m = VocalFXParameters.resolve(settings)
+        vocalPitch.rate = 1
+        vocalPitch.pitch = m.pitchCents
+        vocalEQ.bands[0].filterType = .parametric
+        vocalEQ.bands[0].frequency = 3300
+        vocalEQ.bands[0].bandwidth = 1.2
+        vocalEQ.bands[0].gain = m.eqPresenceDB
+        vocalEQ.bands[0].bypass = false
+        vocalEQ.bands[1].filterType = .lowPass
+        vocalEQ.bands[1].frequency = m.lowPassHz
+        vocalEQ.bands[1].bypass = m.lowPassHz >= 17_999
+        vocalDelay.delayTime = m.delaySeconds
+        vocalDelay.feedback = 4
+        vocalDelay.wetDryMix = m.delayWetMix
+        vocalReverb.loadFactoryPreset(m.reverbPreset)
+        vocalReverb.wetDryMix = m.reverbWetMix
+        refreshVocalMonitorSafety()
+    }
+
+    /// The adapter mixer owns sample-rate/channel conversion. Never force the
+    /// song format onto the hardware input bus (e.g. 48k mono -> 44.1k stereo).
+    private func connectVocalChain(input: AVAudioInputNode, format: AVAudioFormat) {
+        if vocalPitch.engine == nil {
+            [vocalInputAdapter, vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
+                .forEach { engine.attach($0) }
+        }
+        vocalGate.outputVolume = 0
+        let songFormat = performanceMixer.outputFormat(forBus: 0)
+        engine.connect(input, to: vocalInputAdapter, format: format)
+        engine.connect(vocalInputAdapter, to: vocalPitch, format: songFormat)
+        engine.connect(vocalPitch, to: vocalEQ, format: songFormat)
+        engine.connect(vocalEQ, to: vocalDelay, format: songFormat)
+        engine.connect(vocalDelay, to: vocalReverb, format: songFormat)
+        engine.connect(vocalReverb, to: vocalGate, format: songFormat)
+        engine.connect(vocalGate, to: performanceMixer, format: songFormat)
+    }
+
+    private func refreshVocalMonitorSafety() {
+        let session = AVAudioSession.sharedInstance()
+        let safe = vocalCaptureActive && VocalMonitorSafety.allows(
+            session.currentRoute.outputs, latency: session.outputLatency)
+        vocalMonitoringEnabled = safe
+        vocalGate.outputVolume = safe ? min(0.5, vocalSetting.intensity * 0.42) : 0
+    }
+
+    /// Explicit opt-in only. Opening lyrics never calls this method.
+    func beginVocalCapture() async -> Bool {
+        if vocalCaptureActive { return true }
+        endKaraokeMicrophone()
+        vocalGeneration &+= 1
+        let requested = vocalGeneration
+        let permission = AVAudioApplication.shared.recordPermission
+        let allowed = permission == .granted ? true :
+            (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
+        guard allowed, requested == vocalGeneration, !Task.isCancelled else { return false }
         let resume = isPlaying
-        pause()
-        suspendGraphForKaraoke()
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
         let capture = KaraokeMicrophoneCapture()
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
             try session.setActive(true)
+            // Inspect input only AFTER activating the recording session.
+            guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
             let input = engine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            guard format.channelCount > 0, format.sampleRate > 0 else {
-                throw AudioEngineError.unsupportedAudio
+            let native = input.outputFormat(forBus: 0)
+            guard native.channelCount > 0, native.sampleRate.isFinite,
+                  native.sampleRate > 0 else { throw AudioEngineError.unsupportedAudio }
+            let scoringClock = lyricsClock
+            // Analysis reads native PCM; the separate adapter converts monitor audio.
+            input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+                capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
-            let clock = lyricsClock
-            input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
-                // No DSP, Task creation or observable publication on this callback.
-                guard clock.isPlaying else { return }
-                capture.capture(buffer, sourceTime: clock.lyricTime)
-            }
-            karaokeCapture = capture
-            karaokeMicrophoneActive = true
-            cancelIdleStop()
+            connectedVocalInput = input
+            connectVocalChain(input: input, format: native)
+            microphoneCapture = capture
+            vocalCaptureActive = true
+            applyVocalFX(vocalSetting)
             try engine.start()
-            lyricsClock.refreshOutputLatency()
-            if resume { play() }
+            installVisualMeterTap()
             return true
         } catch {
+            if let input = connectedVocalInput {
+                input.removeTap(onBus: 0)
+                engine.disconnectNodeOutput(input)
+            }
+            connectedVocalInput = nil
             capture.stop()
-            endKaraokeMicrophone()
+            microphoneCapture = nil
+            vocalCaptureActive = false
+            refreshVocalMonitorSafety()
             configureSession()
-            if resume { play() }
-            return false
+            return false // Busy hardware keeps passive scoring; not a permission error.
         }
     }
 
-    private func suspendGraphForKaraoke() {
-        scheduleGeneration += 1
+    /// Invalidate BEFORE stop: callbacks already enqueued remain stale after
+    /// the guard is lowered. A Boolean alone cannot protect delayed callbacks.
+    func beginGraphReconfiguration() {
+        let position = min(duration, max(0, lyricsClock.lyricTime))
+        isReconfiguringGraph = true
+        scheduleGeneration &+= 1
+        cancelIdleStop()
+        lastKnownTime = position
+        lyricsClock.didPause(at: position)
+        isPlaying = false
         player.stop()
-        padRuntime.stopAll()
-        engine.stop()
         needsScheduling = true
-        scheduledStartTime = lastKnownTime
-        lyricsClock.didPause(at: lastKnownTime)
+        scheduledStartTime = position
+        removeVisualMeterTap()
+        engine.stop()
     }
 
-    func karaokeVoiceFrame() -> KaraokeVoiceFrame {
-        karaokeCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
-    }
-
-    func endKaraokeMicrophone() {
-        karaokeMicGeneration &+= 1 // also cancels an outstanding permission request
-        karaokeCompletion = nil
-        guard karaokeMicrophoneActive else { return }
-        let resume = isPlaying
-        if resume { pause() }
-        suspendGraphForKaraoke()
-        engine.inputNode.removeTap(onBus: 0)
-        karaokeCapture?.stop(); karaokeCapture = nil
-        karaokeMicrophoneActive = false
-        configureSession()
+    func finishGraphReconfiguration(resume: Bool) {
+        isReconfiguringGraph = false
         lyricsClock.refreshOutputLatency()
         if resume { play() }
         else if performanceModePresented { try? engine.start() }
         else { scheduleIdleStop() }
+    }
+
+    /// Scoring only: native input tap on the existing running engine. No player
+    /// stop, reschedule, graph connection or audio category change on entry.
+    var karaokeMicrophoneActive: Bool { karaokeCaptureActive || vocalCaptureActive }
+    func beginKaraokeMicrophone() async -> Bool {
+        if karaokeMicrophoneActive { return true }
+        karaokeGeneration &+= 1
+        let requested = karaokeGeneration
+        let permission = AVAudioApplication.shared.recordPermission
+        let allowed = permission == .granted ? true :
+            (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
+        guard allowed, requested == karaokeGeneration, !Task.isCancelled else { return false }
+        let session = AVAudioSession.sharedInstance()
+        guard session.isInputAvailable else { return false }
+        let input = engine.inputNode
+        let native = input.outputFormat(forBus: 0)
+        guard native.channelCount > 0, native.sampleRate.isFinite,
+              native.sampleRate > 0 else { return false }
+        let capture = KaraokeMicrophoneCapture()
+        let scoringClock = lyricsClock
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+            capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+        }
+        karaokeInput = input
+        karaokeCapture = capture
+        karaokeCaptureActive = true
+        return true
+    }
+    func endKaraokeMicrophone() {
+        karaokeGeneration &+= 1
+        if let input = karaokeInput { input.removeTap(onBus: 0) }
+        karaokeInput = nil
+        karaokeCapture?.stop()
+        karaokeCapture = nil
+        karaokeCaptureActive = false
+    }
+
+    func karaokeVoiceFrame() -> KaraokeVoiceFrame {
+        (karaokeCapture ?? microphoneCapture)?.frame(at: lyricsClock.lyricTime) ?? .silence
+    }
+
+    func endVocalCapture() {
+        vocalGeneration &+= 1
+        karaokeCompletion = nil
+        guard vocalCaptureActive || microphoneCapture != nil ||
+              connectedVocalInput != nil else { return }
+        let resume = isPlaying
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
+        microphoneCapture?.stop()
+        microphoneCapture = nil
+        vocalCaptureActive = false
+        vocalGate.outputVolume = 0
+        vocalMonitoringEnabled = false
+        configureSession()
+    }
+
+    func toggleCreatorLoop(_ slot: CreatorLoopSlot, rhythm: RhythmAnalysisResult?,
+                           key: KeyAnalysisResult?) -> Bool {
+        let launched = creatorLoops.toggle(
+            slot, sourceTime: currentTime, speed: speed,
+            rhythm: rhythm, key: key, engine: engine,
+            onStopped: { [weak self] slot in
+                _ = self?.activeCreatorLoops.remove(slot)
+            })
+        if launched { activeCreatorLoops = creatorLoops.active }
+        return launched
+    }
+
+    func stopAllCreatorLoops() {
+        creatorLoops.stopAll()
+        activeCreatorLoops = []
     }
 
     // MARK: Performance pads
@@ -335,7 +620,7 @@ final class AudioEngineManager {
     private func refreshPerformanceOutputLatency() {
         let latency = AVAudioSession.sharedInstance().outputLatency
         performanceOutputLatency = latency.isFinite ?
-            min(0.35, max(0, latency)) : 0
+            min(0.200, max(0, latency)) : 0
     }
 
     /// Prepare at most five seconds from the currently loaded local source.
@@ -432,6 +717,11 @@ final class AudioEngineManager {
                 nodePlayMS: nodeTiming.playMS,
                 wasCold: wasCold, succeeded: played))
         }
+        if played {
+            // AFTER the audio command; the shader samples this lock-free of
+            // any SwiftUI invalidation via its own TimelineView.
+            padAccentEmitter.trigger(padID, velocity: velocity)
+        }
         return played
     }
 
@@ -449,14 +739,19 @@ final class AudioEngineManager {
         defer { transportSignposter.endInterval("Audio resume", interval) }
         do {
             if !engine.isRunning { try engine.start() }
+            installVisualMeterTap()
             if performanceModePresented { padRuntime.primeVoices() }
             if needsScheduling {
                 // Preserve the existing replay-from-start behavior at EOF.
                 if lastKnownTime >= duration { lastKnownTime = 0 }
                 schedule(file, startingAt: lastKnownTime)
+                if centerCutEnabled { scheduleCenterCut(startingAt: lastKnownTime) }
+                if stemMixEnabled { scheduleStems(startingAt: lastKnownTime) }
             }
             lyricsClock.refreshOutputLatency()
             player.play()
+            if centerCutEnabled, centerCutFile != nil { centerCutPlayer.play() }
+            if stemMixEnabled { stemPlayers.values.forEach { $0.play() } }
             interruptedSourceURL = nil
             isPlaying = true
             setupNowPlaying()
@@ -471,6 +766,8 @@ final class AudioEngineManager {
         lastKnownTime = currentTime   // captura antes de pausar, enquanto lastRenderTime é válido
         lyricsClock.didPause(at: lastKnownTime)
         player.pause()
+        centerCutPlayer.pause()
+        stemPlayers.values.forEach { $0.pause() }
         isPlaying = false
         setupNowPlaying()
         scheduleIdleStop()
@@ -484,14 +781,14 @@ final class AudioEngineManager {
 
     private func scheduleIdleStop() {
         cancelIdleStop()
-        guard !performanceModePresented, !karaokeMicrophoneActive else { return }
+        guard !performanceModePresented, !vocalCaptureActive else { return }
         let generation = idleStopGeneration
         let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
                   generation == self.idleStopGeneration,
-                  !self.isPlaying, !self.performanceModePresented, !self.karaokeMicrophoneActive else { return }
+                  !self.isPlaying, !self.performanceModePresented, !self.vocalCaptureActive else { return }
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
@@ -518,6 +815,8 @@ final class AudioEngineManager {
         let shouldResume = isPlaying
         scheduleGeneration += 1
         player.stop()
+        centerCutPlayer.stop()
+        stemPlayers.values.forEach { $0.stop() }
         isPlaying = false
         lastKnownTime = target
         lyricsClock.didSeek(to: target)
@@ -525,6 +824,8 @@ final class AudioEngineManager {
         needsScheduling = true
         if target < duration {
             schedule(file, startingAt: target)
+            if centerCutEnabled { scheduleCenterCut(startingAt: target) }
+            if stemMixEnabled { scheduleStems(startingAt: target) }
             if shouldResume {
                 play()
             }
@@ -538,6 +839,212 @@ final class AudioEngineManager {
     }
 
     // MARK: Parâmetros em tempo real
+
+    func setCenterCutEnabled(_ enabled: Bool) {
+        if enabled && stemMixEnabled { setStemMixerEnabled(false) }
+        centerCutEnabled = enabled
+        centerCutRampTask?.cancel()
+        guard enabled else { crossfadeCenterCut(to: false); return }
+        guard let sourceURL, let file = audioFile,
+              file.processingFormat.channelCount == 2 else {
+            centerCutAvailable = false
+            centerCutEnabled = false
+            return
+        }
+        centerCutAvailable = true
+        if centerCutFile != nil {
+            scheduleCenterCut(startingAt: currentTime)
+            crossfadeCenterCut(to: true)
+            return
+        }
+        let revision = playbackSourceRevision
+        centerCutPrepareTask?.cancel()
+        centerCutPrepareTask = Task { [weak self] in
+            let prepared = try? await Task.detached(priority: .utility) {
+                try CenterCutProcessor.prepare(source: sourceURL)
+            }.value
+            guard let self else { return }
+            guard self.centerCutEnabled, self.playbackSourceRevision == revision,
+                  let prepared else {
+                if let prepared { try? FileManager.default.removeItem(at: prepared) }
+                return
+            }
+            guard let ready = try? AVAudioFile(forReading: prepared,
+                                               commonFormat: .pcmFormatFloat32,
+                                               interleaved: false) else {
+                try? FileManager.default.removeItem(at: prepared)
+                self.centerCutEnabled = false
+                return
+            }
+            self.centerCutURL = prepared
+            self.centerCutFile = ready
+            self.scheduleCenterCut(startingAt: self.currentTime)
+            self.crossfadeCenterCut(to: true)
+        }
+    }
+
+    private func scheduleCenterCut(startingAt time: TimeInterval) {
+        guard let file = centerCutFile else { return }
+        centerCutPlayer.stop()
+        let start = min(max(AVAudioFramePosition(time * file.processingFormat.sampleRate), 0),
+                        file.length)
+        guard start < file.length else { return }
+        centerCutPlayer.scheduleSegment(file, startingFrame: start,
+            frameCount: AVAudioFrameCount(min(file.length - start, Int64(UInt32.max))),
+            at: nil)
+        if isPlaying { centerCutPlayer.play() }
+    }
+
+    private func crossfadeCenterCut(to enabled: Bool) {
+        let original = player.volume
+        let processed = centerCutPlayer.volume
+        centerCutRampTask = Task { [weak self] in
+            for step in 1...5 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard !Task.isCancelled, let self else { return }
+                let fraction = CenterCutProcessor.ramp(step)
+                self.player.volume = original + ((enabled ? 0 : 1) - original) * fraction
+                self.centerCutPlayer.volume = processed + ((enabled ? 1 : 0) - processed) * fraction
+            }
+            if !enabled { self?.centerCutPlayer.stop() }
+        }
+    }
+
+    // MARK: Four-stem mixer
+
+    func requestStemPreparation() {
+        guard !stemsAvailable, stemPrepareTask == nil, let sourceURL else { return }
+        prepareStems(source: sourceURL, revision: playbackSourceRevision)
+    }
+
+    private func prepareStems(source: URL, revision: Int) {
+        stemPrepareTask?.cancel()
+        stemPrepareTask = Task { [weak self] in
+            let cacheFolder = TrackAudioCache.stemDirectory(for: source)
+            let asset = try? await Task.detached(priority: .background) {
+                try await StemSplitterEngine.prepare(source: source,
+                                                     cacheFolder: cacheFolder)
+            }.value
+            guard let self, !Task.isCancelled,
+                  self.playbackSourceRevision == revision else { return }
+            self.stemPrepareTask = nil
+            guard let asset else { return } // allow retry on transient cache/separation failure
+            var files: [StemKind: AVAudioFile] = [:]
+            for kind in StemKind.allCases {
+                guard let url = asset.urls[kind],
+                      let file = try? AVAudioFile(forReading: url,
+                                                  commonFormat: .pcmFormatFloat32,
+                                                  interleaved: false) else { return }
+                files[kind] = file
+            }
+            self.stemFiles = files
+            self.stemsAvailable = true
+            self.applyLiveStemEQ()
+            if self.stemMixEnabled {
+                self.scheduleStems(startingAt: self.currentTime)
+                self.rampStemMix()
+            }
+        }
+    }
+
+    func applyStemPreset(_ preset: StemMixPreset) {
+        stemLevels = preset.levels
+        setStemMixerEnabled(true)
+        if stemsAvailable {
+            for kind in StemKind.allCases {
+                applyPreparedStemGain(kind, level: stemLevels[kind] ?? 1)
+            }
+        }
+    }
+
+    /// Fast path: direct native AU/node parameter updates, no task or reschedule.
+    func setStemLevel(_ kind: StemKind, level: Float) {
+        let clamped = level.clamped(to: Self.stemRange)
+        stemLevels[kind] = clamped
+        if !stemMixEnabled { setStemMixerEnabled(true) }
+        if !stemsAvailable { requestStemPreparation() }
+        if stemsAvailable {
+            applyPreparedStemGain(kind, level: clamped)
+        } else {
+            applyLiveStemEQ()
+        }
+    }
+
+    func resetStemLevels() {
+        for kind in StemKind.allCases { setStemLevel(kind, level: 1) }
+    }
+
+    private func applyPreparedStemGain(_ kind: StemKind, level: Float) {
+        let clamped = level.clamped(to: Self.stemRange)
+        stemPlayers[kind]?.volume = min(1, clamped)
+        stemGainEQs[kind]?.globalGain = clamped > 1 ? 20 * log10(clamped) : 0
+    }
+
+    private func applyLiveStemEQ() {
+        let proxy = stemMixEnabled && !stemsAvailable
+        stemEQ.bands[0].gain = proxy ? Self.stemGainDB(for: stemLevels[.vocal] ?? 1) : 0
+        stemEQ.bands[1].gain = proxy ? Self.stemGainDB(for: stemLevels[.instrumental] ?? 1) : 0
+        let drums = proxy ? Self.stemGainDB(for: stemLevels[.drums] ?? 1) : 0
+        stemEQ.bands[2].gain = drums
+        stemEQ.bands[3].gain = drums
+        stemEQ.bands[4].gain = proxy ? Self.stemGainDB(for: stemLevels[.bass] ?? 1) : 0
+    }
+
+    func setStemMixerEnabled(_ enabled: Bool) {
+        let wasEnabled = stemMixEnabled
+        stemMixEnabled = enabled
+        applyLiveStemEQ()
+        if enabled {
+            centerCutEnabled = false
+            centerCutRampTask?.cancel()
+            centerCutPlayer.stop()
+            centerCutPlayer.volume = 0
+            if stemsAvailable && !wasEnabled { scheduleStems(startingAt: currentTime) }
+        }
+        // Crossfade only for mode switches; never on slider drag.
+        if wasEnabled != enabled { rampStemMix() }
+    }
+
+    private func scheduleStems(startingAt time: TimeInterval) {
+        guard stemsAvailable else { return }
+        for kind in StemKind.allCases {
+            guard let file = stemFiles[kind], let node = stemPlayers[kind] else { continue }
+            node.stop()
+            let frame = min(max(AVAudioFramePosition(time * file.processingFormat.sampleRate), 0),
+                            file.length)
+            guard frame < file.length else { continue }
+            node.scheduleSegment(file, startingFrame: frame,
+                frameCount: AVAudioFrameCount(min(file.length - frame, Int64(UInt32.max))),
+                at: nil)
+            if isPlaying { node.play() }
+        }
+    }
+
+    private func rampStemMix() {
+        stemRampTask?.cancel()
+        let active = stemMixEnabled && stemsAvailable
+        let original = player.volume
+        let initial = Dictionary(uniqueKeysWithValues: StemKind.allCases.map { kind in
+            let volume = stemPlayers[kind]?.volume ?? 0
+            let gain = stemGainEQs[kind]?.globalGain ?? 0
+            return (kind, volume * pow(Float(10), gain / 20))
+        })
+        let targets = stemLevels
+        stemRampTask = Task { [weak self] in
+            for step in 1...5 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard !Task.isCancelled, let self else { return }
+                let progress = StemSplitterEngine.cosineGain(step: step)
+                self.player.volume = original + ((active ? 0 : 1) - original) * progress
+                for kind in StemKind.allCases {
+                    let start = initial[kind] ?? 0
+                    let target = active ? (targets[kind] ?? 1) : 0
+                    self.applyPreparedStemGain(kind, level: start + (target - start) * progress)
+                }
+            }
+            if !active, let self { self.stemPlayers.values.forEach { $0.stop() } }
+        }
+    }
 
     func setSpeed(_ value: Float) {
         speed = value.clamped(to: Self.speedRange)
@@ -641,11 +1148,13 @@ final class AudioEngineManager {
     /// Standalone offline graph. Does not seek, pause or replace the live player.
     nonisolated static func exportStorySegment(source: StoryAudioSource,
                                                startTime: TimeInterval,
-                                               duration: TimeInterval) async throws -> URL {
+                                               duration: TimeInterval,
+                                               performance: PerformanceTimeline? = nil) async throws -> URL {
         let renderTask = Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: source.url, settings: source.settings,
                                    format: .m4a, progress: { _ in },
-                                   startTime: startTime, maxDuration: duration)
+                                   startTime: startTime, maxDuration: duration,
+                                   performance: performance)
         }
         // Detached tasks do not inherit cancellation automatically.
         // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.
@@ -674,11 +1183,13 @@ final class AudioEngineManager {
         needsScheduling = false
     }
 
-    private func playbackFinished(generation: Int) {
+    func playbackFinished(generation: Int) {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
-        guard generation == scheduleGeneration else { return }
+        guard !isReconfiguringGraph, generation == scheduleGeneration else { return }
         karaokeCompletion?()
         player.stop()
+        centerCutPlayer.stop()
+        stemPlayers.values.forEach { $0.stop() }
         // Pads are an independent performance surface: ending the song must
         // not choke a cymbal or 808 that the user is still hearing.
         needsScheduling = true
@@ -688,7 +1199,6 @@ final class AudioEngineManager {
         lyricsClock.didSeek(to: 0)
         setupNowPlaying()
         scheduleIdleStop()
-        endKaraokeMicrophone()
         playbackCompletionCount += 1
     }
 
@@ -696,11 +1206,31 @@ final class AudioEngineManager {
         cancelIdleStop()
         scheduleGeneration += 1
         player.stop()
+        centerCutPlayer.stop()
+        stemPlayers.values.forEach { $0.stop() }
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0
         scheduledStartTime = 0
         lyricsClock.didSeek(to: 0)
+    }
+
+    /// One output tap, shared by all background instances. Main actor controls
+    /// installation; the CoreAudio callback never captures the engine or UI.
+    private func installVisualMeterTap() {
+        guard !liveMeterTapInstalled else { return }
+        let meter = liveVisualMeter
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) {
+            buffer, _ in meter.consume(buffer)
+        }
+        liveMeterTapInstalled = true
+    }
+
+    private func removeVisualMeterTap() {
+        guard liveMeterTapInstalled else { return }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        liveMeterTapInstalled = false
+        liveVisualMeter.reset()
     }
 
     // MARK: - Now Playing (Tela de Bloqueio / Control Center)
@@ -841,11 +1371,38 @@ final class AudioEngineManager {
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .default)
+            // Prepare input capability before a song is scheduled. A first mic
+            // permission grant cannot reset an already playing player node.
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
             try session.setActive(true)
         } catch {
+            #if DEBUG
             print("AudioEngineManager: falha ao configurar AVAudioSession – \(error)")
+            #endif
         }
+    }
+
+    /// Release transient voices at every hardware interruption/route loss.
+    /// Never query inputNode on a headless simulator: only disconnect a mic
+    /// node that was validated and attached during explicit opt-in capture.
+    private func suspendLivePerformanceForSystemEvent() {
+        endKaraokeMicrophone()
+        stopPerformancePads()
+        stopAllCreatorLoops()
+        stopPadTake()
+        padAccentEmitter.clear()
+        vocalGate.outputVolume = 0
+        vocalMonitoringEnabled = false
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
+        microphoneCapture?.stop()
+        microphoneCapture = nil
+        vocalCaptureActive = false
+        karaokeCompletion = nil
     }
 
     private func observeInterruptions() {
@@ -864,8 +1421,9 @@ final class AudioEngineManager {
                 case .began:
                     let wasPlaying = self.isPlaying
                     let source = self.sourceURL
-                    self.pause()
-                    self.endKaraokeMicrophone()
+                    self.beginGraphReconfiguration()
+                    self.suspendLivePerformanceForSystemEvent()
+                    self.finishGraphReconfiguration(resume: false)
                     // Pause invalidates any previous request. Capture *after*
                     // it so a later user pause or replacement cancels resumption.
                     self.interruptedSourceURL = wasPlaying ? source : nil
@@ -896,16 +1454,25 @@ final class AudioEngineManager {
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
-            let removed = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ==
-                .oldDeviceUnavailable
+            let reason = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+            let removed = reason == .oldDeviceUnavailable
+            let hardwareChanged = removed || reason == .newDeviceAvailable
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lyricsClock.refreshOutputLatency()
                 self.refreshPerformanceOutputLatency()
+                // Hardware input formats and scheduled voices may become
+                // invalid during route negotiation. The current song file is
+                // retained; no accidental auto-resume on unplug.
+                if hardwareChanged && !removed && self.vocalCaptureActive {
+                    self.endVocalCapture()
+                }
+                self.refreshVocalMonitorSafety()
                 if removed {
+                    self.beginGraphReconfiguration()
+                    self.suspendLivePerformanceForSystemEvent()
                     self.interruptedSourceURL = nil
-                    self.pause()
-                    self.endKaraokeMicrophone()
+                    self.finishGraphReconfiguration(resume: false)
                 }
             }
         }
@@ -938,7 +1505,8 @@ final class AudioEngineManager {
             // safely be distinguished from user files, so intentionally keep
             // them rather than deleting someone else's temporary WAV.
             let owned = url.lastPathComponent.hasPrefix("nightcore_export_") ||
-                        url.lastPathComponent.hasPrefix("NightcorePerformance-")
+                        url.lastPathComponent.hasPrefix("NightcorePerformance-") ||
+                        url.lastPathComponent.hasPrefix("nightcore_center_cut_")
             guard owned,
                   (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   let type = UTType(filenameExtension: url.pathExtension),
@@ -969,13 +1537,19 @@ final class AudioEngineManager {
                                                  limiter: AVAudioUnitEffect,
                                                  fileFormat: AVAudioFormat,
                                                  graphFormat: AVAudioFormat,
-                                                 performanceMixer: AVAudioMixerNode? = nil) {
+                                                 performanceMixer: AVAudioMixerNode? = nil,
+                                                  stemEQ: AVAudioUnitEQ? = nil) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
         engine.connect(player, to: upmix, format: fileFormat)
         engine.connect(upmix, to: varispeed, format: graphFormat)
         engine.connect(varispeed, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
-        engine.connect(eq, to: reverb, format: graphFormat)
+        if let stemEQ {
+            engine.connect(eq, to: stemEQ, format: graphFormat)
+            engine.connect(stemEQ, to: reverb, format: graphFormat)
+        } else {
+            engine.connect(eq, to: reverb, format: graphFormat)
+        }
         // Pad samples join after the song-specific DSP so a 0.5x playback
         // speed does not slow the live drums. Both inputs share the limiter.
         if let performanceMixer {

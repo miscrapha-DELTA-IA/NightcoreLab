@@ -31,7 +31,7 @@ final class AudioVisualMapperTests: XCTestCase {
         let maximum = AudioFeatures(bass: 1, mid: 0, treble: 0, energy: 0)
         let output = AudioVisualMapper.map(maximum, preset: preset())
         XCTAssertEqual(output.intensity, 1)
-        XCTAssertEqual(output.scale, 1.06, accuracy: 0.000_001)
+        XCTAssertEqual(output.scale, 1, accuracy: 0.000_001)
         XCTAssertGreaterThan(output.glow, 0)
         XCTAssertGreaterThan(output.distortionAmount, 0)
     }
@@ -59,6 +59,7 @@ final class AudioVisualMapperTests: XCTestCase {
             AudioFeatures(bass: 1, mid: 1, treble: 1, energy: 1),
             preset: preset(reaction: .subtle))
         XCTAssertLessThan(subtle.intensity, high.intensity)
+        XCTAssertEqual(subtle.scale, 1.021, accuracy: 0.000_001)
     }
 
     func testThrottlingLowPowerSeekAndNoDuplicatePublications() {

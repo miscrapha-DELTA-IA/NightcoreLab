@@ -46,3 +46,36 @@ struct MarblePulseDriver: Equatable, Sendable {
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }
+
+/// Integrated independently from beat intensity: no RMS-scaled time or
+/// rewinding when the musical envelope releases. Pure and XCTest-friendly.
+struct MonotonicFlowClock: Sendable {
+    private(set) var phase: Double = 0
+
+    @discardableResult
+    mutating func advance(elapsed: Double, speed: Double,
+                          clampBackgroundJump: Bool = true) -> Double {
+        guard elapsed.isFinite, speed.isFinite else { return phase }
+        let dt = max(0, clampBackgroundJump ? min(elapsed, 0.1) : elapsed)
+        phase += dt * max(0, speed)
+        return phase
+    }
+}
+
+/// Two viscous stages driven by the live PCM mix. Neither beat detection nor
+/// source-time synthetic pulses enter the responsive material path.
+struct OrganicReactiveEnvelope: Sendable {
+    private(set) var attack = 0.0
+    private(set) var fluid = 0.0
+
+    mutating func advance(warmth: Double, sustain: Double, elapsed: Double) -> Double {
+        guard elapsed.isFinite, elapsed > 0 else { return fluid }
+        let dt = min(elapsed, 0.1)
+        let target = min(1, max(0, warmth * 0.42 + sustain * 0.58))
+        let firstTau = target > attack ? 0.095 : 0.420
+        attack += (target - attack) * (1 - exp(-dt / firstTau))
+        let secondTau = attack > fluid ? 0.095 : 0.420
+        fluid += (attack - fluid) * (1 - exp(-dt / secondTau))
+        return fluid
+    }
+}

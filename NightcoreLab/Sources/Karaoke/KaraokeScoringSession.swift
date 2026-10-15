@@ -5,12 +5,13 @@ import Observation
 /// activeLineIndex or changes any scroll identity/layout input.
 @MainActor @Observable
 final class KaraokeScoringSession {
-    enum Mode: Equatable { case off, microphone, simulation }
+    enum Mode: Equatable, Sendable { case off, microphone, simulation, passive }
     private(set) var mode: Mode = .off
     private(set) var snapshot = KaraokeScoreSnapshot()
     private(set) var message: String?
     private(set) var isPresented = false
     private(set) var judgmentVisible = false
+    private(set) var liveMicLevel = 0.0
     var isHUDVisible: Bool { isPresented && mode != .off }
     @ObservationIgnored private var engine = KaraokeScoringEngine()
     @ObservationIgnored private var lastTime: Double?
@@ -20,6 +21,16 @@ final class KaraokeScoringSession {
     @ObservationIgnored private var syntheticFrame: KaraokeVoiceFrame?
     @ObservationIgnored private var referenceKey: KeyAnalysisResult?
     @ObservationIgnored private var referenceMelody: MelodicFeatures?
+
+    @ObservationIgnored var trackEnergy: (() -> Double)?
+
+    /// Presentation-only API: no session, transport, queue or graph dependency.
+    func setKaraokePresented(_ presented: Bool, lines: [TimedLyricLine], at time: Double,
+                             trackEnergy: @escaping () -> Double) {
+        present(presented)
+        self.trackEnergy = presented ? trackEnergy : nil
+        // Presenting lyrics does not award points from playback energy.
+    }
 
     func present(_ presented: Bool) {
         isPresented = presented
@@ -37,15 +48,18 @@ final class KaraokeScoringSession {
         self.mode = mode
         message = nil
         engine = KaraokeScoringEngine()
-        engine.key = referenceKey; engine.melody = referenceMelody
+        engine.key = mode == .passive ? nil : referenceKey
+        engine.melody = mode == .passive ? nil : referenceMelody
         engine.start(lines: lines, at: time)
         snapshot = engine.snapshot
+        liveMicLevel = 0
         lastTime = time; judgmentVisible = false; tickCount = 0; syntheticFrame = nil
     }
 
     func stop(message: String? = nil) {
         mode = .off; self.message = message
         snapshot = .init(); lastTime = nil; judgmentVisible = false
+        liveMicLevel = 0
         microphoneFrame = nil; syntheticFrame = nil
     }
 
@@ -70,11 +84,15 @@ final class KaraokeScoringSession {
         lastTime = time
         engine.pitchShift = pitchShift
         let voice: KaraokeVoiceFrame
-        if mode == .simulation {
+        if mode == .passive {
+            voice = .init(rms: trackEnergy?() ?? 0, frequency: nil, confidence: 0)
+        } else if mode == .simulation {
             // Preview is visibly marked and never requests microphone access.
             voice = syntheticFrame ?? .init(rms: 0.12, frequency: 261.6256, confidence: 1)
         } else { voice = microphoneFrame?(time) ?? .silence }
-        engine.advance(to: time, voice: voice, playing: playing)
+        liveMicLevel = mode == .microphone ? KaraokeVoiceGate.level(for: voice) : 0
+        engine.advance(to: time, voice: voice, playing: playing,
+                       trackPresence: mode == .passive ? voice.rms >= 0.008 : nil)
         if engine.snapshot.judgedVerses != snapshot.judgedVerses {
             judgmentUntil = time + 1.8
             judgmentVisible = true

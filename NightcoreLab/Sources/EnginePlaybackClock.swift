@@ -1,6 +1,7 @@
 import AVFoundation
 import os
 import Darwin
+import QuartzCore
 
 /// Relógio de letras sobre AVAudioPlayerNode.
 ///
@@ -19,6 +20,8 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
         var anchorHost: UInt64 = 0
         var hasAnchor = false
         var frozen: TimeInterval = 0
+        var fallbackSourceTime: TimeInterval = 0
+        var fallbackUptime: CFTimeInterval = 0
         /// Cached AVAudioSession.outputLatency (Stage 10C). Reading the session
         /// on every lyricTime query (up to 120 Hz per TimelineView, plus the
         /// reactive loop) was unnecessary: it only changes with the route.
@@ -47,6 +50,7 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
     func didSeek(to seconds: TimeInterval) {
         state.withLock { s in
             s.segmentOffset = seconds; s.frozen = seconds; s.hasAnchor = false
+            s.fallbackSourceTime = seconds; s.fallbackUptime = CACurrentMediaTime()
         }
     }
 
@@ -55,13 +59,17 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
         state.withLock { s in
             s.frozen = seconds
             s.hasAnchor = false
+            s.fallbackSourceTime = seconds
+            s.fallbackUptime = CACurrentMediaTime()
         }
     }
 
     /// Sempre que mudar timePitch.rate / varispeed.rate.
     func setSpeed(_ speed: Double) {
         state.withLock { s in
-            // A âncora se renova no próximo buffer (≤ ~20 ms), erro desprezível.
+            // The next rendered sample refreshes this fallback, preserving continuity.
+            s.fallbackSourceTime = s.frozen
+            s.fallbackUptime = CACurrentMediaTime()
             s.speed = max(speed, 0.01)
             s.hasAnchor = false
         }
@@ -81,9 +89,15 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
                 s.anchorHost = rt.hostTime
                 s.anchorMedia = Double(pt.sampleTime) / pt.sampleRate + s.segmentOffset
                 s.hasAnchor = true
+                s.fallbackSourceTime = s.anchorMedia
+                s.fallbackUptime = CACurrentMediaTime()
             }
             guard playing else { return s.frozen }
-            guard s.hasAnchor else { return s.frozen }
+            guard s.hasAnchor else {
+                let elapsed = min(max(0, CACurrentMediaTime() - s.fallbackUptime), 0.15)
+                s.frozen = max(0, s.fallbackSourceTime + elapsed * s.speed)
+                return s.frozen
+            }
 
             let delta = Int64(bitPattern: mach_absolute_time() &- s.anchorHost)
             let secs = AVAudioTime.seconds(forHostTime: delta.magnitude) * (delta < 0 ? -1 : 1)
