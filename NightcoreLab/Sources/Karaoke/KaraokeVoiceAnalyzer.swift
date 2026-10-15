@@ -45,7 +45,7 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
     private let lock = NSLock()
     private let worker = DispatchQueue(label: "NightcoreLab.karaoke.voice", qos: .userInitiated)
     private var timer: DispatchSourceTimer?
-    private var samples = [Float](repeating: 0, count: 2_048)
+    private var samples = [Float](repeating: 0, count: 1_024)
     private var count = 0
     private var sampleRate = 0.0
     private var pendingTime = 0.0
@@ -57,7 +57,7 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
 
     init() {
         let timer = DispatchSource.makeTimerSource(queue: worker)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(50))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
         timer.setEventHandler { [weak self] in self?.analyzeLatest() }
         self.timer = timer
         timer.resume()
@@ -69,15 +69,15 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
         guard !stopped, buffer.frameLength > 0 else { return }
         let rate = buffer.format.sampleRate
         guard rate >= 4_000, rate.isFinite else { return }
-        // Box low-pass/downsample to ~8 kHz. Bounded to the latest 2,048 bins.
+        // Sparse PCM downsample into preallocated storage. No heap allocation,
+        // FFT or nested DSP loops on CoreAudio's real-time render callback.
+        // Voice pitch analysis remains on the separate 10 Hz worker.
         let stride = max(1, Int(rate / 8_000))
         let produced = min(samples.count, Int(buffer.frameLength) / stride)
         if count + produced > samples.count { count = 0 }
         let offset = max(0, Int(buffer.frameLength) - produced * stride)
         for i in 0..<produced {
-            var sum: Float = 0
-            for j in 0..<stride { sum += data[offset + i * stride + j] }
-            samples[count + i] = sum / Float(stride)
+            samples[count + i] = data[offset + i * stride]
         }
         count += produced
         sampleRate = rate / Double(stride)
