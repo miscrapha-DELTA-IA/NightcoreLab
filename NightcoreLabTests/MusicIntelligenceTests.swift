@@ -4,6 +4,33 @@ import XCTest
 @testable import NightcoreLab
 
 final class MusicIntelligenceTests: XCTestCase {
+    func testCifraResolutionTranspositionAndBeatLockedStrumming() {
+        let line = TimedLyricLine(id: 0, start: 0, end: 4,
+            words: [WordSync(id: 0, text: "Canta", start: 0.5, end: 1,
+                             spaceAfter: true),
+                    WordSync(id: 1, text: "agora", start: 2.5, end: 3,
+                             spaceAfter: false)], precision: .word)
+        let cMajor = ChordChromaFrame(time: 0.5,
+            values: [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0])
+        let gMajor = ChordChromaFrame(time: 2.5,
+            values: [0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1])
+        let placements = ChordProgressionResolver.resolve(lines: [line],
+            chroma: [cMajor, gMajor])
+        XCTAssertEqual(placements.count, 2)
+        XCTAssertEqual(placements[0].wordID, 0)
+        XCTAssertEqual(placements[1].wordID, 1)
+        XCTAssertEqual(placements[0].chord.transposed(0), "C")
+        XCTAssertEqual(placements[0].chord.transposed(1), "C#")
+        XCTAssertEqual(placements[0].chord.transposed(2), "D")
+        let beats = (0...4).map { Double($0) * 0.5 }
+        XCTAssertEqual(ChordProgressionResolver.strumIndex(at: 0.1,
+            beats: beats), 0)
+        XCTAssertEqual(ChordProgressionResolver.strumIndex(at: 1.1,
+            beats: beats), 2)
+        XCTAssertEqual(ChordProgressionResolver.strumArrows,
+                       ["↓", "↓", "↑", "↑", "↓", "↑"])
+    }
+
     func testOctaveRuleAndFourBeatBarGrid() {
         let candidates = [
             RhythmAnalysisResult.BPMCandidate(bpm: 72, confidence: 0.9),

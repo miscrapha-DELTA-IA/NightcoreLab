@@ -5,6 +5,41 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeTypographyTests: XCTestCase {
+    func testStanzaCameraHasContinuousAdvanceAndBackwardSeekHysteresis() {
+        let lines = (0..<3).map { index in
+            TimedLyricLine(id: index, start: Double(index) * 2,
+                end: Double(index) * 2 + 1.8,
+                words: [WordSync(id: 0, text: "sing", start: Double(index) * 2,
+                                 end: Double(index) * 2 + 1.8, spaceAfter: false)],
+                precision: .word)
+        }
+        let positions = stride(from: 1.5, through: 2.6, by: 1.0 / 120).compactMap {
+            KaraokeStanzaCamera.interpolatedIndex(lines: lines, at: $0)
+        }
+        XCTAssertTrue(zip(positions, positions.dropFirst()).allSatisfy {
+            $0.1 >= $0.0 && $0.1 - $0.0 < 0.04
+        })
+        let focus = (0...30).map {
+            KaraokeStanzaCamera.focusProgress(line: lines[1], at: 1.8 + Double($0) / 100)
+        }
+        XCTAssertTrue(zip(focus, focus.dropFirst()).allSatisfy { $0.1 >= $0.0 })
+        XCTAssertEqual(KaraokeStanzaCamera.stableIndex(candidate: 0, previous: 1,
+            time: 1.98, previousTime: 2.01, lines: lines), 1)
+        XCTAssertEqual(KaraokeStanzaCamera.stableIndex(candidate: 0, previous: 1,
+            time: 1.0, previousTime: 2.01, lines: lines), 0)
+        var position = 0.0, velocity = 0.0
+        var samples: [Double] = []
+        for _ in 0..<120 {
+            let step = KaraokeStanzaCamera.springStep(position: position,
+                velocity: velocity, target: 100, dt: 1.0 / 120)
+            position = step.0; velocity = step.1; samples.append(position)
+        }
+        XCTAssertTrue(zip(samples, samples.dropFirst()).allSatisfy {
+            $0.1 - $0.0 <= 24.001
+        })
+        XCTAssertEqual(position, 100, accuracy: 1)
+    }
+
     func testASSKaraokeParserAndContinuousFill() throws {
         let ass = "Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\k50}He {\\kf75}llo {\\ko25}world"
         let output = ASSKaraokeParser.parse(ass)

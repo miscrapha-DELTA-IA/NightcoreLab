@@ -22,6 +22,7 @@ struct LyricsControlCenter: View {
     @AppStorage(KaraokeGuidePreference.pacing) private var pacingGuide = true
     @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
     @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
+    @AppStorage("karaokeChordMode") private var chordMode = false
     @AppStorage(CreativeHaptics.enabledKey) private var hapticsEnabled = true
 
     var body: some View {
@@ -29,6 +30,7 @@ struct LyricsControlCenter: View {
             Form {
                 if let audio {
                     Section("Vocal FX") {
+                        StemMixerControls(audio: audio)
                         KaraokeScoringControls(store: lyricsStore, audio: audio,
                             clock: audio.lyricsClock, accent: theme.accent)
                         Picker("Efeito vocal", selection: Binding(
@@ -75,6 +77,18 @@ struct LyricsControlCenter: View {
                         .foregroundStyle(.secondary)
                 } header: {
                     Label("Guia de canto", systemImage: "music.mic")
+                }
+
+                Section {
+                    Toggle("🎸 Modo Cifras (Padrão Cifra Club)", isOn: $chordMode)
+                    Text("Cifras medidas do áudio local aparecem sobre as palavras. Tom, capo e batida ficam no topo da letra.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("Autorizar transcrição local") {
+                        Task { _ = await AutoLyricsTranscriber.requestPermission() }
+                    }
+                    .font(.footnote)
+                } header: {
+                    Label("Cifras e letra automática", systemImage: "guitars.fill")
                 }
 
                 Section {

@@ -406,7 +406,7 @@ struct ContentView: View {
         HStack(spacing: DS.Spacing.s) {
             VStack(alignment: .leading, spacing: 1) {
                 NightcoreBrandLockup(theme: currentTheme)
-                Text("v34 · " + currentTheme.displayName.uppercased())
+                Text("v35 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -1350,7 +1350,10 @@ struct ContentView: View {
         let service = lyricsPrefetcher ?? LyricsPrefetcher(store: lyricsStore)
         lyricsPrefetcher = service
         let metadata = lyricsMetadata(for: track, duration: audio.duration)
-        Task(priority: .userInitiated) { await service.start(metadata) }
+        let sourceURL = audio.visualAnalysisURL
+        Task(priority: .userInitiated) {
+            await service.start(metadata, sourceURL: sourceURL)
+        }
     }
 
     private func prefetchUpcoming() {

@@ -52,6 +52,8 @@ final class LyricsStore {
     @ObservationIgnored private var refinedCache: [String: (source: String, lines: [TimedLyricLine])] = [:]
     @ObservationIgnored private var rawSource: String?
     @ObservationIgnored private var acousticRefinementKey: String?
+    @ObservationIgnored private var latestDNA: SongDNA?
+    @ObservationIgnored private var lastObservedTime: TimeInterval = 0
 
     // MARK: Contrato
 
@@ -67,6 +69,7 @@ final class LyricsStore {
             activeLineIndex = nil
             scrollAnchorLineID = 0
             hasWordSync = false
+            lastObservedTime = 0
         }
         status = .searching
         needsReview = false
@@ -81,6 +84,79 @@ final class LyricsStore {
         scrollAnchorLineID = 0
         hasWordSync = false
         needsReview = false
+    }
+
+    /// Cache-first, then utility-priority stem preparation and local speech.
+    /// A later catalog result or track replacement cancels this task.
+    func loadFallback(trackID: String, plainText: String?, sourceURL: URL,
+                      duration: TimeInterval, force: Bool = false) {
+        guard self.trackID == trackID, force || status != .ready else { return }
+        loadTask?.cancel()
+        status = .searching
+        let bars = latestDNA?.barTimestamps ?? []
+        let fingerprint = AutoLyricsTranscriber.fingerprint(source: sourceURL) +
+            "|" + (plainText ?? "")
+        loadTask = Task.detached(priority: .utility) { [weak self] in
+            if let cached = await AutoLyricsCache.shared.load(trackID: trackID,
+                                                               fingerprint: fingerprint) {
+                await self?.installFallback(cached, trackID: trackID)
+                return
+            }
+            let folder = TrackAudioCache.stemDirectory(for: sourceURL)
+            let asset = try? await StemSplitterEngine.prepare(source: sourceURL,
+                                                               cacheFolder: folder)
+            guard !Task.isCancelled else { return }
+            let vocalURL = asset?.vocalURL ?? sourceURL
+            let generated: [TimedLyricLine]
+            if let plainText, !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let phrases = (try? AutoLyricsTranscriber.rhythmicCues(
+                    vocalURL: vocalURL, duration: duration, bars: bars)) ?? []
+                generated = Self.alignPlain(plainText, duration: duration,
+                                            phrases: phrases, bars: bars)
+            } else {
+                generated = await AutoLyricsTranscriber.generate(
+                    vocalURL: vocalURL, duration: duration, bars: bars)
+            }
+            guard !Task.isCancelled else { return }
+            await AutoLyricsCache.shared.save(generated, trackID: trackID,
+                                              fingerprint: fingerprint)
+            await self?.installFallback(generated, trackID: trackID)
+        }
+    }
+
+    private func installFallback(_ generated: [TimedLyricLine], trackID: String) {
+        guard self.trackID == trackID, status != .ready, !generated.isEmpty else { return }
+        lines = generated
+        hasWordSync = generated.contains { $0.precision == .word }
+        status = .ready
+        needsReview = generated.contains { $0.provenance == .autoTranscribed }
+        syncNow()
+    }
+
+    nonisolated static func alignPlain(_ text: String, duration: TimeInterval,
+                                       phrases: [TimedLyricLine],
+                                       bars: [TimeInterval]) -> [TimedLyricLine] {
+        let paragraphs = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("[") }
+        guard !paragraphs.isEmpty else {
+            return AutoLyricsTranscriber.fallbackBars(duration: duration, bars: bars)
+        }
+        let step = max(0.1, duration / Double(paragraphs.count))
+        let lines = paragraphs.enumerated().map { index, paragraph in
+            let cue = phrases.indices.contains(index) ? phrases[index] : nil
+            let start = cue?.start ?? Double(index) * step
+            let end = cue?.end ?? min(duration, start + step)
+            let tokens = paragraph.split(whereSeparator: \.isWhitespace).enumerated().map {
+                WordSync(id: $0.offset, text: String($0.element), start: start,
+                         end: max(end, start + 0.01), spaceAfter: true)
+            }
+            return TimedLyricLine(id: index, start: start, end: max(end, start + 0.01),
+                                  words: tokens, precision: .line,
+                                  provenance: .plainLine)
+        }
+        return LyricsAlignmentRefiner.refine(lines, barBeats: bars,
+            vocalEnergy: phrases.map { (time: $0.start, value: 1.0) })
     }
 
     /// force=true é usado pela seleção manual (pin); o automático não a substitui.
@@ -101,6 +177,7 @@ final class LyricsStore {
         activeLineIndex = nil
         scrollAnchorLineID = 0
         hasWordSync = false
+        lastObservedTime = 0
 
         if let cached = refinedCache[trackID], cached.source == rawLRC {
             lines = cached.lines
@@ -138,14 +215,17 @@ final class LyricsStore {
         loadTask?.cancel()
         rawSource = nil
         acousticRefinementKey = nil
+        latestDNA = nil
         scoring.resetForTrack()
         trackID = nil; lines = []; activeLineIndex = nil; scrollAnchorLineID = 0; hasWordSync = false
+        lastObservedTime = 0
         status = .idle; needsReview = false; isPlaying = false
     }
 
     /// Replaces only estimated words after cached rhythm evidence arrives.
     /// The parse and cache write stay off the main actor.
     func refineUsing(_ dna: SongDNA, sourceURL: URL? = nil) {
+        latestDNA = dna
         guard let trackID, let rawSource, !lines.isEmpty,
               !dna.onsetTimestamps.isEmpty || !dna.beatTimestamps.isEmpty else { return }
         let key = dna.sourceRevision + ":\(dna.onsetTimestamps.count):\(dna.beatTimestamps.count)"
@@ -206,7 +286,10 @@ final class LyricsStore {
 
         let t = clock.lyricTime + userOffset
         scoring.advance(time: t, playing: playing, lines: lines, pitchShift: scoringPitchShift?() ?? 0)
-        let idx = lines.activeIndex(at: t)
+        let idx = KaraokeStanzaCamera.stableIndex(
+            candidate: lines.activeIndex(at: t), previous: activeLineIndex,
+            time: t, previousTime: lastObservedTime, lines: lines)
+        lastObservedTime = t
         if idx != activeLineIndex {
             KaraokePerformanceProbe.shared.activeLineChanged()
             activeLineIndex = idx
