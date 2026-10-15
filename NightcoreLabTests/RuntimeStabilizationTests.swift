@@ -6,6 +6,17 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    func testFourStemPresetAndCosineRamp() {
+        XCTAssertEqual(StemMixPreset.karaoke.levels[.vocal], 0)
+        XCTAssertEqual(StemMixPreset.acapella.levels[.vocal], 1)
+        XCTAssertEqual(StemMixPreset.rhythm.levels[.drums], 1)
+        let ramp = (0...5).map { StemSplitterEngine.cosineGain(step: $0) }
+        XCTAssertEqual(ramp.first, 0)
+        XCTAssertEqual(ramp.last, 1)
+        XCTAssertTrue(zip(ramp, ramp.dropFirst()).allSatisfy { $0.1 > $0.0 })
+        XCTAssertLessThan(ramp[1], 0.2)
+    }
+
     func testLegacySongDNACacheMigratesWithoutNewFields() throws {
         let current = SongDNA(assetID: "legacy", sourceRevision: "r1",
                               sourceDuration: 10, bpm: 120,
@@ -223,6 +234,11 @@ final class RuntimeStabilizationTests: XCTestCase {
         let generation = audio.scheduleGeneration
         let clock = audio.lyricsClock
         let category = AVAudioSession.sharedInstance().category
+        audio.applyStemPreset(.karaoke)
+        audio.setStemLevel(.drums, level: 0.72)
+        XCTAssertEqual(audio.stemLevels[.vocal], 0)
+        XCTAssertEqual(audio.stemLevels[.drums], 0.72)
+        XCTAssertTrue(audio.stemMixEnabled)
         for _ in 0..<3 {
             session.setKaraokePresented(true, lines: karaokeLines(5), at: clock.lyricTime,
                                        trackEnergy: { 0.1 })

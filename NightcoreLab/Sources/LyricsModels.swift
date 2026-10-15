@@ -52,7 +52,7 @@ enum LyricPrecision: String, Codable, Sendable {
 }
 
 enum LyricTimingProvenance: String, Codable, Sendable {
-    case enhancedLRC, assKaraoke, estimatedRefined, plainLine
+    case enhancedLRC, assKaraoke, estimatedRefined, plainLine, autoTranscribed, rhythmicCue
 }
 
 struct TimedLyricLine: Identifiable, Hashable, Codable, Sendable {

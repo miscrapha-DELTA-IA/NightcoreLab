@@ -125,8 +125,15 @@ struct LyricsView: View {
 
     private func apply(_ selected: LyricsRecord, pin: Bool = false) {
         record = selected
-        lyricStore.load(trackID: track.id, rawLRC: selected.syncedLyrics ?? "",
-                        needsReview: false, force: true)
+        if let synced = selected.syncedLyrics, !synced.isEmpty {
+            lyricStore.load(trackID: track.id, rawLRC: synced,
+                            needsReview: false, force: true)
+        } else if let url = audio.visualAnalysisURL {
+            lyricStore.loadFallback(trackID: track.id,
+                                    plainText: selected.plainLyrics,
+                                    sourceURL: url, duration: audio.duration,
+                                    force: pin)
+        }
         if pin, let prefetcher {
             let choice = LRCLIBRecord(legacy: selected)
             Task { await prefetcher.pin(choice, for: track.id) }
@@ -174,7 +181,8 @@ struct LyricsView: View {
         KaraokeLyricsView(clock: audio.lyricsClock,
                           theme: .forAppTheme(theme),
                           accent: lyricAccent,
-                          onShowResult: onShowResult)
+                          onShowResult: onShowResult,
+                          sourceURL: audio.visualAnalysisURL)
             .mask {
                 if inline { LyricsFadeMask() }
                 else { Rectangle() }
@@ -327,6 +335,12 @@ struct LyricsView: View {
                     Spacer()
                 } else if !lyricStore.lines.isEmpty {
                     synchronizedLyrics
+                } else if lyricStore.status == .searching {
+                    Spacer()
+                    ProgressView("Preparando guia vocal…")
+                        .tint(theme.accent)
+                        .foregroundStyle(.white)
+                    Spacer()
                 } else if let text = record?.plainLyrics, !text.isEmpty {
                     ScrollView {
                         Text(text)
@@ -383,11 +397,23 @@ struct LyricsView: View {
                     candidates = cached.alternatives.map(\.asLegacyRecord)
                     if let selected = cached.selected {
                         record = selected.asLegacyRecord
-                        lyricStore.load(trackID: track.id,
-                                        rawLRC: selected.syncedLyrics ?? "",
-                                        needsReview: cached.needsReview, force: cached.pinned)
+                        if let synced = selected.syncedLyrics, !synced.isEmpty {
+                            lyricStore.load(trackID: track.id, rawLRC: synced,
+                                            needsReview: cached.needsReview,
+                                            force: cached.pinned)
+                        } else if lyricStore.status != .ready,
+                                  let url = audio.visualAnalysisURL {
+                            lyricStore.loadFallback(trackID: track.id,
+                                                    plainText: selected.plainLyrics,
+                                                    sourceURL: url, duration: audio.duration)
+                        }
                     } else {
-                        errorMessage = "Não foi encontrada letra sincronizada com confiança. Pesquise manualmente."
+                        errorMessage = "Preparando guia vocal local…"
+                        if lyricStore.status != .ready,
+                           let url = audio.visualAnalysisURL {
+                            lyricStore.loadFallback(trackID: track.id, plainText: nil,
+                                                    sourceURL: url, duration: audio.duration)
+                        }
                     }
                     loading = false
                     return
@@ -406,6 +432,10 @@ struct LyricsView: View {
                     errorMessage = candidates.isEmpty
                         ? "Não encontramos letras para esta faixa. Pesquise manualmente."
                         : "Os resultados do LRCLIB não coincidem com a gravação. Escolha a letra correta."
+                    if let url = audio.visualAnalysisURL {
+                        lyricStore.loadFallback(trackID: track.id, plainText: nil,
+                                                sourceURL: url, duration: audio.duration)
+                    }
                 }
             } catch {
                 guard !Task.isCancelled else { return }

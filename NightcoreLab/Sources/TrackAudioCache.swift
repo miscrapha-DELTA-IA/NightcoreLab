@@ -3,6 +3,15 @@ import Foundation
 
 /// The index lives alongside the audio in Caches. Missing/evicted files are never cache hits.
 struct TrackAudioCache {
+    static var stemCacheFolder: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("NightcoreAudio", isDirectory: true)
+    }
+    static func stemDirectory(for source: URL) -> URL {
+        let root = stemCacheFolder.standardizedFileURL.path + "/"
+        let parent = source.deletingLastPathComponent().standardizedFileURL
+        return parent.path.hasPrefix(root) ? parent : stemCacheFolder
+    }
     struct Entry: Codable {
         var track: Track
         let relativePath: String

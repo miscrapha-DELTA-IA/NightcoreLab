@@ -1,9 +1,51 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    @MainActor
+    func testMissingCatalogLyricsProducesCachedLocalGuide() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auto-lyrics-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory,
+                                                withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("song.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 16_000, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 16_000))
+        buffer.frameLength = 16_000
+        for channel in 0..<2 {
+            let samples = try XCTUnwrap(buffer.floatChannelData?[channel])
+            for index in 0..<16_000 {
+                samples[index] = Float(0.3 * sin(2 * Double.pi * 440 *
+                                                  Double(index) / 16_000))
+            }
+        }
+        let writer = try AVAudioFile(forWriting: url, settings: format.settings)
+        try writer.write(from: buffer)
+        let store = LyricsStore()
+        let trackID = "missing-\(UUID().uuidString)"
+        store.beginLoading(trackID: trackID)
+        store.loadFallback(trackID: trackID, plainText: nil,
+                           sourceURL: url, duration: 1)
+        for _ in 0..<100 where store.status != .ready {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(store.status, .ready)
+        XCTAssertFalse(store.lines.isEmpty)
+        XCTAssertFalse(store.lines.flatMap(\.words).isEmpty)
+        XCTAssertTrue(store.lines.allSatisfy {
+            $0.provenance == .autoTranscribed || $0.provenance == .rhythmicCue
+        })
+        let cached = await AutoLyricsCache.shared.load(trackID: trackID,
+            fingerprint: AutoLyricsTranscriber.fingerprint(source: url) + "|")
+        XCTAssertEqual(cached, store.lines)
+    }
+
     func testComboMilestoneHapticsFireOnceAndPerfectJudgmentCelebrates() {
         var snapshot = KaraokeScoreSnapshot()
         snapshot.multiplier = 2

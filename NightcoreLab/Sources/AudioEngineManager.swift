@@ -94,6 +94,16 @@ final class AudioEngineManager {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let centerCutPlayer = AVAudioPlayerNode()
+    private let stemPlayers = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
+        ($0, AVAudioPlayerNode())
+    })
+    private(set) var stemMixEnabled = false
+    private(set) var stemLevels: [StemKind: Float] = Dictionary(
+        uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
+    private(set) var stemsAvailable = false
+    @ObservationIgnored private var stemFiles: [StemKind: AVAudioFile] = [:]
+    @ObservationIgnored private var stemPrepareTask: Task<Void, Never>?
+    @ObservationIgnored private var stemRampTask: Task<Void, Never>?
     private(set) var centerCutEnabled = false
     private(set) var centerCutAvailable = true
     @ObservationIgnored private var centerCutFile: AVAudioFile?
@@ -158,8 +168,8 @@ final class AudioEngineManager {
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
-        [player, centerCutPlayer, upmix, varispeed, timePitch, bassEQ,
-         reverbNode, performanceMixer, limiter]
+        [player, centerCutPlayer] + StemKind.allCases.compactMap { stemPlayers[$0] } +
+        [upmix, varispeed, timePitch, bassEQ, reverbNode, performanceMixer, limiter]
     }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
@@ -226,6 +236,12 @@ final class AudioEngineManager {
     // MARK: Carregar arquivo
 
     func load(url: URL) throws {
+        stemPrepareTask?.cancel()
+        stemRampTask?.cancel()
+        stemPlayers.values.forEach { $0.stop() }
+        stemFiles = [:]
+        stemMixEnabled = false
+        stemsAvailable = false
         centerCutPrepareTask?.cancel()
         centerCutRampTask?.cancel()
         centerCutPlayer.stop()
@@ -270,6 +286,11 @@ final class AudioEngineManager {
                           performanceMixer: performanceMixer)
         engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
         centerCutPlayer.volume = 0
+        for kind in StemKind.allCases {
+            guard let node = stemPlayers[kind] else { continue }
+            engine.connect(node, to: upmix, format: graphFormat)
+            node.volume = 0
+        }
         player.volume = 1
         padRuntime.connect(to: engine, mixer: performanceMixer)
         // No mic FX wiring during load/prepare/offline tests. It is done on
@@ -288,6 +309,7 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+        prepareStems(source: url, revision: playbackSourceRevision)
     }
 
     /// One tap, no transport mutation and no AVAudioSession query.
@@ -683,10 +705,12 @@ final class AudioEngineManager {
                 if lastKnownTime >= duration { lastKnownTime = 0 }
                 schedule(file, startingAt: lastKnownTime)
                 if centerCutEnabled { scheduleCenterCut(startingAt: lastKnownTime) }
+                if stemMixEnabled { scheduleStems(startingAt: lastKnownTime) }
             }
             lyricsClock.refreshOutputLatency()
             player.play()
             if centerCutEnabled, centerCutFile != nil { centerCutPlayer.play() }
+            if stemMixEnabled { stemPlayers.values.forEach { $0.play() } }
             interruptedSourceURL = nil
             isPlaying = true
             setupNowPlaying()
@@ -702,6 +726,7 @@ final class AudioEngineManager {
         lyricsClock.didPause(at: lastKnownTime)
         player.pause()
         centerCutPlayer.pause()
+        stemPlayers.values.forEach { $0.pause() }
         isPlaying = false
         setupNowPlaying()
         scheduleIdleStop()
@@ -750,6 +775,7 @@ final class AudioEngineManager {
         scheduleGeneration += 1
         player.stop()
         centerCutPlayer.stop()
+        stemPlayers.values.forEach { $0.stop() }
         isPlaying = false
         lastKnownTime = target
         lyricsClock.didSeek(to: target)
@@ -758,6 +784,7 @@ final class AudioEngineManager {
         if target < duration {
             schedule(file, startingAt: target)
             if centerCutEnabled { scheduleCenterCut(startingAt: target) }
+            if stemMixEnabled { scheduleStems(startingAt: target) }
             if shouldResume {
                 play()
             }
@@ -773,6 +800,7 @@ final class AudioEngineManager {
     // MARK: Parâmetros em tempo real
 
     func setCenterCutEnabled(_ enabled: Bool) {
+        if enabled && stemMixEnabled { setStemMixerEnabled(false) }
         centerCutEnabled = enabled
         centerCutRampTask?.cancel()
         guard enabled else { crossfadeCenterCut(to: false); return }
@@ -838,6 +866,95 @@ final class AudioEngineManager {
                 self.centerCutPlayer.volume = processed + ((enabled ? 1 : 0) - processed) * fraction
             }
             if !enabled { self?.centerCutPlayer.stop() }
+        }
+    }
+
+    // MARK: Four-stem mixer
+
+    private func prepareStems(source: URL, revision: Int) {
+        stemPrepareTask?.cancel()
+        stemPrepareTask = Task { [weak self] in
+            let cacheFolder = TrackAudioCache.stemDirectory(for: source)
+            let asset = try? await Task.detached(priority: .utility) {
+                try await StemSplitterEngine.prepare(source: source,
+                                                     cacheFolder: cacheFolder)
+            }.value
+            guard let self, !Task.isCancelled,
+                  self.playbackSourceRevision == revision, let asset else { return }
+            var files: [StemKind: AVAudioFile] = [:]
+            for kind in StemKind.allCases {
+                guard let url = asset.urls[kind],
+                      let file = try? AVAudioFile(forReading: url,
+                                                  commonFormat: .pcmFormatFloat32,
+                                                  interleaved: false) else { return }
+                files[kind] = file
+            }
+            self.stemFiles = files
+            self.stemsAvailable = true
+            if self.stemMixEnabled {
+                self.scheduleStems(startingAt: self.currentTime)
+                self.rampStemMix()
+            }
+        }
+    }
+
+    func applyStemPreset(_ preset: StemMixPreset) {
+        stemLevels = preset.levels
+        setStemMixerEnabled(true)
+    }
+
+    func setStemLevel(_ kind: StemKind, level: Float) {
+        stemLevels[kind] = level.clamped(to: 0...1)
+        setStemMixerEnabled(true)
+    }
+
+    func setStemMixerEnabled(_ enabled: Bool) {
+        let wasEnabled = stemMixEnabled
+        stemMixEnabled = enabled
+        if enabled {
+            centerCutEnabled = false
+            centerCutRampTask?.cancel()
+            centerCutPlayer.stop()
+            centerCutPlayer.volume = 0
+            if stemsAvailable && !wasEnabled { scheduleStems(startingAt: currentTime) }
+        }
+        rampStemMix()
+    }
+
+    private func scheduleStems(startingAt time: TimeInterval) {
+        guard stemsAvailable else { return }
+        for kind in StemKind.allCases {
+            guard let file = stemFiles[kind], let node = stemPlayers[kind] else { continue }
+            node.stop()
+            let frame = min(max(AVAudioFramePosition(time * file.processingFormat.sampleRate), 0),
+                            file.length)
+            guard frame < file.length else { continue }
+            node.scheduleSegment(file, startingFrame: frame,
+                frameCount: AVAudioFrameCount(min(file.length - frame, Int64(UInt32.max))),
+                at: nil)
+            if isPlaying { node.play() }
+        }
+    }
+
+    private func rampStemMix() {
+        stemRampTask?.cancel()
+        let active = stemMixEnabled && stemsAvailable
+        let original = player.volume
+        let initial = stemPlayers.mapValues(\.volume)
+        let targets = stemLevels
+        stemRampTask = Task { [weak self] in
+            for step in 1...5 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard !Task.isCancelled, let self else { return }
+                let progress = StemSplitterEngine.cosineGain(step: step)
+                self.player.volume = original + ((active ? 0 : 1) - original) * progress
+                for kind in StemKind.allCases {
+                    let start = initial[kind] ?? 0
+                    let target = active ? (targets[kind] ?? 1) : 0
+                    self.stemPlayers[kind]?.volume = start + (target - start) * progress
+                }
+            }
+            if !active, let self { self.stemPlayers.values.forEach { $0.stop() } }
         }
     }
 
@@ -984,6 +1101,7 @@ final class AudioEngineManager {
         karaokeCompletion?()
         player.stop()
         centerCutPlayer.stop()
+        stemPlayers.values.forEach { $0.stop() }
         // Pads are an independent performance surface: ending the song must
         // not choke a cymbal or 808 that the user is still hearing.
         needsScheduling = true
@@ -1001,6 +1119,7 @@ final class AudioEngineManager {
         scheduleGeneration += 1
         player.stop()
         centerCutPlayer.stop()
+        stemPlayers.values.forEach { $0.stop() }
         needsScheduling = true
         isPlaying = false
         lastKnownTime = 0

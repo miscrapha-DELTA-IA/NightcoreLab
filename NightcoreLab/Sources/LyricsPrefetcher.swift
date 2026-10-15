@@ -57,17 +57,21 @@ actor LyricsPrefetcher {
     private var warmTask: Task<Void, Never>?
     private var activeID: String?
     private var warmedID: String?
+    private var activeSourceURL: URL?
+    private var activeDuration: TimeInterval = 0
 
     init(store: LyricsStore) { self.store = store }
 
     /// Chame quando a reprodução COMEÇA (não quando a aba/modo de letras abre).
-    func start(_ meta: TrackMetadata) async {
+    func start(_ meta: TrackMetadata, sourceURL: URL? = nil) async {
         // The player commits the source and resets LyricsStore synchronously.
         // A delayed launch from an older selection must never take ownership.
         guard await store.trackID == meta.videoID else { return }
         task?.cancel()
         warmTask?.cancel()
         activeID = meta.videoID
+        activeSourceURL = sourceURL
+        activeDuration = meta.duration ?? 0
         warmedID = nil
         task = Task(priority: .userInitiated) { [weak self] in await self?.run(meta, apply: true) }
     }
@@ -84,6 +88,7 @@ actor LyricsPrefetcher {
     func cancel() {
         task?.cancel(); warmTask?.cancel()
         activeID = nil; warmedID = nil
+        activeSourceURL = nil
     }
 
     /// A tela de letras consulta a seleção persistida sem chamar a rede.
@@ -121,6 +126,10 @@ actor LyricsPrefetcher {
         cache.save(c, id: videoID)
         if let lrc = record.syncedLyrics {
             await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
+        } else if let sourceURL = activeSourceURL {
+            await store.loadFallback(trackID: videoID, plainText: record.plainLyrics,
+                                     sourceURL: sourceURL, duration: activeDuration,
+                                     force: true)
         }
     }
 
@@ -175,6 +184,10 @@ actor LyricsPrefetcher {
         if let lrc = c.selected?.syncedLyrics {
             await store.load(trackID: m.videoID, rawLRC: lrc,
                              needsReview: c.needsReview, force: c.pinned)
+        } else if let sourceURL = activeSourceURL {
+            await store.loadFallback(trackID: m.videoID,
+                                     plainText: c.selected?.plainLyrics,
+                                     sourceURL: sourceURL, duration: activeDuration)
         } else {
             await store.markUnavailable(trackID: m.videoID)
         }
