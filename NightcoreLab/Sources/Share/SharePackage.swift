@@ -12,10 +12,14 @@ struct SharePackage: Identifiable {
     let metadata: ShareMetadata
 
     var files: [URL] { [videoURL, thumbnailURL, metadataURL] }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: videoURL.deletingLastPathComponent())
+    }
 }
 
 struct ShareMetadata: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     let schemaVersion: Int
     let title: String
     let artist: String
@@ -32,6 +36,10 @@ struct ShareMetadata: Codable, Equatable, Sendable {
     let thumbnailFrameIndex: Int
     let thumbnailElapsed: Double
     let exportedAt: Date
+    var lightningTheme: String? = nil
+    var reactionMode: String? = nil
+    var karaokeGrade: String? = nil
+    var padEventCount: Int? = nil
 }
 
 enum SharePackageError: LocalizedError {
@@ -131,11 +139,10 @@ enum SharePackageBuilder {
             progress(0.97)
             try Task.checkCancellation()
 
-            let metadata = ShareMetadata(
+            var metadata = ShareMetadata(
                 schemaVersion: ShareMetadata.currentSchemaVersion,
                 title: request.title, artist: request.artist,
-                presetID: request.renderRuntime?.composition.program.id ??
-                    request.reactiveProgram?.id ?? CreativePresetCatalog.defaultID,
+                presetID: request.experienceID,
                 materialID: request.renderRuntime?.material.id ?? VisualMaterial.legacyMarble.id,
                 duration: CMTimeGetSeconds(videoDuration),
                 width: encoding.width, height: encoding.height, fps: encoding.fps,
@@ -145,6 +152,11 @@ enum SharePackageBuilder {
                 thumbnailFrameIndex: thumbIndex,
                 thumbnailElapsed: thumbFrame.elapsed,
                 exportedAt: Date())
+            metadata.lightningTheme = request.theme.rawValue
+            metadata.reactionMode = request.reactionMode.rawValue
+            metadata.karaokeGrade = request.showsScoreStamp
+                ? request.scoreStamp?.grade : nil
+            metadata.padEventCount = request.padPerformance?.events.count
             let metadataURL = folder.appendingPathComponent("metadata.json")
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

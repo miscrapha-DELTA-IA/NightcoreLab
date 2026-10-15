@@ -85,6 +85,30 @@ final class ShareExportPipelineTests: XCTestCase {
                                           from: encoder.encode(metadata)), metadata)
     }
 
+    func testMetadataPreservesLightningReactionAndScoreWithoutClaimingSimulationAsLive() throws {
+        var score = KaraokeScoreSnapshot()
+        score.judgedVerses = 2
+        score.accuracyPercentage = 78
+        let stamp = try XCTUnwrap(KaraokePerformanceStamp(
+            snapshot: score, mode: .simulation))
+        XCTAssertEqual(stamp.grade, "A")
+        XCTAssertEqual(stamp.label, "SIMULAÇÃO")
+        var metadata = ShareMetadata(
+            schemaVersion: ShareMetadata.currentSchemaVersion,
+            title: "Song", artist: "Artist", presetID: "cyber-night",
+            materialID: "cyber-night", duration: 15, width: 720,
+            height: 1280, fps: 20, codec: "h264", quality: .balanced,
+            aspectRatio: .portrait, cropPolicy: .safeAreaPreserving,
+            thumbnailFrameIndex: 0, thumbnailElapsed: 0, exportedAt: .now)
+        metadata.lightningTheme = AppTheme.ultrapink.rawValue
+        metadata.reactionMode = CreativePreset.AudioReaction.responsive.rawValue
+        metadata.karaokeGrade = stamp.grade
+        metadata.padEventCount = 2
+        let decoded = try JSONDecoder().decode(ShareMetadata.self,
+            from: JSONEncoder().encode(metadata))
+        XCTAssertEqual(decoded, metadata)
+    }
+
     @MainActor
     func testSharedCanvasRendersThreeRatiosWithoutChangingSceneSource() throws {
         let clip = try request()

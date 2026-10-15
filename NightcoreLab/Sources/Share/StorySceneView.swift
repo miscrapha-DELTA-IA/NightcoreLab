@@ -110,6 +110,8 @@ struct StorySceneView: View {
                 }
                 .padding(.top, 50)
 
+                scoreBadge
+
                 if request.mode == .player {
                     Spacer(minLength: 25)
                     playerCard
@@ -160,6 +162,10 @@ struct StorySceneView: View {
             }
             .frame(width: layout.titleArea.width, height: layout.titleArea.height)
             .position(x: layout.titleArea.midX, y: layout.titleArea.midY)
+
+            scoreBadge
+                .position(x: layout.titleArea.midX,
+                          y: layout.titleArea.maxY + 24)
 
             if request.mode == .player {
                 playerCard
@@ -308,6 +314,19 @@ struct StorySceneView: View {
         }
         .padding(.horizontal, 15)
         .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var scoreBadge: some View {
+        if request.showsScoreStamp, let stamp = request.scoreStamp {
+            Text("\(stamp.label) · \(stamp.grade) · \(stamp.accuracy)%")
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(request.theme.accent.opacity(0.3), in: Capsule())
+                .overlay(Capsule().strokeBorder(request.theme.accent.opacity(0.7)))
+                .accessibilityIdentifier("story.karaokeScoreStamp")
+        }
     }
 
     @ViewBuilder private var artworkTile: some View {

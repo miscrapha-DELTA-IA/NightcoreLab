@@ -37,6 +37,7 @@ struct StoryDraftPreview: View {
     @State private var visualRhythm: RhythmAnalysisResult?
     @State private var visualIsReady = false
     @State private var elapsed: TimeInterval = 0
+    @State private var showsScoreStamp: Bool
 
     init(draft: StoryVideoDraft,
          onExport: @escaping (CreatorPreset, StoryVideoRequest, UIImage?,
@@ -53,12 +54,9 @@ struct StoryDraftPreview: View {
                 VisualMaterial.legacyMarble.id,
             typography: draft.request.typographyPreset,
             exportProfile: ExportProfile.matching(draft.profile))
-        let available = Set(CreativePresetCatalog.all.map(\.id) +
-                            CreativePresetCatalog.selectableExperiences.map(\.id))
-        let stored = CreatorPresetStore.load()
-        let initial = stored.flatMap { $0.isValid && available.contains($0.experienceID) ? $0 : nil }
-            ?? current
+        let initial = current
         let frozen = initial.applying(to: draft.request)
+        _showsScoreStamp = State(initialValue: draft.request.showsScoreStamp)
         _selectedAspect = State(initialValue: initial.exportProfile.aspectRatio)
         _selectedQuality = State(initialValue: initial.exportProfile.quality)
         _selectedCrop = State(initialValue: initial.exportProfile.cropPolicy)
@@ -100,7 +98,8 @@ struct StoryDraftPreview: View {
     private func freezeSession(_ preset: CreatorPreset) {
         // Expensive composition compilation only when experience/material
         // identity changes; slider edits update the cheap typed mapping.
-        let resolved = preset.applying(to: frozenRequest)
+        var resolved = preset.applying(to: frozenRequest)
+        resolved.showsScoreStamp = showsScoreStamp
         frozenRequest = resolved
         frozenTimeline = StoryRenderTimeline(
             request: resolved, profile: preset.exportProfile.encodingProfile(for: resolved.mode))
@@ -220,6 +219,11 @@ struct StoryDraftPreview: View {
                     .padding(12)
                     .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
 
+                    if frozenRequest.scoreStamp != nil {
+                        Toggle("Mostrar nota do karaokê no Story", isOn: $showsScoreStamp)
+                            .tint(draft.request.theme.accent)
+                    }
+
                     Slider(value: $elapsed,
                            in: 0...max(0.05, frozenTimeline.lastFrameElapsed),
                            step: 1 / Double(encodingProfile.fps))
@@ -295,6 +299,11 @@ struct StoryDraftPreview: View {
             }
             .onChange(of: selectedPreset) { _, preset in
                 freezeSession(preset)
+            }
+            .onChange(of: showsScoreStamp) { _, show in
+                frozenRequest.showsScoreStamp = show
+                frozenTimeline = StoryRenderTimeline(request: frozenRequest,
+                    profile: encodingProfile)
             }
             .task(id: draft.id) {
                 let loaded = await ShareRenderer.loadArtwork(draft.request.artworkURL)

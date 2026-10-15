@@ -1,5 +1,23 @@
 import Foundation
 
+/// Offline equivalent of the live kick release, sampled solely in source time.
+/// A binary search keeps scrubbing and out-of-order frame requests identical.
+enum StoryBeatEnvelope {
+    static func at(sourceTime: TimeInterval, dna: SongDNA?) -> Double {
+        guard sourceTime.isFinite, let beats = dna?.beatTimestamps,
+              !beats.isEmpty else { return 0 }
+        var low = 0, high = beats.count
+        while low < high {
+            let middle = (low + high) / 2
+            if beats[middle] <= sourceTime { low = middle + 1 }
+            else { high = middle }
+        }
+        guard low > 0 else { return 0 }
+        let elapsed = sourceTime - beats[low - 1]
+        return elapsed < 1 ? exp(-elapsed / 0.24) : 0
+    }
+}
+
 /// A SwiftRender-inspired, deterministic scene clock. Rendering is a pure
 /// function of the immutable StoryVideoRequest and integer presentation frame.
 /// The same frame is used by the preview, still captures and MP4 encoder.

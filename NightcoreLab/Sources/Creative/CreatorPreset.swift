@@ -38,6 +38,7 @@ struct CreatorPreset: Codable, Equatable, Sendable {
             profile: exportProfile.encodingProfile(for: request.mode),
             mode: request.mode)
         result.typographyPreset = typography
+        result.experienceID = experienceID
 
         let existing = request.renderRuntime
         let currentExperience = existing?.composition.program.id
@@ -54,7 +55,7 @@ struct CreatorPreset: Codable, Equatable, Sendable {
         let program = CreativePresetCatalog.effectiveProgram(
             id: experienceID, theme: request.theme,
             typography: typography.style, background: request.playerStyle,
-            reaction: CreativePresetCatalog.recipe(for: experienceID).preset.audioReaction)
+            reaction: request.reactionMode)
         if let composition = CompositionRuntime.freeze(
             program: program, sourceStart: request.playbackTime,
             speed: Double(request.speed), duration: request.duration,
