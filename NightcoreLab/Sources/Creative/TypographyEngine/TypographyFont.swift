@@ -40,7 +40,7 @@ enum TypographyFont: String, Codable, CaseIterable, Identifiable, Sendable {
         case .cinematic: .serif
         case .mono, .typewriter: nil
         }
-        return Font(uiFont: Self.cascaded(native, design: design))
+        return Font(Self.cascaded(native, design: design))
     }
 
     static func cascaded(_ font: UIFont,

@@ -129,11 +129,19 @@ struct SongDNA: Codable, Equatable, Sendable {
     static func barGrid(_ rhythm: RhythmAnalysisResult) -> [TimeInterval] {
         let beats = rhythm.beatGrid
         guard beats.count >= 4 else { return [] }
-        let phase = beats.first(where: \.isDownbeat).map { $0.index % 4 } ?? (0..<4).max { left, right in
-            stride(from: left, to: beats.count, by: 4).reduce(0.0) { $0 + Double(beats[$1].strength) } <
-            stride(from: right, to: beats.count, by: 4).reduce(0.0) { $0 + Double(beats[$1].strength) }
-        } ?? 0
-        return stride(from: phase, to: beats.count, by: 4).map { index in
+        var phase = beats.first(where: \.isDownbeat).map { $0.index % 4 }
+        if phase == nil {
+            var best = -1.0
+            for candidate in 0..<4 {
+                var score = 0.0
+                for index in stride(from: candidate, to: beats.count, by: 4) {
+                    score += Double(beats[index].strength)
+                }
+                if score > best { best = score; phase = candidate }
+            }
+        }
+        let downbeatPhase = phase ?? 0
+        return stride(from: downbeatPhase, to: beats.count, by: 4).map { index in
             let time = beats[index].time
             return rhythm.onsetEvents.min { abs($0 - time) < abs($1 - time) }
                 .flatMap { abs($0 - time) <= 0.03 ? $0 : nil } ?? time
