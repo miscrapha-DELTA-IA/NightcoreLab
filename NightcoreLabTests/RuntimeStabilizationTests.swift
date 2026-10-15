@@ -46,6 +46,22 @@ final class RuntimeStabilizationTests: XCTestCase {
     }
 
     @MainActor
+    func testOfflineSaveCoordinatesAudioLyricsAndAnalysisInOrder() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("song.m4a")
+        var stages: [String] = []
+        let ready = try await OfflinePreparation.run(
+            audio: { stages.append("audio"); return url },
+            syncedLyrics: { stages.append("lyrics"); return true },
+            songDNA: { source in
+                XCTAssertEqual(source, url)
+                stages.append("SongDNA")
+                return true
+            })
+        XCTAssertEqual(stages, ["audio", "lyrics", "SongDNA"])
+        XCTAssertTrue(ready.isReady)
+    }
+
+    @MainActor
     func testHapticPreferencePersistsAndRecordingMutesMechanicalFeedback() throws {
         let suite = "stage32.haptics.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -546,6 +562,7 @@ final class RuntimeStabilizationTests: XCTestCase {
         let level = meter.snapshot()
         XCTAssertGreaterThan(level.rms, 0)
         XCTAssertGreaterThan(level.bass, 0)
+        XCTAssertGreaterThan(level.mid, 0)
         let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse,
                                             timestamp: 2)
         let off = MarbleLiveResponse.apply(base, levels: level, mode: .off)

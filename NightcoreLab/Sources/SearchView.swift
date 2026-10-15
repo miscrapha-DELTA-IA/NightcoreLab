@@ -334,7 +334,7 @@ struct SearchView: View {
                 Text("✓ Offline").font(.caption2.weight(.bold))
                     .foregroundStyle(.green)
             } else if offline.savingIDs.contains(track.id) {
-                ProgressView(value: downloader.offlineDownloadProgress[track.id] ?? 0)
+                ProgressView(value: offlineProgress(for: track))
                     .frame(width: 42)
                     .accessibilityLabel(offline.phases[track.id] ?? "Salvando offline")
             } else {
@@ -345,6 +345,16 @@ struct SearchView: View {
                 .disabled(!isEnabled)
                 .accessibilityIdentifier("searchDrawer.saveOffline.\(track.id)")
             }
+        }
+    }
+
+    private func offlineProgress(for track: Track) -> Double {
+        switch offline.phases[track.id] {
+        case "Baixando áudio":
+            return 0.7 * (downloader.offlineDownloadProgress[track.id] ?? 0)
+        case "Salvando letra": return 0.8
+        case "Analisando música": return 0.9
+        default: return 0
         }
     }
 

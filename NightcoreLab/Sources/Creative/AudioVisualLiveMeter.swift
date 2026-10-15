@@ -7,6 +7,7 @@ import os
 struct LiveAudioLevels: Equatable, Sendable {
     var rms: Double = 0
     var bass: Double = 0
+    var mid: Double = 0
     var onset: Double = 0
     var beatPulse: Double = 0
     var songEnergy: Double = 0
@@ -49,6 +50,7 @@ final class AudioVisualLiveMeter: @unchecked Sendable {
     private struct State {
         var sample = LiveAudioLevels.silence
         var lowpass: Float = 0
+        var midpass: Float = 0
         var envelope = MusicalBeatEnvelope()
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -63,29 +65,36 @@ final class AudioVisualLiveMeter: @unchecked Sendable {
         let step = 4
         let rate = buffer.format.sampleRate / Double(step)
         let a = Float(min(0.5, 2 * Double.pi * 140 / (rate + 2 * Double.pi * 140)))
+        let midA = Float(min(0.5, 2 * Double.pi * 1_200 / (rate + 2 * Double.pi * 1_200)))
         var low = state.withLock { $0.lowpass }
+        var mid = state.withLock { $0.midpass }
         var power = 0.0
         var bassPower = 0.0
+        var midPower = 0.0
         var n = 0
         for i in stride(from: 0, to: count, by: step) {
             let x = samples[i]
             guard x.isFinite else { continue }
             low += a * (x - low)
+            mid += midA * (x - mid)
             power += Double(x) * Double(x)
             bassPower += Double(low) * Double(low)
+            midPower += Double(mid - low) * Double(mid - low)
             n += 1
         }
         guard n > 0 else { return }
         let rms = min(1, sqrt(power / Double(n)) * 3.6)
         let bass = min(1, sqrt(bassPower / Double(n)) * 5.0)
+        let warmth = min(1, sqrt(midPower / Double(n)) * 4.0)
         let dt = Double(count) / buffer.format.sampleRate
         state.withLock {
             let response = $0.envelope.advance(bass: bass, rms: rms, dt: dt)
-            $0.sample = LiveAudioLevels(rms: rms, bass: bass,
+            $0.sample = LiveAudioLevels(rms: rms, bass: bass, mid: warmth,
                                         onset: response.onset,
                                         beatPulse: response.beat,
                                         songEnergy: response.energy)
             $0.lowpass = low
+            $0.midpass = mid
         }
     }
 }

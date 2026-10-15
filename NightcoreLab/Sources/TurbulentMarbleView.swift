@@ -426,7 +426,8 @@ private final class OrganicReactiveMotionState {
     func advance(date: Date, levels: LiveAudioLevels) -> Double {
         defer { lastDate = date }
         guard let lastDate else { return envelope.fluid }
-        return envelope.advance(warmth: levels.bass, sustain: levels.songEnergy,
+        return envelope.advance(warmth: levels.bass * 0.55 + levels.mid * 0.45,
+                                sustain: levels.songEnergy,
                                 elapsed: max(0, date.timeIntervalSince(lastDate)))
     }
 }

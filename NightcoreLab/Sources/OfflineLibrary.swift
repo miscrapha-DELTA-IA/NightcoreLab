@@ -8,6 +8,18 @@ struct OfflineReadiness: Equatable {
     var isReady: Bool { audio && syncedLyrics && songDNA }
 }
 
+enum OfflinePreparation {
+    @MainActor
+    static func run(audio: () async throws -> URL,
+                    syncedLyrics: () async -> Bool,
+                    songDNA: (URL) async throws -> Bool) async throws -> OfflineReadiness {
+        let url = try await audio()
+        let lyrics = await syncedLyrics()
+        let analysis = try await songDNA(url)
+        return OfflineReadiness(audio: true, syncedLyrics: lyrics, songDNA: analysis)
+    }
+}
+
 /// Coordinates the three existing caches without selecting a new playback source.
 @MainActor
 final class OfflineLibrary: ObservableObject {
@@ -49,19 +61,23 @@ final class OfflineLibrary: ObservableObject {
         phases[track.id] = "Baixando áudio"
         Task {
             do {
-                let url = try await downloader.saveOfflineAudio(track)
-                phases[track.id] = "Salvando letra"
                 let meta = TrackMetadata(videoID: track.id, rawTitle: track.title,
                     channel: nil, cleanArtist: track.cleanArtist,
                     cleanTitle: track.cleanTitle, album: track.album,
                     duration: track.duration)
-                let hasLyrics = await lyrics.ensureSyncedLyrics(meta)
-                if hasLyrics { lyricsReadyIDs.insert(track.id) }
-                phases[track.id] = "Analisando música"
-                let result = try await MusicIntelligenceEngine.shared.analysis(for: url)
-                if OfflineReadiness(audio: true, syncedLyrics: hasLyrics,
-                    songDNA: result.energyTimeline != nil &&
-                        result.isTerminal).isReady {
+                let readiness = try await OfflinePreparation.run(
+                    audio: { try await downloader.saveOfflineAudio(track) },
+                    syncedLyrics: {
+                        self.phases[track.id] = "Salvando letra"
+                        return await lyrics.ensureSyncedLyrics(meta)
+                    },
+                    songDNA: { url in
+                        self.phases[track.id] = "Analisando música"
+                        let result = try await MusicIntelligenceEngine.shared.analysis(for: url)
+                        return result.energyTimeline != nil && result.isTerminal
+                    })
+                if readiness.syncedLyrics { lyricsReadyIDs.insert(track.id) }
+                if readiness.isReady {
                     readyIDs.insert(track.id)
                 } else {
                     failedIDs.insert(track.id)

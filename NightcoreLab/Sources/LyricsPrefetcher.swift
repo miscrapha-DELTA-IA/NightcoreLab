@@ -7,6 +7,7 @@ struct CachedLyricsChoice: Codable, Sendable {
     var score: Double
     var needsReview: Bool
     var pinned: Bool                     // escolha manual do usuário: nunca sobrescrever
+    var offlinePinned: Bool? = nil        // download explícito: manter letra além do TTL
     var alternatives: [LRCLIBRecord]     // top candidatos p/ "trocar letra" sem rede
     var savedAt: Date
 }
@@ -26,7 +27,7 @@ struct LyricsDiskCache: Sendable {
         guard let data = try? Data(contentsOf: url(id)),
               let c = try? JSONDecoder().decode(CachedLyricsChoice.self, from: data) else { return nil }
         let age = Date().timeIntervalSince(c.savedAt)
-        if c.pinned { return c }
+        if c.pinned || c.offlinePinned == true { return c }
         return age < (c.selected == nil ? Self.negativeTTL : Self.positiveTTL) ? c : nil
     }
 
@@ -90,11 +91,18 @@ actor LyricsPrefetcher {
 
     /// Offline preparation never replaces the current Karaoke lyrics in LyricsStore.
     func ensureSyncedLyrics(_ meta: TrackMetadata) async -> Bool {
-        if let cached = cache.load(meta.videoID) {
-            return cached.selected?.syncedLyrics?.isEmpty == false
+        if var cached = cache.load(meta.videoID),
+           cached.selected?.syncedLyrics?.isEmpty == false {
+            cached.offlinePinned = true
+            cache.save(cached, id: meta.videoID)
+            return true
         }
         await run(meta, apply: false)
-        return cache.load(meta.videoID)?.selected?.syncedLyrics?.isEmpty == false
+        guard var choice = cache.load(meta.videoID),
+              choice.selected?.syncedLyrics?.isEmpty == false else { return false }
+        choice.offlinePinned = true
+        cache.save(choice, id: meta.videoID)
+        return true
     }
 
     /// A tela pode aguardar o trabalho já em curso, em vez de iniciar um segundo
