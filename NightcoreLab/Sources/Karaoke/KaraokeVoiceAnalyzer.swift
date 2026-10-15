@@ -71,13 +71,15 @@ final class KaraokeMicrophoneCapture: @unchecked Sendable {
         guard rate >= 4_000, rate.isFinite else { return }
         // Box low-pass/downsample to ~8 kHz. Bounded to the latest 2,048 bins.
         let stride = max(1, Int(rate / 8_000))
-        count = min(samples.count, Int(buffer.frameLength) / stride)
-        let offset = max(0, Int(buffer.frameLength) - count * stride)
-        for i in 0..<count {
+        let produced = min(samples.count, Int(buffer.frameLength) / stride)
+        if count + produced > samples.count { count = 0 }
+        let offset = max(0, Int(buffer.frameLength) - produced * stride)
+        for i in 0..<produced {
             var sum: Float = 0
             for j in 0..<stride { sum += data[offset + i * stride + j] }
-            samples[i] = sum / Float(stride)
+            samples[count + i] = sum / Float(stride)
         }
+        count += produced
         sampleRate = rate / Double(stride)
         pendingTime = sourceTime
         capturedAt = ProcessInfo.processInfo.systemUptime

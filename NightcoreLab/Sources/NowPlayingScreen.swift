@@ -622,6 +622,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 updateKaraokePresentation(true)
             }
         }
+        .onChange(of: lyricsStore.status) { _, status in
+            if showsKaraoke && status == .ready { updateKaraokePresentation(true) }
+        }
         .onChange(of: showsKaraoke) { _, shown in
             updateKaraokePresentation(shown)
             if !shown {
