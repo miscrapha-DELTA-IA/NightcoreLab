@@ -70,8 +70,29 @@ enum AlbumArtistCollectionResolver {
 
     static func resolve(anchor: Track, candidates: [Track],
                         mode: AlbumArtistMode = .both) -> AlbumArtistCollection {
-        var seen = Set<String>()
-        let tracks = ([anchor] + candidates).filter { seen.insert($0.id).inserted }
+        // Merge metadata across cached/history/search copies of the same ID;
+        // a sparse playback track must not discard an album from a richer cache.
+        var tracks: [Track] = []
+        var positions: [String: Int] = [:]
+        for candidate in [anchor] + candidates {
+            if let index = positions[candidate.id] {
+                var current = tracks[index]
+                if normalize(current.album) == nil, normalize(candidate.album) != nil {
+                    current.album = candidate.album
+                }
+                if normalize(current.cleanArtist) == nil, normalize(candidate.cleanArtist) != nil {
+                    current.cleanArtist = candidate.cleanArtist
+                }
+                if current.trackNumber == nil { current.trackNumber = candidate.trackNumber }
+                if current.cleanTitle == nil { current.cleanTitle = candidate.cleanTitle }
+                if current.duration == nil { current.duration = candidate.duration }
+                tracks[index] = current
+            } else {
+                positions[candidate.id] = tracks.count
+                tracks.append(candidate)
+            }
+        }
+        let anchor = tracks[0]
         let album = albumTitle(for: anchor)
         let albumKey = normalize(album)
         let artist = artistName(for: anchor)
@@ -82,11 +103,13 @@ enum AlbumArtistCollectionResolver {
             return key == other
         }
         // Explicit ID3 track numbers sort the album; missing numbers keep source order.
-        let orderedAlbum = matchedAlbum.enumerated().sorted { lhs, rhs in
-            let a = lhs.element.trackNumber, b = rhs.element.trackNumber
-            if let a, let b, a != b { return a < b }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
+        let orderedAlbum = matchedAlbum.allSatisfy({ $0.trackNumber != nil })
+            ? matchedAlbum.enumerated().sorted { lhs, rhs in
+                if lhs.element.trackNumber != rhs.element.trackNumber {
+                    return lhs.element.trackNumber! < rhs.element.trackNumber!
+                }
+                return lhs.offset < rhs.offset
+            }.map(\.element) : matchedAlbum
         let byArtist = tracks.filter { track in
             guard let key, let other = artistKey(track) else { return false }
             return key == other
