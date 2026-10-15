@@ -26,6 +26,7 @@ struct SearchView: View {
     var focusRequest: Int = 0
     var integrated: Bool = false
     var recentTracks: [Track] = []
+    var activeTrack: Track? = nil
     var queuedTracks: [Track] = []
     var pendingTrackID: String? = nil
     @ObservedObject var offline: OfflineLibrary
@@ -51,6 +52,8 @@ struct SearchView: View {
     @State private var submittedQuery: String?
     @State private var searchRequestID = UUID()
     @State private var hubTab: DrawerHubTab = .mix
+    @State private var collectionAnchor: Track?
+    @State private var collectionMode: AlbumArtistMode = .both
     @State private var shuffleSeed = 0
     @FocusState private var isFocused: Bool
 
@@ -75,6 +78,24 @@ struct SearchView: View {
     }
     private var offlineTracks: [Track] {
         downloader.allCachedTracks.filter { offline.readyIDs.contains($0.id) }
+    }
+    /// Local library, offline cache, recent history, bundled catalog and search cache.
+    private var collectionCandidates: [Track] {
+        let history = playHistory.entries.values.sorted { $0.lastPlayed > $1.lastPlayed }
+            .map { $0.hit.asTrack }
+        return recentTracks + downloader.allCachedTracks + history + queuedTracks +
+            suggestedTracks + searchResults + omnibox.results.map(\.asTrack) + mixTracks
+    }
+    private var collectionResult: AlbumArtistCollection? {
+        guard let anchor = collectionAnchor ?? activeTrack ?? recentTracks.first else { return nil }
+        return AlbumArtistCollectionResolver.resolve(
+            anchor: anchor, candidates: collectionCandidates, mode: collectionMode)
+    }
+    private func focusAlbumArtist(_ track: Track) {
+        collectionAnchor = downloader.cachedTrack(track)
+        collectionMode = .both
+        hubTab = .albumArtist
+        isFocused = false
     }
     private var isDiscoverVisible: Bool {
         PanelPresentation.showsDiscover(hidden: panels.hidden, isZen: panels.isZen,
@@ -189,6 +210,9 @@ struct SearchView: View {
                             .disabled(!isEnabled)
                             .accessibilityIdentifier("searchDrawer.recent.\(track.id)")
                             offlineControl(track)
+                            Button("💿") { focusAlbumArtist(track) }
+                                .font(.caption2)
+                                .accessibilityLabel("Álbum e artista de \(track.title)")
                             }
                         }
                     }
@@ -228,6 +252,8 @@ struct SearchView: View {
                                 .accessibilityIdentifier("searchDrawer.playQueue.\(track.id)")
                         }
                         offlineControl(track)
+                        Button("💿") { focusAlbumArtist(track) }
+                            .accessibilityLabel("Álbum e artista de \(track.title)")
                         Button(role: .destructive) { onRemoveQueue(track) } label: {
                             Image(systemName: "xmark.circle.fill")
                         }
@@ -248,10 +274,13 @@ struct SearchView: View {
 
     private var quickHub: some View {
         VStack(alignment: .leading, spacing: 11) {
-            HStack(spacing: 7) {
-                hubPill(.mix, "⚡ Mix 15")
-                hubPill(.offline, "📥 Offline (\(offlineTracks.count))")
-                hubPill(.queue, "🎵 Fila & Recentes")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    hubPill(.mix, "⚡ Mix 15")
+                    hubPill(.offline, "📥 Offline (\(offlineTracks.count))")
+                    hubPill(.queue, "🎵 Fila")
+                    hubPill(.albumArtist, "💿 Álbum & Artista")
+                }
             }
             .accessibilityIdentifier("searchDrawer.hubTabs")
             switch hubTab {
@@ -280,6 +309,8 @@ struct SearchView: View {
                 ForEach(offlineTracks) { track in hubTrackRow(track) }
             case .queue:
                 quickAccess
+            case .albumArtist:
+                albumArtistHub
             }
         }
         .padding(11)
@@ -287,12 +318,74 @@ struct SearchView: View {
         .accessibilityIdentifier("searchDrawer.quickHub")
     }
 
+    @ViewBuilder
+    private var albumArtistHub: some View {
+        if let result = collectionResult {
+            HStack(spacing: 10) {
+                WebImage(url: result.anchor.thumbnailURL)
+                    .resizable().scaledToFill().frame(width: 52, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(result.artistName ?? "Artista não identificado")
+                        .font(.subheadline.weight(.bold)).lineLimit(1)
+                    Text(result.albumTitle ?? "Álbum não informado")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+            }
+            Picker("Organizar músicas por", selection: $collectionMode) {
+                Text("💿 Álbum").tag(AlbumArtistMode.album)
+                Text("🎤 Artista").tag(AlbumArtistMode.artist)
+                Text("✨ Ambos").tag(AlbumArtistMode.both)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("searchDrawer.albumArtistMode")
+            if let notice = result.fallbackNotice {
+                Text(notice).font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(.white.opacity(0.09), in: Capsule())
+                    .accessibilityIdentifier("searchDrawer.albumFallback")
+            }
+            HStack(spacing: 7) {
+                Button("▶ Tocar Tudo") { onPlayMix(result.playbackTracks) }
+                    .accessibilityIdentifier("searchDrawer.albumPlayAll")
+                Spacer(minLength: 0)
+                Button("🔀 Aleatório") { onPlayMix(result.playbackTracks.shuffled()) }
+                    .accessibilityIdentifier("searchDrawer.albumShuffle")
+                Spacer(minLength: 0)
+                Button("📥 Salvar Tudo Offline") {
+                    onSaveMixOffline(result.playbackTracks)
+                }
+                .accessibilityIdentifier("searchDrawer.albumSaveAll")
+            }
+            .font(.caption2.weight(.bold)).foregroundStyle(theme.accent)
+            .disabled(!isEnabled || result.playbackTracks.isEmpty)
+            if !result.albumTracks.isEmpty {
+                Text("💿 Do Álbum: \(result.albumTitle ?? "Álbum")")
+                    .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                ForEach(result.albumTracks) { track in hubTrackRow(track) }
+            }
+            if !result.artistTracks.isEmpty {
+                Text("🎤 Mais de \(result.artistName ?? "este artista")")
+                    .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                ForEach(result.artistTracks) { track in hubTrackRow(track) }
+            }
+            if result.playbackTracks.isEmpty {
+                Text("Nenhuma faixa encontrada na biblioteca e no cache atual.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } else {
+            Text("Toque uma música para explorar o álbum ou outras faixas do artista.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private func hubPill(_ tab: DrawerHubTab, _ title: String) -> some View {
         Button { hubTab = tab } label: {
             Text(title).font(.caption2.weight(.bold)).lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .padding(.horizontal, 8).padding(.vertical, 8)
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .fixedSize(horizontal: true, vertical: false)
                 .background(hubTab == tab ? theme.accent.opacity(0.23) : .white.opacity(0.07),
                             in: Capsule())
         }
@@ -311,8 +404,15 @@ struct SearchView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track.cleanTitle ?? track.title)
                             .font(.caption.weight(.semibold)).lineLimit(1)
-                        Text(track.cleanArtist ?? "Música")
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        Button {
+                            focusAlbumArtist(track)
+                        } label: {
+                            Label(AlbumArtistCollectionResolver.artistName(for: track) ?? "Álbum & Artista",
+                                  systemImage: "opticaldisc")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
                         if offline.lyricsReadyIDs.contains(track.id) {
                             Text("🎤 Letra").font(.caption2).foregroundStyle(theme.accent)
                         }
@@ -410,7 +510,7 @@ struct SearchView: View {
                         .accessibilityIdentifier("searchDrawer.searching")
                 }
 
-                if showsQuickAccess {
+                if showsQuickAccess || hubTab == .albumArtist {
                     quickHub
                 }
 
@@ -540,7 +640,12 @@ struct SearchView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(!isEnabled)
-                                    offlineControl(track)
+                                    HStack(spacing: 8) {
+                                        Button("💿") { focusAlbumArtist(track) }
+                                            .accessibilityLabel("Álbum e artista de \(track.title)")
+                                            .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
+                                        offlineControl(track)
+                                    }
                                     }
                                     .frame(width: 152)
                                 }
