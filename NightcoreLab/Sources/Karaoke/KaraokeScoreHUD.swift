@@ -19,11 +19,11 @@ struct KaraokeScoreHUD: View {
     @State private var lastMultiplier = 1
 
     var body: some View {
-        if session.isHUDVisible {
+        if session.isPresented {
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(session.mode == .passive ? "RITMO DA FAIXA · SEM MICROFONE" : (session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO"))
+                        Text(session.mode == .off ? "MICROFONE INATIVO" : (session.mode == .passive ? "RITMO DA FAIXA · SEM MICROFONE" : (session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")))
                             .font(.system(size: 9, weight: .bold))
                         Text(session.snapshot.totalScore, format: .number)
                             .font(.title3.bold().monospacedDigit())
@@ -31,8 +31,7 @@ struct KaraokeScoreHUD: View {
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
-                        if session.mode == .microphone {
-                            HStack(spacing: 5) {
+                        HStack(spacing: 5) {
                                 Image(systemName: "mic.fill")
                                 GeometryReader { size in
                                     Capsule().fill(.white.opacity(0.16))
@@ -46,7 +45,6 @@ struct KaraokeScoreHUD: View {
                             .accessibilityLabel("Nível do microfone")
                             .accessibilityValue("\(Int(session.liveMicLevel * 100)) por cento")
                             .accessibilityIdentifier("karaoke.liveMicLevel")
-                        }
                         Text("\(session.snapshot.multiplier)x · \(session.snapshot.streakCombo) combo")
                             .font(.caption.bold().monospacedDigit())
                             .padding(.horizontal, 9).padding(.vertical, 5)
@@ -55,6 +53,10 @@ struct KaraokeScoreHUD: View {
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
                     }
+                }
+                if session.mode == .off {
+                    Text(session.message ?? "Ative o microfone para pontuar sua voz.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 ProgressView(value: session.snapshot.vocalAccuracy)
                     .tint(accent)
