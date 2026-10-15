@@ -2,6 +2,36 @@ import XCTest
 @testable import NightcoreLab
 
 final class NowPlayingScreenTests: XCTestCase {
+    @MainActor
+    func testSearchDrawerToggleAndFocusDoNotTouchPlayerTransport() {
+        let audio = AudioEngineManager()
+        let clock = audio.lyricsClock
+        let generation = audio.scheduleGeneration
+        var drawer = SearchDrawerState()
+        XCTAssertFalse(drawer.isOpen)
+        drawer.toggle()
+        XCTAssertTrue(drawer.isOpen)
+        drawer.openForSearch()
+        XCTAssertEqual(drawer.focusRequest, 1)
+        drawer.close()
+        XCTAssertFalse(drawer.isOpen)
+        XCTAssertTrue(clock === audio.lyricsClock)
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+        XCTAssertFalse(audio.isPlaying)
+    }
+
+    func testPlayerOwnsDrawerAndMusicSelectionUsesExistingPlaybackPath() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let player = try String(contentsOf: root.appendingPathComponent("NowPlayingScreen.swift"))
+        let content = try String(contentsOf: root.appendingPathComponent("ContentView.swift"))
+        XCTAssertTrue(player.contains("playerWithDrawer"))
+        XCTAssertTrue(player.contains(".hideablePanel(.player, edge: .top)"))
+        XCTAssertTrue(content.contains("searchDrawerContent: { focusRequest in musicWorkspace"))
+        XCTAssertTrue(content.contains("playTrack(track)"))
+        XCTAssertTrue(content.contains("searchDrawer.close()"))
+    }
+
     func testIntegratedPlayerKeepsBackgroundStylesAvailable() {
         // The embedded card keeps using the prior four PlayerBackgroundStyle choices.
         XCTAssertEqual(PlayerBackgroundStyle.allCases.count, 4)

@@ -522,7 +522,8 @@ private struct KaraokeLineView: View {
                     magazineAppearance: resolved.magazine?.legacy,
                     isCurrentLine: status == .active,
                     isPastLine: status == .past,
-                    animation: frame.animation(for: resolved.id)
+                    animation: frame.animation(for: resolved.id),
+                    wordSeed: resolved.seed
                 )
                 .gapAfter(resolved.word.spaceAfter ? 9 : 0)
             }
@@ -625,6 +626,7 @@ struct KaraokeWordView: View {
     /// All creative decisions are resolved by TypographyAnimationEngine.
     /// nil is reserved for external callers using the existing legacy API.
     var animation: TypographyAnimationState? = nil
+    var wordSeed: UInt64? = nil
     /// Appearance-only inputs so the Story can reuse this exact renderer.
     /// Defaults are the live karaoke values and leave its pixels unchanged.
     var tracking: CGFloat = 0
@@ -650,6 +652,11 @@ struct KaraokeWordView: View {
     @ViewBuilder var body: some View {
         if typographyStyle == .magazineCutout, let magazineAppearance {
             cutout(appearance: magazineAppearance)
+        } else if let appearance = ObjectWordStyleResolver.resolve(
+            style: typographyStyle,
+            seed: wordSeed ?? TypographyResolver.stableSeed(lineID: 0, word: word),
+            progress: fill) {
+            objectWord(appearance: appearance)
         } else if let animation, !animation.isTransformNeutral {
             // Generic transform output can render future Glitch/Kinetic/Minimal
             // without adding temporal equations or timers to the view.
@@ -733,6 +740,31 @@ struct KaraokeWordView: View {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(tone.background(theme: theme))
             }
+    }
+
+    private func objectWord(appearance: ObjectWordAppearance) -> some View {
+        let tile = ObjectWordTile(
+            text: word.text, appearance: appearance, accent: fillColor,
+            fontSize: fontSize, maxWordWidth: maxWordWidth,
+            minimumScaleFactor: minimumScaleFactor, filled: false)
+        return tile
+            .overlay(alignment: .leading) {
+                if appearance.fill > 0 {
+                    ObjectWordTile(
+                        text: word.text, appearance: appearance, accent: fillColor,
+                        fontSize: fontSize, maxWordWidth: maxWordWidth,
+                        minimumScaleFactor: minimumScaleFactor, filled: true)
+                    .mask(alignment: .leading) {
+                        GeometryReader { geometry in
+                            Rectangle().frame(width: geometry.size.width * appearance.fill)
+                        }
+                    }
+                }
+            }
+            .rotationEffect(.degrees(appearance.rotation))
+            .scaleEffect((animation?.scale ?? 1) *
+                         (1 + 0.07 * sin(.pi * appearance.fill)))
+            .opacity(isPastLine ? 0.55 : (isCurrentLine ? 1 : 0.72))
     }
 }
 

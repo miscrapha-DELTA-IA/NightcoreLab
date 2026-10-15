@@ -1,4 +1,17 @@
 import SwiftUI
+
+/// Discovery presentation only. Playback and the player visibility live elsewhere.
+struct SearchDrawerState: Equatable {
+    private(set) var isOpen = false
+    private(set) var focusRequest = 0
+
+    mutating func toggle() { isOpen.toggle() }
+    mutating func close() { isOpen = false }
+    mutating func openForSearch() {
+        isOpen = true
+        focusRequest += 1
+    }
+}
 import Observation
 
 // =============================================================================

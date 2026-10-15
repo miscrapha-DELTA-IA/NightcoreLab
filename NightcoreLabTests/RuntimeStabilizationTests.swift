@@ -6,6 +6,21 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    func testObjectWordAppearanceIsFrameOrderIndependent() throws {
+        let word = WordSync(id: 2, text: "NOITE", start: 1, end: 3, spaceAfter: false)
+        let seed = TypographyResolver.stableSeed(lineID: 7, word: word)
+        for style in [TypographyStyle.vinylSticker, .dymoTicket, .liquidCapsule] {
+            let forward = [0.0, 0.3, 0.7, 1.0].map {
+                ObjectWordStyleResolver.resolve(style: style, seed: seed, progress: $0)
+            }
+            let reverse = [1.0, 0.7, 0.3, 0.0].map {
+                ObjectWordStyleResolver.resolve(style: style, seed: seed, progress: $0)
+            }
+            XCTAssertEqual(forward, Array(reverse.reversed()))
+            XCTAssertEqual(forward.map { $0?.fill }, [0, 0.3, 0.7, 1])
+        }
+    }
+
     func testKaraokeGuideSourceTimeIsMonotonicAndBoundarySafe() {
         let samples = stride(from: 0.0, through: 4.0, by: 0.05)
             .map { KaraokeTimingGuide.pacing(start: 1, end: 3, at: $0 + 0.25) }

@@ -4,6 +4,26 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    func testObjectModelsSweepAcrossUnsyncedLineWords() {
+        let line = TimedLyricLine(id: 9, start: 4, end: 8, words: [
+            WordSync(id: 0, text: "VEM", start: 4, end: 8, spaceAfter: true),
+            WordSync(id: 1, text: "CANTAR", start: 4, end: 8, spaceAfter: false)
+        ], precision: .line)
+        for style in [TypographyStyle.vinylSticker, .dymoTicket, .liquidCapsule] {
+            let preset = TypographyPreset.current(style: style, font: .classic)
+            func progress(_ time: Double) -> [Double] {
+                TypographyResolver.resolve(
+                    LyricsState(line: line, status: .active), at: time,
+                    features: nil, preset: preset).words.map(\.progress)
+            }
+            XCTAssertEqual(progress(4), [0, 0])
+            XCTAssertEqual(progress(5), [0.5, 0])
+            XCTAssertEqual(progress(6), [1, 0])
+            XCTAssertEqual(progress(7), [1, 0.5])
+            XCTAssertEqual(progress(8), [1, 1])
+        }
+    }
+
     func testEntranceCountdownForFirstLineAndInstrumentalBreak() {
         let lines = [timingLine(id: 0, start: 4, end: 5),
                      timingLine(id: 1, start: 10, end: 11),

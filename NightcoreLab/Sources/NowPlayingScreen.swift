@@ -305,7 +305,7 @@ private struct CreatorStudioPanel: View {
 
 // MARK: - Tela
 
-struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsContent: View>: View {
+struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, Extras: View, LyricsContent: View>: View {
     let track: TrackInfo
     let clock: PlaybackClock
     let audio: AudioEngineManager
@@ -319,12 +319,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @Binding var isKaraokeMode: Bool
     @Binding var lyricsCleanMode: Bool
     @Binding var backgroundStyle: BackgroundStyle
+    @Binding var searchDrawer: SearchDrawerState
     let playerBackgroundStyle: PlayerBackgroundStyle
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
     @ViewBuilder var header: () -> Header
     @ViewBuilder var playerDetails: () -> PlayerDetails
+    @ViewBuilder var searchDrawerContent: (Int) -> DrawerContent
     @ViewBuilder var normalExtras: () -> Extras
     @ViewBuilder var karaokeContent: () -> LyricsContent
 
@@ -423,7 +425,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             VStack(spacing: 0) {
                 if showsKaraoke {
                     if isTrackLoaded {
-                        unifiedPlayerCard
+                        playerWithDrawer
                             .padding(.horizontal, 20)
                             .padding(.top, 74)
                             .hideablePanel(.player, edge: .top)
@@ -453,13 +455,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                                         .padding(.top, 74)
                                         .hideablePanel(.header, edge: .top)
                                     Spacer(minLength: 12)
-                                    unifiedPlayerCard
+                                    playerWithDrawer
                                         .frame(maxWidth: .infinity, alignment: .center)
                                         .padding(.horizontal, 20)
                                         .hideablePanel(.player, edge: .top)
                                     Spacer(minLength: 12)
                                 }
                                 .frame(minHeight: viewport.size.height)
+                                .padding(.bottom, searchDrawer.isOpen ? 360 : 0)
+                                .zIndex(5)
                             } else {
                                 // Keep the import shortcut close to discovery
                                 // when no track is loaded, without a blank hero.
@@ -796,6 +800,39 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
 
     /// A antiga janela Reprodução agora é a metade inferior deste cartão.
     /// O mesmo card recebe a capa, transporte, scrubber e metal líquido.
+    private var playerWithDrawer: some View {
+        unifiedPlayerCard
+            .overlay(alignment: .top) {
+                GeometryReader { card in
+                    VStack(spacing: 0) {
+                        SearchDrawerHandle(state: $searchDrawer, accent: appTheme.accent)
+                        ScrollView {
+                            searchDrawerContent(searchDrawer.focusRequest)
+                                .padding(12)
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                        .frame(height: searchDrawer.isOpen ? 340 : 0)
+                        .opacity(searchDrawer.isOpen ? 1 : 0)
+                        .clipped()
+                        .allowsHitTesting(searchDrawer.isOpen)
+                        .accessibilityHidden(!searchDrawer.isOpen)
+                        .background(.ultraThinMaterial,
+                                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(appTheme.accent.opacity(0.32), lineWidth: 1)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .offset(y: card.size.height - 3)
+                }
+            }
+            .zIndex(5)
+            .animation(reduceMotion ? .easeInOut(duration: 0.2) :
+                       .spring(response: 0.38, dampingFraction: 0.86),
+                       value: searchDrawer.isOpen)
+    }
+
     private var unifiedPlayerCard: some View {
         VStack(spacing: showsKaraoke ? 0 : 8) {
             PlayerHeader(
@@ -1053,6 +1090,50 @@ struct LyricsFadeMask: View {
 }
 
 // MARK: - Header: mesma view, dois layouts (AnyLayout preserva identidade)
+
+private struct SearchDrawerHandle: View {
+    @Binding var state: SearchDrawerState
+    let accent: Color
+    @Environment(PanelStore.self) private var panels
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button {
+                panels.setVisible(true, for: .omnibox)
+                state.openForSearch()
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .frame(width: 38, height: 40)
+            }
+            .accessibilityLabel("Buscar música e focar pesquisa")
+
+            Button {
+                state.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Text("Buscar música · Biblioteca")
+                        .lineLimit(1)
+                    Capsule().fill(accent.opacity(0.7))
+                        .frame(width: 22, height: 3)
+                    Image(systemName: state.isOpen ? "chevron.up" : "chevron.down")
+                }
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Abrir ou recolher busca e biblioteca")
+            .accessibilityValue(state.isOpen ? "Aberta" : "Recolhida")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: 300)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(accent.opacity(0.55), lineWidth: 1))
+        .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+        .frame(maxWidth: .infinity)
+    }
+}
 
 private struct PlayerHeader: View {
     let track: TrackInfo

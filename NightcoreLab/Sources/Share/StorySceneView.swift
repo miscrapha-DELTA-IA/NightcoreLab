@@ -398,6 +398,7 @@ private struct StoryLyricLine: View {
                     isCurrentLine: frame.status == .active,
                     isPastLine: frame.status == .past,
                     animation: animation,
+                    wordSeed: resolved.seed,
                     tracking: frame.preset.font.tracking,
                     glowRadius: 7 * glowMultiplier,
                     minimumScaleFactor: 0.55)
