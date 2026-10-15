@@ -414,7 +414,7 @@ struct ContentView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(2)
-                Text("v37 · " + currentTheme.displayName.uppercased())
+                Text("v38 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -559,6 +559,7 @@ struct ContentView: View {
                     focusRequest: focusRequest,
                     integrated: true,
                     recentTracks: quickLibraryTracks,
+                    activeTrack: currentTrack,
                     queuedTracks: playbackQueue.upNextQueue,
                     pendingTrackID: searchDrawer.pendingTrackID,
                     offline: offlineLibrary,

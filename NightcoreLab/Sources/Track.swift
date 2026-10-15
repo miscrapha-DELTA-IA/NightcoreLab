@@ -12,6 +12,8 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var cleanTitle: String? = nil
     var album: String? = nil
     var duration: TimeInterval? = nil
+    /// Optional ID3 track number; old cached records decode without this field.
+    var trackNumber: Int? = nil
 
     var url: URL { URL(string: "https://www.youtube.com/watch?v=\(id)")! }
 
