@@ -104,6 +104,23 @@ final class AudioEngineManager {
     @ObservationIgnored private var stemFiles: [StemKind: AVAudioFile] = [:]
     @ObservationIgnored private var stemPrepareTask: Task<Void, Never>?
     @ObservationIgnored private var stemRampTask: Task<Void, Never>?
+    /// Live spectral proxy (EQ cannot truly isolate instruments).
+    private let stemEQ = AVAudioUnitEQ(numberOfBands: 5)
+    static let stemRange: ClosedRange<Float> = 0...2
+    nonisolated static func stemGainDB(for level: Float) -> Float {
+        let v = min(2, max(0, level))
+        return v <= 1 ? (v - 1) * 18 : (v - 1) * 9
+    }
+    func liveStemEQGain(_ kind: StemKind) -> Float {
+        let index: Int
+        switch kind {
+        case .vocal: index = 0
+        case .instrumental: index = 1
+        case .drums: index = 2
+        case .bass: index = 4
+        }
+        return stemEQ.bands[index].gain
+    }
     private(set) var centerCutEnabled = false
     private(set) var centerCutAvailable = true
     @ObservationIgnored private var centerCutFile: AVAudioFile?
@@ -169,7 +186,7 @@ final class AudioEngineManager {
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
         [player, centerCutPlayer] + StemKind.allCases.compactMap { stemPlayers[$0] } +
-        [upmix, varispeed, timePitch, bassEQ, reverbNode, performanceMixer, limiter]
+        [upmix, varispeed, timePitch, bassEQ, stemEQ, reverbNode, performanceMixer, limiter]
     }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
@@ -231,6 +248,15 @@ final class AudioEngineManager {
         Self.configurePlayback(varispeed: varispeed, timePitch: timePitch, speed: speed, pitch: pitch)
         bassEQ.bands[0].gain = bass
         reverbNode.wetDryMix = reverb
+        let frequencies: [Float] = [1_600, 520, 90, 7_000, 105]
+        for (index, band) in stemEQ.bands.enumerated() {
+            band.filterType = index == 3 ? .highShelf :
+                (index == 4 ? .lowShelf : .parametric)
+            band.frequency = frequencies[index]
+            band.bandwidth = index == 0 ? 1.5 : 1.0
+            band.gain = 0
+            band.bypass = false
+        }
     }
 
     // MARK: Carregar arquivo
@@ -242,6 +268,8 @@ final class AudioEngineManager {
         stemFiles = [:]
         stemMixEnabled = false
         stemsAvailable = false
+        stemLevels = Dictionary(uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
+        applyLiveStemEQ()
         centerCutPrepareTask?.cancel()
         centerCutRampTask?.cancel()
         centerCutPlayer.stop()
@@ -283,7 +311,7 @@ final class AudioEngineManager {
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
                           varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
-                          performanceMixer: performanceMixer)
+                          performanceMixer: performanceMixer, stemEQ: stemEQ)
         engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
         centerCutPlayer.volume = 0
         for kind in StemKind.allCases {
@@ -1449,13 +1477,19 @@ final class AudioEngineManager {
                                                  limiter: AVAudioUnitEffect,
                                                  fileFormat: AVAudioFormat,
                                                  graphFormat: AVAudioFormat,
-                                                 performanceMixer: AVAudioMixerNode? = nil) {
+                                                 performanceMixer: AVAudioMixerNode? = nil,
+                                                  stemEQ: AVAudioUnitEQ? = nil) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
         engine.connect(player, to: upmix, format: fileFormat)
         engine.connect(upmix, to: varispeed, format: graphFormat)
         engine.connect(varispeed, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
-        engine.connect(eq, to: reverb, format: graphFormat)
+        if let stemEQ {
+            engine.connect(eq, to: stemEQ, format: graphFormat)
+            engine.connect(stemEQ, to: reverb, format: graphFormat)
+        } else {
+            engine.connect(eq, to: reverb, format: graphFormat)
+        }
         // Pad samples join after the song-specific DSP so a 0.5x playback
         // speed does not slow the live drums. Both inputs share the limiter.
         if let performanceMixer {
