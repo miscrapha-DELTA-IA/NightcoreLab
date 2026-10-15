@@ -46,6 +46,38 @@ final class KaraokeTypographyTests: XCTestCase {
         let descriptor = TypographyFont.cascaded(.systemFont(ofSize: 24)).fontDescriptor
         let cascade = descriptor.object(forKey: .cascadeList) as? [UIFontDescriptor]
         XCTAssertEqual(cascade?.count, 3)
+        for text in ["東京", "coração", "مرحبا", "🎤"] {
+            let shaped = (text as NSString).size(withAttributes: [
+                .font: TypographyFont.cascaded(.systemFont(ofSize: 24))])
+            XCTAssertGreaterThan(shaped.width, 0)
+            let word = WordSync(id: 0, text: text, start: 1, end: 2,
+                                spaceAfter: false)
+            let seed = TypographyResolver.stableSeed(lineID: 1, word: word)
+            for style in [TypographyStyle.magazineCutout, .vinylSticker,
+                          .dymoTicket, .liquidCapsule] {
+                if style != .magazineCutout {
+                    XCTAssertNotNil(ObjectWordStyleResolver.resolve(
+                        style: style, seed: seed, progress: 0.5))
+                }
+            }
+        }
+    }
+
+    func testLineOnlyDegradationAgainstEnhancedLRCGroundTruth() throws {
+        let precise = EnhancedLRCParser.parse(
+            "[00:01.00]<00:01.00>We <00:01.50>sing <00:02.10>tonight <00:03.00>\n[00:03.00]Next")
+        let degraded = EnhancedLRCParser.parse(
+            "[00:01.00]We sing tonight\n[00:03.00]Next")
+        let truth = try XCTUnwrap(precise.lines.first)
+        let estimated = try XCTUnwrap(LyricsAlignmentRefiner.refine(degraded.lines).first)
+        XCTAssertEqual(estimated.precision, .estimated)
+        let error = zip(truth.words, estimated.words).reduce(0.0) {
+            $0 + abs($1.0.start - $1.1.start)
+        } / Double(truth.words.count)
+        XCTAssertLessThan(error, 0.18)
+        XCTAssertTrue(zip(estimated.words, estimated.words.dropFirst()).allSatisfy {
+            $0.0.start < $0.1.start && $0.0.end <= $0.1.start + 0.01
+        })
     }
 
     private func word(_ text: String = "HEART", id: Int = 2) -> WordSync {

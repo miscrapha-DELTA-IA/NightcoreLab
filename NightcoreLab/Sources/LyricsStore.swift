@@ -145,7 +145,7 @@ final class LyricsStore {
 
     /// Replaces only estimated words after cached rhythm evidence arrives.
     /// The parse and cache write stay off the main actor.
-    func refineUsing(_ dna: SongDNA) {
+    func refineUsing(_ dna: SongDNA, sourceURL: URL? = nil) {
         guard let trackID, let rawSource, !lines.isEmpty,
               !dna.onsetTimestamps.isEmpty || !dna.beatTimestamps.isEmpty else { return }
         let key = dna.sourceRevision + ":\(dna.onsetTimestamps.count):\(dna.beatTimestamps.count)"
@@ -160,9 +160,13 @@ final class LyricsStore {
             } else {
                 let parsed = rawSource.contains("Dialogue:")
                     ? ASSKaraokeParser.parse(rawSource) : EnhancedLRCParser.parse(rawSource)
+                let vocalEnergy = sourceURL.flatMap {
+                    try? StereoVocalEnergyAnalyzer.analyze($0)
+                } ?? []
                 refined = LyricsAlignmentRefiner.refine(parsed.lines,
                     onsets: dna.onsetTimestamps,
-                    barBeats: dna.beatTimestamps + dna.barTimestamps)
+                    barBeats: dna.beatTimestamps + dna.barTimestamps,
+                    vocalEnergy: vocalEnergy)
                 await LyricsAlignmentCache.shared.save(refined, trackID: trackID,
                     source: cacheSource)
             }

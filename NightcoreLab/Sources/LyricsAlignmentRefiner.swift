@@ -73,7 +73,15 @@ enum LyricsAlignmentRefiner {
     private static func score(_ cue: TimeInterval, nominal: TimeInterval,
                               energy: [(time: TimeInterval, value: Double)]) -> Double {
         let proximity = 1 - abs(cue - nominal) / 0.035
-        let vocal = energy.min { abs($0.time - cue) < abs($1.time - cue) }
+        var low = 0, high = energy.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if energy[mid].time < cue { low = mid + 1 } else { high = mid }
+        }
+        let nearby = [low - 1, low].filter { energy.indices.contains($0) }
+        let best = nearby.min { abs(energy[$0].time - cue) <
+            abs(energy[$1].time - cue) }
+        let vocal = best.map { energy[$0] }
         return proximity + (vocal.map { abs($0.time - cue) <= 0.035
             ? max(0, min(1, $0.value)) * 0.35 : 0 } ?? 0)
     }

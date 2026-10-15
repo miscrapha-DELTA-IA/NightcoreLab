@@ -46,6 +46,23 @@ final class RuntimeStabilizationTests: XCTestCase {
         XCTAssertLessThan(remaining(at: 1_000), 0.35)
     }
 
+    func testCenterCutUsesDirectPathForMonoSource() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("center-cut-mono-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 44_100, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 512))
+        buffer.frameLength = 512
+        if let samples = buffer.floatChannelData?[0] {
+            for index in 0..<512 { samples[index] = 0 }
+        }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+        XCTAssertNil(try CenterCutProcessor.prepare(source: url))
+    }
+
     func testLyricsAlignmentCacheReadsLegacyPayload() async throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("lyrics-migration-\(UUID().uuidString)")

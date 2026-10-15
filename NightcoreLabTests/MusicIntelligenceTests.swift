@@ -12,6 +12,13 @@ final class MusicIntelligenceTests: XCTestCase {
         XCTAssertEqual(SongDNA.resolveOctave(candidates), 144)
         let weak = [candidates[0], .init(bpm: 144, confidence: 0.70)]
         XCTAssertEqual(SongDNA.resolveOctave(weak), 72)
+        let lyric = TimedLyricLine(id: 0, start: 0, end: 2,
+            words: [WordSync(id: 0, text: "canta", start: 0, end: 1,
+                             spaceAfter: true),
+                    WordSync(id: 1, text: "comigo", start: 1, end: 2,
+                             spaceAfter: false)], precision: .word)
+        XCTAssertEqual(SongDNA.resolveOctave(weak, lyrics: [lyric]), 144)
+        XCTAssertGreaterThan(SongDNA.lyricDensity([lyric], bpm: 144).perBeat, 0.5)
         let beats = (0..<12).map { index in
             RhythmAnalysisResult.BeatEvent(time: Double(index) * 0.5,
                 index: index, strength: index % 4 == 1 ? 1 : 0.2)

@@ -704,7 +704,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                   audio.visualAnalysisURL == url else { return }
             if cached.isValid {
                 liveUniforms.setSongDNA(cached.applyingLyrics(lyricsStore.lines))
-                lyricsStore.refineUsing(cached)
+                lyricsStore.refineUsing(cached, sourceURL: url)
             }
 
             // Cached verified sections can animate immediately. Incomplete
@@ -723,14 +723,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                       audio.visualAnalysisURL == url else { return }
                 if enriched.isValid {
                     liveUniforms.setSongDNA(enriched.applyingLyrics(lyricsStore.lines))
-                    lyricsStore.refineUsing(enriched)
+                    lyricsStore.refineUsing(enriched, sourceURL: url)
                 }
             }
         }
         .onChange(of: lyricsStore.lines) { _, lines in
             if let dna = liveUniforms.songDNA, dna.isValid {
                 liveUniforms.setSongDNA(dna.applyingLyrics(lines))
-                lyricsStore.refineUsing(dna)
+                lyricsStore.refineUsing(dna, sourceURL: audio.visualAnalysisURL)
             }
         }
         // The source-time lookup is actor isolated at ~8 Hz, not in the 60 Hz
