@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Export-only time-deterministic silky marble. ImageRenderer rasterizes native
-/// gradients, not a live TimelineView/CADisplayLink or GPU shader history.
+/// gradients, with no live frame scheduler or GPU shader history.
 struct StoryExportMarbleView: View {
     let theme: AppTheme
     let renderTimestamp: TimeInterval
