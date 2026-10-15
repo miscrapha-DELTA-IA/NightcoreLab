@@ -288,8 +288,15 @@ final class CreativeExperienceEngineTests: XCTestCase {
         for id in ["cyber-night", "liquid-dream", "neon-pulse"] {
             XCTAssertTrue(ids.contains(id), id)
         }
-        for curated in CreativePresetCatalog.experiencePresets {
+        // Stage 24: archived post-Smoke presets remain decodable, but only
+        // the seven proven experiences are offered to the live player.
+        for curated in CreativePresetCatalog.selectableExperiences {
             XCTAssertTrue(ids.contains(curated.id), curated.id)
+        }
+        for archived in CreativePresetCatalog.experiencePresets where
+            !CreativePresetCatalog.isLiveExperience(archived.id) {
+            XCTAssertFalse(ids.contains(archived.id), archived.id)
+            XCTAssertNotNil(CreativePresetCatalog.selectedExperience(id: archived.id))
         }
         XCTAssertEqual(Set(ids).count, ids.count, "No duplicated identities")
         XCTAssertEqual(ids.last, "local-experience")
