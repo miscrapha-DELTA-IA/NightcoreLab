@@ -27,6 +27,8 @@ struct SearchView: View {
     var integrated: Bool = false
     var recentTracks: [Track] = []
     var activeTrack: Track? = nil
+    var requestedAlbumTrack: Track? = nil
+    var requestedAlbumFocus: Int = 0
     var queuedTracks: [Track] = []
     var pendingTrackID: String? = nil
     @ObservedObject var offline: OfflineLibrary
@@ -699,6 +701,9 @@ struct SearchView: View {
         }
         .onChange(of: activeTrack?.id) { _, _ in
             collectionAnchor = nil
+        }
+        .onChange(of: requestedAlbumFocus) { _, _ in
+            if let track = requestedAlbumTrack { focusAlbumArtist(track) }
         }
         .onChange(of: focusRequest) { _, _ in
             if isPresented { isFocused = true }
