@@ -38,6 +38,15 @@ struct ShareCardView: View {
                 }
                 .foregroundStyle(.white)
 
+                if let stamp = snapshot.scoreStamp {
+                    Text("\(stamp.label) · \(stamp.grade) · \(stamp.accuracy)%")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .padding(.horizontal, 16).padding(.vertical, 9)
+                        .background(snapshot.theme.accent.opacity(0.28), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(.top, 18)
+                }
+
                 Spacer(minLength: 80)
                 artworkTile
                     .frame(width: 400, height: 400)
@@ -99,7 +108,11 @@ struct ShareCardView: View {
                 maxFPS: 1,
                 isPaused: true,
                 extendIntoSafeArea: false,
-                frozenTime: snapshot.marblePhase
+                frozenTime: snapshot.marblePhase,
+                materialFrame: SongSectionCadence.apply(
+                    MaterialResolver.resolve(snapshot.material, timestamp: 0,
+                        reactionGain: CreativeReactionProfile.gain(snapshot.reactionMode)),
+                    cadence: snapshot.sectionCadence)
             )
             .frame(width: Self.size.width, height: Self.size.height)
         }

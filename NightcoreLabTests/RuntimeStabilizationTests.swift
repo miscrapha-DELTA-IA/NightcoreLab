@@ -1080,3 +1080,22 @@ final class Stage25SectionAwareRuntimeTests: XCTestCase {
         }
     }
 }
+
+final class Stage26StoryBeatRuntimeTests: XCTestCase {
+    func testSourceTimeBeatReleaseIsDeterministicAndNeverMovesShaderClock() {
+        let dna = SongDNA(assetID: "fixture", sourceRevision: "r1",
+            sourceDuration: 20, beatTimestamps: [1, 2, 3])
+        let times = [1.0, 1.06, 1.12, 1.24, 1.48]
+        let pulses = times.map { StoryBeatEnvelope.at(sourceTime: $0, dna: dna) }
+        XCTAssertEqual(pulses[0], 1)
+        for index in 1..<pulses.count {
+            XCTAssertLessThan(pulses[index], pulses[index - 1])
+            XCTAssertEqual(pulses[index],
+                StoryBeatEnvelope.at(sourceTime: times[index], dna: dna))
+        }
+        var clock = MonotonicFlowClock()
+        for _ in times { clock.advance(elapsed: 0.06, speed: 0.6) }
+        XCTAssertEqual(clock.phase, 0.18, accuracy: 1e-9)
+        XCTAssertEqual(StoryBeatEnvelope.at(sourceTime: .nan, dna: dna), 0)
+    }
+}

@@ -129,11 +129,11 @@ struct StoryVideoPreview: View {
             .onAppear {
                 let prepared = AVPlayer(url: url)
                 player = prepared
-                prepared.play()
             }
             .onDisappear {
                 player?.pause()
                 player = nil
+                package?.cleanup()
             }
             .alert("Salvo em Fotos", isPresented: $showSavedAlert) {
                 Button("OK", role: .cancel) {}

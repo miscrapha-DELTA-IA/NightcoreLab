@@ -5,7 +5,7 @@ import Observation
 /// activeLineIndex or changes any scroll identity/layout input.
 @MainActor @Observable
 final class KaraokeScoringSession {
-    enum Mode: Equatable { case off, microphone, simulation, passive }
+    enum Mode: Equatable, Sendable { case off, microphone, simulation, passive }
     private(set) var mode: Mode = .off
     private(set) var snapshot = KaraokeScoreSnapshot()
     private(set) var message: String?

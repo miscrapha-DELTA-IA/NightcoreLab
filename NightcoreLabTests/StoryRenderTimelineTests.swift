@@ -83,6 +83,41 @@ final class StoryRenderTimelineTests: XCTestCase {
     }
 
     @MainActor
+    func testThreeBeatAndSectionFramesMatchPreviewAndEncoderState() throws {
+        var clip = try request(.lyrics, start: 9.5, speed: 1)
+        clip.reactionMode = .responsive
+        clip.liveVisualResponseEnabled = true
+        clip.songDNA = SongDNA(assetID: "fixture", sourceRevision: "r1",
+            sourceDuration: 90, beatTimestamps: [9.5, 10, 10.5],
+            sections: [
+                MusicSection(startTime: 0, endTime: 10, label: .intro, confidence: 0.9),
+                MusicSection(startTime: 10, endTime: 90, label: .chorus, confidence: 0.9)
+            ])
+        let profile = StoryEncodingProfile.economical
+        let timeline = StoryRenderTimeline(request: clip, profile: profile)
+        let frames = [0, 2, 9].map { timeline.frame(index: $0) }
+        XCTAssertLessThan(frames[0].marblePhase, frames[1].marblePhase)
+        XCTAssertLessThan(frames[1].marblePhase, frames[2].marblePhase)
+        XCTAssertGreaterThan(StoryBeatEnvelope.at(sourceTime: frames[0].sourceTime,
+            dna: clip.songDNA), StoryBeatEnvelope.at(sourceTime: frames[1].sourceTime,
+            dna: clip.songDNA))
+        let resolved = frames.map { clip.resolvedFrame($0, audioTimeline: nil, rhythm: nil) }
+        XCTAssertEqual(resolved[0]?.materialFrame,
+            StorySceneView(request: clip, artwork: nil, frame: frames[0]).materialFrame)
+        XCTAssertNotEqual(resolved[0]?.materialFrame?.parameters.beatPulse,
+            resolved[1]?.materialFrame?.parameters.beatPulse)
+        XCTAssertNotEqual(resolved[1]?.materialFrame?.parameters.warpAmount,
+            resolved[2]?.materialFrame?.parameters.warpAmount)
+        for frame in frames {
+            XCTAssertEqual(frame, timeline.frame(at: frame.elapsed))
+            let image = try StoryFrameRenderer.render(request: clip, artwork: nil,
+                frame: frame, profile: profile)
+            XCTAssertEqual(image.width, profile.width)
+            XCTAssertEqual(image.height, profile.height)
+        }
+    }
+
+    @MainActor
     func testExportFrameUsesSameVisualSceneAsScrubPreview() throws {
         let request = try request(.player)
         let profile = StoryEncodingProfile.economical

@@ -857,7 +857,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             visualStyle: style,
             marbleStartedAt: marbleStartedAt,
             speed: showsKaraoke ? 0.8 : 0.6,
-            capturedAt: capturedAt
+            capturedAt: capturedAt,
+            experienceID: creativePresetID,
+            material: selectedVisualMaterial,
+            reactionMode: reactionMode,
+            sectionCadence: liveUniforms.sectionCadence,
+            scoreStamp: showsKaraoke ? KaraokePerformanceStamp(
+                snapshot: lyricsStore.scoring.snapshot,
+                mode: lyricsStore.scoring.mode) : nil
         )
         beginShare(at: capturedAt)
         Task { @MainActor in
@@ -890,16 +897,18 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 lyricOffset: lyricsStore.userOffset, typography: storyTypography,
                 typographyStyle: karaokeTypography,
                 includeAudio: includeAudio,
-                reactiveProgram: (reactionMode == .off ||
-                                  reduceMotion ||
-                                  ProcessInfo.processInfo.isLowPowerModeEnabled)
-                    ? nil : CreativePresetCatalog.effectiveProgram(
+                reactiveProgram: CreativePresetCatalog.effectiveProgram(
                         id: creativePresetID, theme: appTheme,
                         typography: karaokeTypography,
                         background: playerBackgroundStyle, reaction: reactionMode),
                 reactiveSourceURL: audio.visualAnalysisURL,
                 creativePresetID: creativePresetID,
-                padPerformance: audio.frozenPadPerformance()
+                padPerformance: audio.frozenPadPerformance(),
+                reactionMode: reactionMode,
+                songDNA: liveUniforms.songDNA,
+                scoreStamp: showsKaraoke ? KaraokePerformanceStamp(
+                    snapshot: lyricsStore.scoring.snapshot,
+                    mode: lyricsStore.scoring.mode) : nil
             )
             let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
             // Preview and export share the exact same immutable snapshot,
@@ -925,10 +934,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                                      visualRhythm: RhythmAnalysisResult?) {
         guard !isBuildingShare else { return }
         storyProgress = 0
-        beginShare(at: Date())
+        isBuildingShare = true
         storyTask = Task { @MainActor in
             defer {
-                finishShare()
+                isBuildingShare = false
                 storyTask = nil
             }
             do {
