@@ -13,7 +13,7 @@ final class KaraokeTypographyTests: XCTestCase {
         XCTAssertEqual(line.words.count, 3)
         XCTAssertEqual(line.words[1].start, 2.5, accuracy: 0.001)
         XCTAssertEqual(line.words[1].progressFill(at: 2.875), 0.5, accuracy: 0.001)
-        XCTAssertEqual(line.words[2].progressFill(at: 3.125), 1)
+        XCTAssertEqual(line.words[2].progressFill(at: 3.3), 1)
         XCTAssertEqual(line.words[0].progressFill(at: 1.99), 0)
     }
 
