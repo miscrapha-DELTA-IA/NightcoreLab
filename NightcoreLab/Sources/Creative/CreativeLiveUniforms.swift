@@ -21,6 +21,10 @@ final class CreativeLiveUniforms {
     /// karaoke samples the SAME features a Story samples at a source time
     /// (CompositionAudioSampler). Nil while visuals do not react.
     private(set) var featureTimeline: AudioFeatureTimeline?
+    /// Immutable track intelligence, changed only after asynchronous cache
+    /// resolution; renders never open cache files or wait for actors.
+    private(set) var songDNA: SongDNA?
+    private(set) var sectionCadence: SongSectionCadence = .neutral
 
     var marbleDistortion: Double {
         frozenDistortion ?? frame.marbleDistortion
@@ -39,6 +43,16 @@ final class CreativeLiveUniforms {
     func setFeatureTimeline(_ timeline: AudioFeatureTimeline?) {
         if timeline == nil, featureTimeline == nil { return }
         featureTimeline = timeline
+    }
+
+    func setSongDNA(_ value: SongDNA?) {
+        songDNA = value
+        setSectionCadence(.neutral)
+    }
+
+    /// Section changes at <= 10 Hz, never at shader frame rate.
+    func setSectionCadence(_ value: SongSectionCadence) {
+        if sectionCadence != value { sectionCadence = value }
     }
 
     /// Features for the live karaoke at a source time; nil without reaction.
@@ -60,9 +74,10 @@ final class CreativeLiveUniforms {
 /// driver are observed.
 struct LiveMarbleDistortion<Content: View>: View {
     let uniforms: CreativeLiveUniforms
-    @ViewBuilder let content: (Double, MarblePulseDriver?) -> Content
+    @ViewBuilder let content: (Double, MarblePulseDriver?, SongSectionCadence) -> Content
 
     var body: some View {
-        content(uniforms.marbleDistortion, uniforms.livePulseDriver)
+        content(uniforms.marbleDistortion, uniforms.livePulseDriver,
+                uniforms.sectionCadence)
     }
 }
