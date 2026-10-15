@@ -4,6 +4,7 @@ import SwiftUI
 struct SearchDrawerState: Equatable {
     private(set) var isOpen = false
     private(set) var focusRequest = 0
+    private(set) var pendingTrackID: String?
 
     mutating func toggle() { isOpen.toggle() }
     mutating func close() { isOpen = false }
@@ -13,6 +14,32 @@ struct SearchDrawerState: Equatable {
     }
 
     mutating func selectedTrack() { close() }
+    mutating func beginSelection(trackID: String) { pendingTrackID = trackID }
+    @discardableResult
+    mutating func confirmPlayback(trackID: String) -> Bool {
+        guard pendingTrackID == trackID else { return false }
+        pendingTrackID = nil
+        selectedTrack()
+        return true
+    }
+    @discardableResult
+    mutating func selectionFailed(trackID: String) -> Bool {
+        guard pendingTrackID == trackID else { return false }
+        pendingTrackID = nil
+        return true
+    }
+}
+
+enum DrawerQuickAccess {
+    static func shouldShow(query: String, submittedQuery: String?) -> Bool {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && submittedQuery == nil
+    }
+    static func recents(recent: [Track], cached: [Track], current: Track?) -> [Track] {
+        var seen = Set<String>()
+        return (recent + cached + [current].compactMap { $0 })
+            .filter { seen.insert($0.id).inserted }
+            .prefix(8).map { $0 }
+    }
 }
 import Observation
 

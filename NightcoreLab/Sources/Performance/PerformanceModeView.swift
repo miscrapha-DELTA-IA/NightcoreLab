@@ -83,23 +83,22 @@ private struct PadTouchSurface: UIViewRepresentable {
     let onPressedChanged: (Bool) -> Void
     let haptics: Bool
 
-    final class Coordinator {
+    @MainActor final class Coordinator {
         var onDown: (TimeInterval, Float) -> Bool
         var onPressedChanged: (Bool) -> Void
         var haptics: Bool
         var hitIndex = 0
-        private let generator = UIImpactFeedbackGenerator(style: .rigid)
 
         init(onDown: @escaping (TimeInterval, Float) -> Bool,
              onPressedChanged: @escaping (Bool) -> Void, haptics: Bool) {
             self.onDown = onDown
             self.onPressedChanged = onPressedChanged
             self.haptics = haptics
-            if haptics { generator.prepare() }
+            if haptics { CreativeHaptics.preparePad() }
         }
 
         func updateHaptics(_ enabled: Bool) {
-            if enabled && !haptics { generator.prepare() }
+            if enabled && !haptics { CreativeHaptics.preparePad() }
             haptics = enabled
         }
 
@@ -113,8 +112,7 @@ private struct PadTouchSurface: UIViewRepresentable {
             let played = onDown(touch.timestamp, PadExpressiveness.velocity(
                 verticalZone: vertical, base: 0.85, hitIndex: index))
             if played && haptics {
-                generator.impactOccurred(intensity: 0.85)
-                generator.prepare()
+                CreativeHaptics.padStrike()
             }
         }
     }
@@ -164,7 +162,7 @@ struct PerformanceModeView: View {
     private var visibleReactionMode: CreativePreset.AudioReaction = .off
     @State private var padRhythm: RhythmAnalysisResult?
     @State private var padRhythmTask: Task<Void, Never>?
-    @State private var haptics = false
+    @AppStorage(CreativeHaptics.enabledKey) private var haptics = true
     @State private var heldPads: Set<String> = []
     private var recordedSourceRevision: Int? {
         audio.performanceRecordingSourceRevision
@@ -571,7 +569,7 @@ struct PerformanceModeView: View {
             }, onPressedChanged: { isPressed in
                 if isPressed { heldPads.insert(sample.id) }
                 else { heldPads.remove(sample.id) }
-            }, haptics: haptics)
+            }, haptics: haptics && !audio.karaokeMicrophoneActive)
         }
         .accessibilityIdentifier("performance.pad.\(sample.id)")
     }

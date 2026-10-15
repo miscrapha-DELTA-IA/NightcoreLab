@@ -4,6 +4,57 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    func testComboMilestoneHapticsFireOnceAndPerfectJudgmentCelebrates() {
+        var snapshot = KaraokeScoreSnapshot()
+        snapshot.multiplier = 2
+        XCTAssertTrue(KaraokeHapticMoment.celebrates(
+            previousMultiplier: 1, snapshot: snapshot))
+        XCTAssertFalse(KaraokeHapticMoment.celebrates(
+            previousMultiplier: 2, snapshot: snapshot))
+        snapshot.multiplier = 3
+        XCTAssertTrue(KaraokeHapticMoment.celebrates(
+            previousMultiplier: 2, snapshot: snapshot))
+        snapshot.multiplier = 4
+        XCTAssertTrue(KaraokeHapticMoment.celebrates(
+            previousMultiplier: 3, snapshot: snapshot))
+        snapshot.multiplier = 1
+        snapshot.lastVerseRating = .perfect
+        XCTAssertTrue(KaraokeHapticMoment.celebrates(
+            previousMultiplier: 4, snapshot: snapshot))
+    }
+
+    func testCreativeSessionRestoresThemeReactionLyricGuidesAndVocalFX() throws {
+        let suite = "stage32.creative.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("cyber-night", forKey: CreativePresetCatalog.storageKey)
+        defaults.set(AppTheme.ultrapink.rawValue, forKey: "selectedTheme")
+        defaults.set(CreativePreset.AudioReaction.responsive.rawValue,
+                     forKey: "creativeReactionMode")
+        defaults.set(false, forKey: KaraokeGuidePreference.pacing)
+        defaults.set(true, forKey: KaraokeGuidePreference.countdown)
+        defaults.set(false, forKey: KaraokeGuidePreference.nextVerse)
+        var controls = CreatorControls()
+        controls.vocalFX = VocalFXSetting(preset: .cyberChoir, intensity: 0.72)
+        defaults.set(try JSONEncoder().encode(controls),
+                     forKey: "NightcoreLab.liveCreatorControls.v1")
+        for style in TypographyStyle.storyObjectModels {
+            defaults.set(style.rawValue, forKey: TypographyStyle.storageKey)
+            let restored = CreativeSessionPreferences.load(defaults:
+                try XCTUnwrap(UserDefaults(suiteName: suite)))
+            XCTAssertEqual(restored.experienceID, "cyber-night")
+            XCTAssertEqual(restored.theme, .ultrapink)
+            XCTAssertEqual(restored.paletteIndex,
+                           AppTheme.allCases.firstIndex(of: .ultrapink))
+            XCTAssertEqual(restored.reactionMode, .responsive)
+            XCTAssertEqual(restored.lyricModel, style)
+            XCTAssertFalse(restored.pacingGuide)
+            XCTAssertTrue(restored.entranceCountdown)
+            XCTAssertFalse(restored.nextVersePreview)
+            XCTAssertEqual(restored.vocalFX, controls.vocalFX)
+        }
+    }
+
     func testFinishedKaraokeSummaryBridgesScoreAndTrackIntoShareSnapshot() throws {
         let artwork = URL(string: "https://example.com/performance.jpg")!
         let track = TrackInfo(track: Track(id: "song-31", title: "Artist - Song",

@@ -25,6 +25,11 @@ struct SearchView: View {
     let isPresented: Bool
     var focusRequest: Int = 0
     var integrated: Bool = false
+    var recentTracks: [Track] = []
+    var queuedTracks: [Track] = []
+    var pendingTrackID: String? = nil
+    var onPlayQueue: (Track) -> Void = { _ in }
+    var onRemoveQueue: (Track) -> Void = { _ in }
     @Environment(PanelStore.self) private var panels
     @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -47,6 +52,9 @@ struct SearchView: View {
         return nil
     }
     private var isSearchMode: Bool { submittedQuery != nil || typedText != nil }
+    private var showsQuickAccess: Bool {
+        DrawerQuickAccess.shouldShow(query: query, submittedQuery: submittedQuery)
+    }
     private var isDiscoverVisible: Bool {
         PanelPresentation.showsDiscover(hidden: panels.hidden, isZen: panels.isZen,
                                         searchActive: isSearchMode)
@@ -72,9 +80,9 @@ struct SearchView: View {
                                             searchResults: searchResults, suggestions: suggestedTracks)
     }
 
-    private func showSuggestions() {
+    private func showSuggestions(preserveSavedQuery: Bool = false) {
         searchExpansionOverride = nil
-        lastSearchQuery = ""
+        if !preserveSavedQuery { lastSearchQuery = "" }
         query = ""
         omnibox.queryChanged("")
         searchResults = []
@@ -121,6 +129,98 @@ struct SearchView: View {
         }
     }
 
+    private var quickAccess: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("TOCADAS RECENTEMENTE · BIBLIOTECA RÁPIDA")
+                .font(.caption2.weight(.heavy)).tracking(0.8)
+                .foregroundStyle(theme.accent)
+            if recentTracks.isEmpty {
+                Text("Suas músicas aparecerão aqui após a primeira reprodução.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 9) {
+                        ForEach(recentTracks) { track in
+                            Button {
+                                isFocused = false
+                                onSelect(track, [])
+                            } label: {
+                                HStack(spacing: 7) {
+                                    WebImage(url: track.thumbnailURL)
+                                        .resizable().scaledToFill()
+                                        .frame(width: 38, height: 38)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    Text(track.title)
+                                        .font(.caption.weight(.semibold))
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: 118, alignment: .leading)
+                                    if pendingTrackID == track.id {
+                                        ProgressView().tint(theme.accent)
+                                    }
+                                }
+                                .padding(6)
+                                .background(.white.opacity(0.08),
+                                            in: RoundedRectangle(cornerRadius: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!isEnabled)
+                            .accessibilityIdentifier("searchDrawer.recent.\(track.id)")
+                        }
+                    }
+                }
+            }
+
+            Text("FILA A SEGUIR")
+                .font(.caption2.weight(.heavy)).tracking(0.8)
+                .foregroundStyle(theme.accent)
+            if queuedTracks.isEmpty {
+                HStack {
+                    Text("A fila está vazia.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    if canRefreshSuggestions {
+                        Button("Iniciar Rádio", action: onRefreshSuggestions)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(theme.accent)
+                    }
+                }
+            } else {
+                ForEach(queuedTracks.prefix(3)) { track in
+                    HStack(spacing: 8) {
+                        WebImage(url: track.thumbnailURL)
+                            .resizable().scaledToFill()
+                            .frame(width: 34, height: 34)
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                        Text(track.title)
+                            .font(.caption.weight(.semibold)).lineLimit(1)
+                        Spacer(minLength: 2)
+                        if pendingTrackID == track.id {
+                            ProgressView().tint(theme.accent)
+                        } else {
+                            Button("Tocar Agora") { onPlayQueue(track) }
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(theme.accent)
+                                .accessibilityIdentifier("searchDrawer.playQueue.\(track.id)")
+                        }
+                        Button(role: .destructive) { onRemoveQueue(track) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .disabled(pendingTrackID == track.id)
+                        .accessibilityLabel("Remover \(track.title) da fila")
+                        .accessibilityIdentifier("searchDrawer.removeQueue.\(track.id)")
+                    }
+                    .padding(7)
+                    .background(.white.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+        .padding(11)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityIdentifier("searchDrawer.quickAccess")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 12) {
@@ -148,6 +248,34 @@ struct SearchView: View {
                 }
                 .padding(14)
                 .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
+
+                if let pendingTrackID {
+                    HStack(spacing: 9) {
+                        ProgressView().tint(theme.accent)
+                        Text(downloader.isDownloading ? "Preparando música…" : "Iniciando reprodução…")
+                            .font(.caption.weight(.semibold))
+                        Spacer(minLength: 0)
+                        if downloader.isDownloading {
+                            Text("\(Int(downloader.downloadProgress * 100))%")
+                                .monospacedDigit().font(.caption2)
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(theme.accent.opacity(0.14), in: Capsule())
+                    .accessibilityIdentifier("searchDrawer.loading.\(pendingTrackID)")
+                    if downloader.isDownloading {
+                        ProgressView(value: downloader.downloadProgress)
+                            .tint(theme.accent)
+                    }
+                } else if isSearching || omnibox.isSearching {
+                    Label("Buscando músicas…", systemImage: "magnifyingglass")
+                        .font(.caption).foregroundStyle(theme.accent)
+                        .accessibilityIdentifier("searchDrawer.searching")
+                }
+
+                if showsQuickAccess {
+                    quickAccess
+                }
 
                 if typedText != nil && omnibox.isShowingStaleCache {
                     Text("Resultados salvos · tentando atualizar")
@@ -251,8 +379,12 @@ struct SearchView: View {
                                                 .multilineTextAlignment(.leading)
                                                 .frame(height: 34, alignment: .topLeading)
                                             HStack(spacing: 5) {
-                                                TrackStatusIndicator(status: status, accent: theme.accent)
-                                                Text(status.shortDescription)
+                                                if pendingTrackID == track.id {
+                                                    ProgressView().tint(theme.accent)
+                                                } else {
+                                                    TrackStatusIndicator(status: status, accent: theme.accent)
+                                                }
+                                                Text(pendingTrackID == track.id ? "Preparando…" : status.shortDescription)
                                                     .font(.caption2)
                                                     .foregroundStyle(status == .downloaded
                                                         ? Color.green.opacity(0.85) : theme.accent)
@@ -286,6 +418,10 @@ struct SearchView: View {
             if let base = URL(string: AudioDownloadManager.apiBaseURL) { omnibox.useServer(base) }
             guard !hasRestoredQuery else { return }
             hasRestoredQuery = true
+            if integrated {
+                showSuggestions(preserveSavedQuery: true)
+                return
+            }
             guard !panels.isHidden(.omnibox) else {
                 showSuggestions()
                 return
@@ -311,7 +447,7 @@ struct SearchView: View {
             if zen { isFocused = false }
         }
         .onChange(of: isPresented) { _, presented in
-            if !presented { isFocused = false }
+            if !presented { showSuggestions(preserveSavedQuery: true) }
         }
         .onChange(of: focusRequest) { _, _ in
             if isPresented { isFocused = true }

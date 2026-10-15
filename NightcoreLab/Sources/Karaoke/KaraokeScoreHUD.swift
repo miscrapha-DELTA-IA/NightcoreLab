@@ -1,11 +1,22 @@
 import SwiftUI
 
+enum KaraokeHapticMoment {
+    static func celebrates(previousMultiplier: Int,
+                           snapshot: KaraokeScoreSnapshot) -> Bool {
+        (snapshot.multiplier > previousMultiplier &&
+         (2...4).contains(snapshot.multiplier)) ||
+            snapshot.lastVerseRating == .perfect
+    }
+}
+
 /// All frequent reads live here, outside the lyrics' scroll/typography tree.
 struct KaraokeScoreHUD: View {
     let session: KaraokeScoringSession
     var accent: Color = .cyan
     var onResult: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var lastCelebratedVerse = 0
+    @State private var lastMultiplier = 1
 
     var body: some View {
         if session.isHUDVisible {
@@ -81,6 +92,23 @@ struct KaraokeScoreHUD: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.snapshot.totalScore)
             .padding(.horizontal, 18).padding(.top, 4)
             .accessibilityIdentifier("karaoke.scoreHUD")
+            .onChange(of: session.snapshot.judgedVerses) { _, verses in
+                guard verses > lastCelebratedVerse else {
+                    if verses == 0 {
+                        lastCelebratedVerse = 0
+                        lastMultiplier = 1
+                    }
+                    return
+                }
+                lastCelebratedVerse = verses
+                let shouldCelebrate = KaraokeHapticMoment.celebrates(
+                    previousMultiplier: lastMultiplier, snapshot: session.snapshot)
+                lastMultiplier = session.snapshot.multiplier
+                if shouldCelebrate {
+                    CreativeHaptics.success(
+                        microphoneActive: session.mode == .microphone)
+                }
+            }
         }
     }
 }

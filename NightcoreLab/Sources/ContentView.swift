@@ -23,6 +23,13 @@ final class PlaybackQueue: ObservableObject {
         upNextQueue.contains(where: { $0.id == track.id })
     }
 
+    @discardableResult
+    func remove(_ track: Track) -> Bool {
+        guard let index = upNextQueue.firstIndex(where: { $0.id == track.id }) else { return false }
+        upNextQueue.remove(at: index)
+        return true
+    }
+
     /// Smart Queue: preserve all other items, including items before the one
     /// selected. Never mutate until the playback engine confirms success.
     @discardableResult
@@ -134,6 +141,7 @@ struct ContentView: View {
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
     @State private var searchDrawer = SearchDrawerState()
+    @State private var drawerToast: String?
     @State private var karaokeSummary: KaraokeSummary?
     @AppStorage("showAudioWorkspace") private var isAudioWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
@@ -222,6 +230,11 @@ struct ContentView: View {
     private var playerLifecycle: some View {
         playerCanvas
         .onAppear {
+            let saved = CreativeSessionPreferences.load()
+            currentTheme = saved.theme
+            creativeReactionMode = saved.reactionMode
+            selectedCreativePresetID = CreativePresetCatalog.liveSelection(saved.experienceID)
+            karaokeTypographyStyle = saved.lyricModel
             restoreDiscoverExpansionPreference()
             if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
@@ -330,6 +343,20 @@ struct ContentView: View {
 
     private var playerPresentations: some View {
         playerLifecycle
+        .overlay(alignment: .top) {
+            if let drawerToast {
+                Label(drawerToast, systemImage: "wifi.exclamationmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 66)
+                    .accessibilityIdentifier("searchDrawer.errorToast")
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: drawerToast)
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
@@ -361,7 +388,7 @@ struct ContentView: View {
         HStack(spacing: DS.Spacing.s) {
             VStack(alignment: .leading, spacing: 1) {
                 NightcoreBrandLockup(theme: currentTheme)
-                Text("v31 · " + currentTheme.displayName.uppercased())
+                Text("v32 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -474,55 +501,52 @@ struct ContentView: View {
                     isDiscoverExpanded: $isDiscoverExpanded,
                     isPresented: !hasTrack || searchDrawer.isOpen,
                     focusRequest: focusRequest,
-                    integrated: true
+                    integrated: true,
+                    recentTracks: quickLibraryTracks,
+                    queuedTracks: playbackQueue.upNextQueue,
+                    pendingTrackID: searchDrawer.pendingTrackID,
+                    onPlayQueue: { track in selectFromDrawer(track) },
+                    onRemoveQueue: { track in _ = playbackQueue.remove(track) }
                 )
-                if !libraryTracks.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("BIBLIOTECA · RECENTES")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(currentTheme.accent)
-                        ForEach(libraryTracks.prefix(5)) { track in
-                            Button {
-                                selectFromDrawer(track)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: track.isCached ? "arrow.down.circle.fill" : "music.note")
-                                        .foregroundStyle(currentTheme.accent)
-                                    Text(track.title).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                    Image(systemName: "play.fill").font(.caption2)
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.white)
-                                .padding(.vertical, 5)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(audio.isExporting)
-                        }
-                    }
-                    .padding(10)
-                    .background(.white.opacity(0.06),
-                                in: RoundedRectangle(cornerRadius: 12))
-                }
                 relatedSection.hideablePanel(.queue)
             }
         }
     }
 
-    private var libraryTracks: [Track] {
-        playHistory.entries.values
+    private var quickLibraryTracks: [Track] {
+        let recent = playHistory.entries.values
             .sorted { $0.lastPlayed > $1.lastPlayed }
             .prefix(8)
             .map { downloader.cachedTrack($0.hit.asTrack) }
+        return DrawerQuickAccess.recents(recent: recent,
+            cached: downloader.quickLibraryTracks, current: currentTrack)
     }
 
     private func selectFromDrawer(_ track: Track) {
+        guard !audio.isExporting else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
-            searchDrawer.selectedTrack()
-        }
+        searchDrawer.beginSelection(trackID: track.id)
+        drawerToast = nil
         playTrack(track)
+    }
+
+    private func finishDrawerSelection(_ trackID: String) {
+        guard searchDrawer.pendingTrackID == trackID else { return }
+        CreativeHaptics.selection(microphoneActive: audio.karaokeMicrophoneActive)
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            searchDrawer.confirmPlayback(trackID: trackID)
+        }
+    }
+
+    private func failDrawerSelection(_ trackID: String, message: String) -> Bool {
+        guard searchDrawer.selectionFailed(trackID: trackID) else { return false }
+        drawerToast = message
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if drawerToast == message { drawerToast = nil }
+        }
+        return true
     }
 
     private func showKaraokeResult() {
@@ -1117,10 +1141,12 @@ struct ContentView: View {
         guard !audio.isExporting else { return }
         guard let track = Track.from(url: link.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             downloader.errorMessage = "Cole um link válido de vídeo do YouTube."
+            if searchDrawer.isOpen { drawerToast = "Confira o link do vídeo e tente novamente." }
             return
         }
         downloader.errorMessage = nil
-        playTrack(track)
+        if searchDrawer.isOpen { selectFromDrawer(track) }
+        else { playTrack(track) }
     }
 
     private func playFromQueue(_ track: Track, automatic: Bool = false) {
@@ -1176,7 +1202,8 @@ struct ContentView: View {
                 audio.play()
                 guard audio.isPlaying else {
                     if playbackTransition.didFail(token, trackID: track.id) {
-                        errorMessage = "Não foi possível iniciar a reprodução. A fila foi preservada."
+                        let message = "Não foi possível iniciar a música. Tente novamente."
+                        if !failDrawerSelection(track.id, message: message) { errorMessage = message }
                         if resumingPrevious { resumeTrack = track }
                     }
                     return
@@ -1195,6 +1222,7 @@ struct ContentView: View {
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
+                finishDrawerSelection(track.id)
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
                     let isManualSkip = !automaticAdvance && navigation == .regular &&
@@ -1223,12 +1251,17 @@ struct ContentView: View {
                 }
             } catch {
                 guard playbackTransition.didFail(token, trackID: track.id) else { return }
-                errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                let message = "Não foi possível abrir a música. Verifique o arquivo ou a conexão."
+                if !failDrawerSelection(track.id, message: message) {
+                    errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                }
                 if resumingPrevious { resumeTrack = track }
             }
         }, onFailure: { message in
             guard playbackTransition.didFail(token, trackID: track.id) else { return }
-            errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+            if !failDrawerSelection(track.id, message: "Não foi possível carregar a música. Confira a conexão e tente novamente.") {
+                errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+            }
             if resumingPrevious { resumeTrack = track }
         })
     }
