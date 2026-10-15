@@ -39,5 +39,6 @@ struct StemMixerControls: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .accessibilityIdentifier("music.stemMixer")
+        .onAppear { audio.requestStemPreparation() }
     }
 }
