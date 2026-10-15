@@ -373,7 +373,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         reduceMotion ? .easeInOut(duration: 0.25) : .spring(duration: 0.65, bounce: 0.15)
     }
 
-    var body: some View {
+    private var playerCanvas: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if showsKaraoke {
@@ -540,6 +540,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 .padding(.trailing, 16)
             }
         }
+    }
+
+    private var playerSheets: some View {
+        playerCanvas
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
                 track: track, theme: appTheme,
@@ -597,6 +601,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             Text(shareErrorDetails ??
                  "Tente compartilhar novamente. A reprodução continua normalmente.")
         }
+    }
+
+    var body: some View {
+        playerSheets
         .environment(\.colorScheme, .dark)
         .onAppear {
             creativePresetID = CreativePresetCatalog.liveSelection(creativePresetID)
