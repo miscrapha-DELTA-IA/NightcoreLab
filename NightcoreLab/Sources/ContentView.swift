@@ -354,14 +354,9 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: DS.Spacing.s) {
-            AppIconView(theme: currentTheme, showsBackground: false, isPlaying: audio.isPlaying)
-                .frame(width: 38, height: 38)
-
             VStack(alignment: .leading, spacing: 1) {
-                Text("Nightcore Lab")
-                    .font(DS.Typography.display)
-                    .foregroundStyle(DS.Ink.primary)
-                Text("v26 · " + currentTheme.displayName.uppercased())
+                NightcoreBrandLockup(theme: currentTheme)
+                Text("v28 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)

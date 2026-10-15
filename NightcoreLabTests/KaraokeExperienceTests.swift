@@ -5,7 +5,7 @@ import XCTest
 
 final class KaraokeExperienceTests: XCTestCase {
     @MainActor
-    func testPassiveKaraokeScoresTrackEnergyWithoutMicrophoneOrHarmonicClaims() {
+    func testKaraokePresentationNeverAwardsPlaybackEnergy() {
         let session = KaraokeScoringSession()
         let lines = [TimedLyricLine(id: 0, start: 0, end: 2,
             words: [.init(id: 0, text: "Ritmo", start: 0, end: 2, spaceAfter: false)], precision: .word)]
@@ -14,12 +14,42 @@ final class KaraokeExperienceTests: XCTestCase {
         for step in 1...42 {
             session.advance(time: Double(step) / 20, playing: true, lines: lines)
         }
-        XCTAssertEqual(session.mode, .passive)
-        XCTAssertGreaterThan(session.snapshot.totalScore, 0)
-        XCTAssertGreaterThan(session.snapshot.bestCombo, 0)
+        XCTAssertEqual(session.mode, .off)
+        XCTAssertEqual(session.snapshot.totalScore, 0)
+        XCTAssertEqual(session.snapshot.bestCombo, 0)
         XCTAssertFalse(session.snapshot.hasHarmonicReference)
         session.setKaraokePresented(false, lines: lines, at: 2.1, trackEnergy: { 0 })
         XCTAssertFalse(session.isHUDVisible)
+    }
+
+    @MainActor
+    func testMicrophoneSilenceResetsComboAndSingingEarnsPoints() {
+        let lines = (0..<5).map { index in
+            TimedLyricLine(id: index, start: Double(index), end: Double(index + 1),
+                words: [.init(id: 0, text: "Cante", start: Double(index),
+                              end: Double(index + 1), spaceAfter: false)], precision: .word)
+        }
+        let session = KaraokeScoringSession()
+        session.setKaraokePresented(true, lines: lines, at: 0, trackEnergy: { 1 })
+        session.start(mode: .microphone, lines: lines, at: 0)
+        var mic = KaraokeVoiceFrame(rms: 0.2, frequency: 220, confidence: 0.95)
+        session.microphoneFrame = { _ in mic }
+        for step in 1...80 {
+            session.advance(time: Double(step) / 20, playing: true, lines: lines)
+        }
+        XCTAssertGreaterThan(session.snapshot.totalScore, 0)
+        XCTAssertEqual(session.snapshot.multiplier, 2)
+        XCTAssertGreaterThan(session.liveMicLevel, 0)
+        let earned = session.snapshot.totalScore
+        mic = .silence
+        for step in 81...100 {
+            session.advance(time: Double(step) / 20, playing: true, lines: lines)
+        }
+        XCTAssertEqual(session.snapshot.totalScore, earned)
+        XCTAssertEqual(session.snapshot.multiplier, 1)
+        XCTAssertEqual(session.snapshot.streakCombo, 0)
+        XCTAssertTrue(session.snapshot.lastVerseWasSilent)
+        XCTAssertEqual(session.liveMicLevel, 0)
     }
 
     func testVocalFXLivesInsideLegendaSheetInsteadOfPlayerOverlay() throws {

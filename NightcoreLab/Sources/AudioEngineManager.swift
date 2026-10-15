@@ -135,6 +135,10 @@ final class AudioEngineManager {
     @ObservationIgnored private let vocalReverb = AVAudioUnitReverb()
     @ObservationIgnored private let vocalGate = AVAudioMixerNode()
     @ObservationIgnored private var microphoneCapture: KaraokeMicrophoneCapture?
+    private(set) var karaokeCaptureActive = false
+    @ObservationIgnored private var karaokeCapture: KaraokeMicrophoneCapture?
+    @ObservationIgnored private var karaokeInput: AVAudioInputNode?
+    @ObservationIgnored private var karaokeGeneration = 0
     /// Never read engine.inputNode just to initialize the engine or clean up
     /// headless CI; retained only after a hardware-format validation.
     @ObservationIgnored private var connectedVocalInput: AVAudioInputNode?
@@ -221,6 +225,7 @@ final class AudioEngineManager {
               (1...2).contains(file.processingFormat.channelCount) else {
             throw AudioEngineError.unsupportedAudio
         }
+        endKaraokeMicrophone()
         endVocalCapture()
         stopAllCreatorLoops()
         stopPlayback()
@@ -344,6 +349,7 @@ final class AudioEngineManager {
     /// Explicit opt-in only. Opening lyrics never calls this method.
     func beginVocalCapture() async -> Bool {
         if vocalCaptureActive { return true }
+        endKaraokeMicrophone()
         vocalGeneration &+= 1
         let requested = vocalGeneration
         let permission = AVAudioApplication.shared.recordPermission
@@ -357,7 +363,7 @@ final class AudioEngineManager {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
             try session.setActive(true)
             // Inspect input only AFTER activating the recording session.
             guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
@@ -418,13 +424,44 @@ final class AudioEngineManager {
         else { scheduleIdleStop() }
     }
 
-    // Compatibility with the already-merged KaraokeScoringControls surface.
-    var karaokeMicrophoneActive: Bool { vocalCaptureActive }
-    func beginKaraokeMicrophone() async -> Bool { await beginVocalCapture() }
-    func endKaraokeMicrophone() { endVocalCapture() }
+    /// Scoring only: native input tap on the existing running engine. No player
+    /// stop, reschedule, graph connection or audio category change on entry.
+    var karaokeMicrophoneActive: Bool { karaokeCaptureActive || vocalCaptureActive }
+    func beginKaraokeMicrophone() async -> Bool {
+        if karaokeMicrophoneActive { return true }
+        karaokeGeneration &+= 1
+        let requested = karaokeGeneration
+        let permission = AVAudioApplication.shared.recordPermission
+        let allowed = permission == .granted ? true :
+            (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
+        guard allowed, requested == karaokeGeneration, !Task.isCancelled else { return false }
+        let session = AVAudioSession.sharedInstance()
+        guard session.isInputAvailable else { return false }
+        let input = engine.inputNode
+        let native = input.outputFormat(forBus: 0)
+        guard native.channelCount > 0, native.sampleRate.isFinite,
+              native.sampleRate > 0 else { return false }
+        let capture = KaraokeMicrophoneCapture()
+        let scoringClock = lyricsClock
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+            capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+        }
+        karaokeInput = input
+        karaokeCapture = capture
+        karaokeCaptureActive = true
+        return true
+    }
+    func endKaraokeMicrophone() {
+        karaokeGeneration &+= 1
+        if let input = karaokeInput { input.removeTap(onBus: 0) }
+        karaokeInput = nil
+        karaokeCapture?.stop()
+        karaokeCapture = nil
+        karaokeCaptureActive = false
+    }
 
     func karaokeVoiceFrame() -> KaraokeVoiceFrame {
-        microphoneCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
+        (karaokeCapture ?? microphoneCapture)?.frame(at: lyricsClock.lyricTime) ?? .silence
     }
 
     func endVocalCapture() {
@@ -1032,7 +1069,10 @@ final class AudioEngineManager {
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .default)
+            // Prepare input capability before a song is scheduled. A first mic
+            // permission grant cannot reset an already playing player node.
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
             try session.setActive(true)
         } catch {
             #if DEBUG
@@ -1045,6 +1085,7 @@ final class AudioEngineManager {
     /// Never query inputNode on a headless simulator: only disconnect a mic
     /// node that was validated and attached during explicit opt-in capture.
     private func suspendLivePerformanceForSystemEvent() {
+        endKaraokeMicrophone()
         stopPerformancePads()
         stopAllCreatorLoops()
         stopPadTake()

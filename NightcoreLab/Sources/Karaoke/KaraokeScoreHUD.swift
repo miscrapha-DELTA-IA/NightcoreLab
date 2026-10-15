@@ -19,6 +19,22 @@ struct KaraokeScoreHUD: View {
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
+                        if session.mode == .microphone {
+                            HStack(spacing: 5) {
+                                Image(systemName: "mic.fill")
+                                GeometryReader { size in
+                                    Capsule().fill(.white.opacity(0.16))
+                                        .overlay(alignment: .leading) {
+                                            Capsule().fill(accent)
+                                                .frame(width: size.size.width * session.liveMicLevel)
+                                        }
+                                }
+                                .frame(width: 40, height: 5)
+                            }
+                            .accessibilityLabel("Nível do microfone")
+                            .accessibilityValue("\(Int(session.liveMicLevel * 100)) por cento")
+                            .accessibilityIdentifier("karaoke.liveMicLevel")
+                        }
                         Text("\(session.snapshot.multiplier)x · \(session.snapshot.streakCombo) combo")
                             .font(.caption.bold().monospacedDigit())
                             .padding(.horizontal, 9).padding(.vertical, 5)
@@ -42,7 +58,9 @@ struct KaraokeScoreHUD: View {
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.3)))
             .shadow(color: accent.opacity(session.snapshot.vocalAccuracy * 0.15), radius: 8)
             .safeAreaInset(edge: .bottom, spacing: 4) {
-                Text(session.judgmentVisible ? session.snapshot.lastVerseRating?.rawValue ?? "" : "")
+                Text(session.judgmentVisible ?
+                     (session.mode == .microphone && session.snapshot.lastVerseWasSilent ?
+                        "Cante no mic 🎤" : session.snapshot.lastVerseRating?.rawValue ?? "") : "")
                     .font(.caption.bold())
                     .foregroundStyle(accent)
                     .padding(.horizontal, 12).padding(.vertical, 6)

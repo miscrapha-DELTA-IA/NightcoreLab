@@ -125,6 +125,8 @@ struct CreatorStudioRoute: Equatable {
 /// Actual editable Creator surface, backed by the existing experience and
 /// package store rather than a new preset catalogue.
 private struct CreatorStudioPanel: View {
+    let track: TrackInfo
+    let theme: AppTheme
     let store: CreativePresetPackageStore
     let audio: AudioEngineManager
     @Binding var selectedPresetID: String
@@ -144,6 +146,10 @@ private struct CreatorStudioPanel: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    NightcoreBrandLockup(theme: theme, iconSize: 28, titleSize: 20)
+                    TrackIdentityPill(title: track.title, artist: track.artist,
+                                      artworkURL: track.coverURL)
+                        .accessibilityIdentifier("creator.trackHeader")
                     Text("Experiências visuais. Seu tema e a música continuam inalterados.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let suggestedPresetID,
@@ -536,6 +542,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
+                track: track, theme: appTheme,
                 store: songProfileStore, audio: audio,
                 selectedPresetID: $creativePresetID,
                 reactionMode: $reactionMode,
@@ -611,25 +618,27 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
             }
         }
         .onChange(of: lyricsStore.lines) { _, _ in
-            if showsKaraoke && lyricsStore.scoring.mode != .microphone {
-                lyricsStore.scoring.stop()
+            if showsKaraoke {
                 updateKaraokePresentation(true)
             }
         }
         .onChange(of: showsKaraoke) { _, shown in
             updateKaraokePresentation(shown)
             if !shown {
+                audio.endKaraokeMicrophone()
                 audio.endVocalCapture()
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
+                audio.endKaraokeMicrophone()
                 audio.endVocalCapture()
                 audio.stopAllCreatorLoops()
                 lyricsStore.scoring.stop()
             }
         }
         .onDisappear {
+            audio.endKaraokeMicrophone()
             audio.endVocalCapture()
             lyricsStore.scoring.present(false)
         }
@@ -962,6 +971,25 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         lyricsStore.scoring.setKaraokePresented(shown, lines: lyricsStore.lines,
             at: clock.lyricTime + lyricsStore.userOffset,
             trackEnergy: { [weak audio] in audio?.liveVisualMeter.snapshot().rms ?? 0 })
+        guard shown, lyricsStore.status == .ready, !lyricsStore.lines.isEmpty else { return }
+        let revision = audio.playbackSourceRevision
+        Task { @MainActor in
+            let active = await audio.beginKaraokeMicrophone()
+            guard lyricsStore.scoring.isPresented,
+                  audio.playbackSourceRevision == revision else {
+                audio.endKaraokeMicrophone(); return
+            }
+            guard active else {
+                lyricsStore.scoring.stop(message: "Ative o microfone para pontuar.")
+                return
+            }
+            lyricsStore.scoring.start(mode: .microphone, lines: lyricsStore.lines,
+                                     at: clock.lyricTime + lyricsStore.userOffset)
+            lyricsStore.scoring.microphoneFrame = { [weak audio] _ in
+                audio?.karaokeVoiceFrame() ?? .silence
+            }
+            audio.karaokeCompletion = { [weak session = lyricsStore.scoring] in session?.finish() }
+        }
     }
 
     private var micButton: some View {

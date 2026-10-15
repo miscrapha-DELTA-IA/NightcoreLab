@@ -5,6 +5,35 @@ import XCTest
 @testable import NightcoreLab
 
 final class ShareExportPipelineTests: XCTestCase {
+    @MainActor
+    func testCreatorAndShareUseFrozenTrackHeaderAndOfficialBrand() throws {
+        let artworkURL = URL(fileURLWithPath: "/tmp/stage28-cover.jpg")
+        let track = TrackInfo(track: Track(id: "stage28", title: "Stage 28 Song",
+            thumbnailURL: artworkURL, cleanArtist: "Stage 28 Artist"),
+            fileName: nil, coverURL: artworkURL)
+        let snapshot = ShareSnapshotBuilder.make(track: track, theme: .acid,
+            visualStyle: .marble, marbleStartedAt: .now, speed: 1)
+        XCTAssertEqual(snapshot.title, track.title)
+        XCTAssertEqual(snapshot.artist, track.artist)
+        XCTAssertEqual(snapshot.artworkURL, artworkURL)
+        let request = try StoryRequestBuilder.make(mode: .player, track: track,
+            theme: .acid, playerStyle: .turbulent, karaokeBackground: .marble,
+            marblePhase: 0, playbackTime: 0, sourceDuration: 10, speed: 1,
+            lines: [], lyricOffset: 0, typography: .classic, includeAudio: false)
+        XCTAssertEqual(request.title, track.title)
+        XCTAssertEqual(request.artist, track.artist)
+        XCTAssertEqual(request.artworkURL, artworkURL)
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        for file in ["NowPlayingScreen.swift", "Share/StoryDraftPreview.swift",
+                     "Share/StorySceneView.swift", "Share/ShareComposer.swift"] {
+            let source = try String(contentsOf: root.appendingPathComponent(file))
+            XCTAssertTrue(source.contains("NightcoreBrandLockup"), file)
+            XCTAssertTrue(source.contains("TrackIdentityPill"), file)
+            XCTAssertFalse(source.contains("\"NIGHTCORELAB\""), file)
+        }
+    }
     private func request(mode: StoryMode = .player,
                          duration: TimeInterval = 120) throws -> StoryVideoRequest {
         let track = TrackInfo(

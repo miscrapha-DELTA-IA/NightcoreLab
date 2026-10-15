@@ -11,6 +11,7 @@ enum KaraokeVoiceAnalyzer {
         let values = samples.prefix(count).map { Double($0.isFinite ? $0 : 0) - mean }
         let rms = sqrt(values.reduce(0) { $0 + $1 * $1 } / Double(count))
         guard rms >= 0.008 else { return .silence }
+        let voiceLevel = min(1, max(0, (rms - 0.008) * 6))
         let minimum = max(2, Int(sampleRate / 1_100))
         let maximum = min(count / 2, Int(sampleRate / 65))
         guard maximum > minimum + 2 else { return .silence }
@@ -29,11 +30,11 @@ enum KaraokeVoiceAnalyzer {
               let lag = ((minimum + 1)..<maximum).first(where: {
                   correlations[$0] >= max(0.65, peak * 0.92) &&
                   correlations[$0] >= correlations[$0 - 1] && correlations[$0] > correlations[$0 + 1]
-              }) else { return .init(rms: rms, frequency: nil, confidence: 0) }
+              }) else { return .init(rms: voiceLevel, frequency: nil, confidence: 0) }
         let a = correlations[lag - 1], b = correlations[lag], c = correlations[lag + 1]
         let denominator = a - 2 * b + c
         let correction = abs(denominator) > 1e-9 ? max(-0.5, min(0.5, 0.5 * (a - c) / denominator)) : 0
-        return .init(rms: rms, frequency: sampleRate / (Double(lag) + correction), confidence: b)
+        return .init(rms: voiceLevel, frequency: sampleRate / (Double(lag) + correction), confidence: b)
     }
 }
 
