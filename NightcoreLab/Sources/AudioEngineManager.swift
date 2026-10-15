@@ -263,6 +263,7 @@ final class AudioEngineManager {
 
     func load(url: URL) throws {
         stemPrepareTask?.cancel()
+        stemPrepareTask = nil
         stemRampTask?.cancel()
         stemPlayers.values.forEach { $0.stop() }
         stemFiles = [:]
@@ -337,7 +338,7 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
-        prepareStems(source: url, revision: playbackSourceRevision)
+        // Deferred to Stems tab: normal playback and karaoke do not run separation.
     }
 
     /// One tap, no transport mutation and no AVAudioSession query.
@@ -899,16 +900,22 @@ final class AudioEngineManager {
 
     // MARK: Four-stem mixer
 
+    func requestStemPreparation() {
+        guard !stemsAvailable, stemPrepareTask == nil, let sourceURL else { return }
+        prepareStems(source: sourceURL, revision: playbackSourceRevision)
+    }
+
     private func prepareStems(source: URL, revision: Int) {
         stemPrepareTask?.cancel()
         stemPrepareTask = Task { [weak self] in
             let cacheFolder = TrackAudioCache.stemDirectory(for: source)
-            let asset = try? await Task.detached(priority: .utility) {
+            let asset = try? await Task.detached(priority: .background) {
                 try await StemSplitterEngine.prepare(source: source,
                                                      cacheFolder: cacheFolder)
             }.value
             guard let self, !Task.isCancelled,
                   self.playbackSourceRevision == revision, let asset else { return }
+            self.stemPrepareTask = nil
             var files: [StemKind: AVAudioFile] = [:]
             for kind in StemKind.allCases {
                 guard let url = asset.urls[kind],
@@ -942,6 +949,7 @@ final class AudioEngineManager {
         let clamped = level.clamped(to: Self.stemRange)
         stemLevels[kind] = clamped
         if !stemMixEnabled { setStemMixerEnabled(true) }
+        if !stemsAvailable { requestStemPreparation() }
         if stemsAvailable {
             stemPlayers[kind]?.volume = clamped
         } else {
