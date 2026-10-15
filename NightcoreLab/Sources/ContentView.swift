@@ -902,6 +902,7 @@ struct ContentView: View {
                 ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
                     let track = playbackQueue.upNextQueue[index]
                     let status = downloader.status(for: track)
+                    HStack(spacing: 8) {
                     Button {
                         playFromQueue(track)
                     } label: {
@@ -940,6 +941,7 @@ struct ContentView: View {
                     .foregroundStyle(currentTheme.accent)
                     .disabled(audio.isExporting)
                     .accessibilityLabel("Álbum e artista de \(track.title)")
+                    }
                 }
             }
             }
