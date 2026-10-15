@@ -326,7 +326,7 @@ struct KaraokeLyricsView: View {
                 }
             }
         }
-        .overlay(alignment: .top) {
+        .safeAreaInset(edge: .top, spacing: 8) {
             KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill)
         }
         .onAppear { store.startTracking() }
@@ -438,10 +438,12 @@ private struct KaraokeLineView: View {
         // Profiling is opt-in. No per-frame logging, I/O or observable state.
         let probe = KaraokePerformanceProbe.shared
         let start = probe.enabled ? ProcessInfo.processInfo.systemUptime : 0
-        let frame = TypographyLayer(state: lyricState, preset: typographyPreset,
-                                    lyricOffset: offset, prepared: preparedTypography,
-                                    experienceMapping: typographyMapping)
+        let original = TypographyLayer(state: lyricState, preset: typographyPreset,
+                                       lyricOffset: offset, prepared: preparedTypography,
+                                       experienceMapping: typographyMapping)
             .resolve(at: sourceTime + offset, features: features)
+        let frame = TypographyAnimationEngine.evolve(
+            original, cadence: liveUniforms?.sectionCadence ?? .neutral)
         if probe.enabled {
             probe.typographyResolved(in: ProcessInfo.processInfo.systemUptime - start)
         }

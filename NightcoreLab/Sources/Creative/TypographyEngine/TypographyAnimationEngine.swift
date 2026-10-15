@@ -11,6 +11,34 @@ enum TypographyAnimationEngine {
         return frame.withAnimations(words)
     }
 
+    /// Stage 25: section-synchronized MagazineCutout scale and decoration.
+    /// Operates on already-resolved words, preserving deterministic typography
+    /// and never changing text, font, line layout or the Karaoke transport.
+    static func evolve(_ frame: TypographyFrame,
+                       cadence: SongSectionCadence) -> TypographyFrame {
+        guard cadence != .neutral, frame.preset.style == .magazineCutout else {
+            return frame
+        }
+        let scale = 1 + (cadence.textDecoration - 1) * 0.10
+        let transformed = frame.animations.mapValues { animation in
+            TypographyAnimationState(
+                opacity: animation.opacity,
+                scale: min(1.25, max(0.5, animation.scale * scale)),
+                rotation: min(16, max(-16,
+                    animation.rotation * cadence.textDecoration)),
+                offsetX: animation.offsetX, offsetY: animation.offsetY,
+                blur: animation.blur, glow: animation.glow,
+                colorShift: animation.colorShift,
+                chromaticOffset: animation.chromaticOffset,
+                opacityVariation: animation.opacityVariation,
+                effectIntensity: min(1,
+                    animation.effectIntensity * cadence.textDecoration),
+                magazineToneIndex: animation.magazineToneIndex,
+                magazineFillEnabled: animation.magazineFillEnabled)
+        }
+        return frame.withAnimations(transformed)
+    }
+
     private static func state(for word: TypographyWordFrame,
                               frame: TypographyFrame,
                               features: AudioFeatures?) -> TypographyAnimationState {

@@ -20,7 +20,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>27</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
@@ -81,7 +81,7 @@
 		<true/>
 	</dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>O microfone avalia seu canto no karaokê. A voz é processada apenas no aparelho e não é gravada.</string>
+	<string>O microfone permite cantar com Vocal FX e pontuar o karaokê. A análise vocal é local e o retorno é desativado em rotas inseguras.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Permite salvar vídeos Story na galeria para publicar no YouTube Shorts e em outras redes sociais.</string>
 	<key>NSLocalNetworkUsageDescription</key>

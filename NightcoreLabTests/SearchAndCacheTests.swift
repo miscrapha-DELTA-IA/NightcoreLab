@@ -72,6 +72,25 @@ final class SearchAndCacheTests: XCTestCase {
         XCTAssertNotNil(cache.localURL(for: protected))
     }
 
+    func testMemoryPressureEvictsOnlyDisposableCacheEntries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var cache = TrackAudioCache(folder: root.appendingPathComponent("cache"))
+        for id in ["playing000", "queued00000", "disposable0"] {
+            let input = root.appendingPathComponent("\(id).caf")
+            try makeAudio(at: input)
+            _ = try cache.store(Track(id: id, title: "Audio", thumbnailURL: nil),
+                                from: input)
+        }
+        cache.evictUnprotected(protecting: ["playing000", "queued00000"])
+        XCTAssertEqual(Set(cache.entries.keys), ["playing000", "queued00000"])
+        var persisted = TrackAudioCache(folder: cache.folder)
+        XCTAssertNotNil(persisted.localURL(for: "playing000"))
+        XCTAssertNotNil(persisted.localURL(for: "queued00000"))
+        XCTAssertNil(persisted.localURL(for: "disposable0"))
+    }
+
     private func makeAudio(at url: URL) throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
         let file = try AVAudioFile(forWriting: url, settings: format.settings)

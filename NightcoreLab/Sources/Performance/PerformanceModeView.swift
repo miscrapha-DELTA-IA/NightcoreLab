@@ -156,13 +156,19 @@ struct PerformanceModeView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var recorder = PerformanceRecorder()
-    @State private var grooveStrength: Double = 0
+    private var recorder: PerformanceRecorder { audio.performanceRecorder }
+    @AppStorage("performance.grooveStrength") private var grooveStrength: Double = 0
+    @AppStorage(CreativePresetCatalog.storageKey)
+    private var visibleCreativePresetID = CreativePresetCatalog.defaultID
+    @AppStorage("creativeReactionMode")
+    private var visibleReactionMode: CreativePreset.AudioReaction = .off
     @State private var padRhythm: RhythmAnalysisResult?
     @State private var padRhythmTask: Task<Void, Never>?
     @State private var haptics = false
     @State private var heldPads: Set<String> = []
-    @State private var recordedSourceRevision: Int?
+    private var recordedSourceRevision: Int? {
+        audio.performanceRecordingSourceRevision
+    }
     @State private var isRenderingAudio = false
     @State private var exportedAudio: URL?
     @State private var renderError: String?
@@ -249,11 +255,10 @@ struct PerformanceModeView: View {
                         }
                         HStack(spacing: 12) {
                             Button {
-                                if recorder.isRecording { recorder.stop() }
+                                if recorder.isRecording { audio.stopPadTake() }
                                 else {
-                                    recordedSourceRevision = audio.playbackSourceRevision
-                                    recordedClip = sourceClip
-                                    recorder.start()
+                                    recordedClip = sourceClip ?? audio.performanceSourceClip
+                                    audio.beginPadTake()
                                     exportedAudio = nil
                                 }
                             } label: {
@@ -265,10 +270,19 @@ struct PerformanceModeView: View {
                                         accent.opacity(0.20), in: RoundedRectangle(cornerRadius: 12))
                             }
                             .accessibilityIdentifier("performance.record")
+                            if !recorder.isRecording && !recorder.events.isEmpty {
+                                Button {
+                                    audio.beginPadTake(overdub: true)
+                                    exportedAudio = nil
+                                } label: {
+                                    Label("Overdub", systemImage: "plus.circle.fill")
+                                }
+                                .accessibilityIdentifier("performance.overdub")
+                            }
 
                             if !recorder.events.isEmpty && !recorder.isRecording,
                                let payload = recorder.shareJSON(
-                                   sourceClip: recordedClip,
+                                   sourceClip: recordedClip ?? audio.performanceSourceClip,
                                    quantizeStrength: Float(grooveStrength)) {
                                 ShareLink(item: payload,
                                           subject: Text("NightcoreLab Performance Events"),
@@ -280,6 +294,15 @@ struct PerformanceModeView: View {
                                 }
                                 .accessibilityIdentifier("performance.shareEvents")
                             }
+                        }
+                        if !recorder.takeEventIDs.isEmpty && !recorder.isRecording {
+                            Button(role: .destructive) {
+                                audio.clearLastPadTake()
+                                exportedAudio = nil
+                            } label: {
+                                Label("Limpar último take", systemImage: "arrow.uturn.backward")
+                            }
+                            .accessibilityIdentifier("performance.clearLastTake")
                         }
                         HStack {
                             Text("Groove assistido")
@@ -355,7 +378,22 @@ struct PerformanceModeView: View {
                     .padding(20)
                 }
             }
-            .background(Color(red: 0.045, green: 0.055, blue: 0.075))
+            .background {
+                // The Performance sheet is opaque and otherwise conceals the
+                // Player's Marble. Show the SAME procedural material here so
+                // finger hits visibly animate while the pads are being played.
+                TurbulentMarbleView(
+                    theme: .cyber, speed: 0.42,
+                    maxFPS: 30, isPaused: reduceMotion,
+                    extendIntoSafeArea: false,
+                    material: CreativePresetCatalog.material(
+                        selection: visibleCreativePresetID),
+                    liveMeter: audio.liveVisualMeter,
+                    reactionMode: visibleReactionMode,
+                    padAccentEmitter: audio.padAccentEmitter)
+                    .overlay(Color(red: 0.045, green: 0.055, blue: 0.075)
+                        .opacity(0.78))
+            }
             .navigationTitle("Performance")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -374,18 +412,22 @@ struct PerformanceModeView: View {
         } message: {
             Text(renderError ?? "")
         }
+        .onChange(of: grooveStrength) { _, next in
+            audio.padQuantizeStrength = Float(next)
+        }
         .onChange(of: audio.playbackSourceRevision) { _, _ in
             clipTask?.cancel()
             preparingClip = false
             sourceClip = nil
             recordedClip = nil
             confirmSharingRights = false
-            if recorder.isRecording { recorder.stop() }
+            if recorder.isRecording { audio.stopPadTake() }
             exportedAudio = nil
             prepareMusicalGrid()
         }
         .onAppear {
             audio.beginPerformanceMode()
+            audio.padQuantizeStrength = Float(grooveStrength)
             prepareMusicalGrid()
         }
         .onDisappear {
@@ -397,7 +439,7 @@ struct PerformanceModeView: View {
             padRhythmTask?.cancel()
             padRhythm = nil
             heldPads.removeAll()
-            recorder.stop()
+            audio.stopPadTake()
             audio.endPerformanceMode()
         }
     }
@@ -666,7 +708,7 @@ struct PerformanceModeView: View {
         guard !isRenderingAudio, audio.fileName != nil,
               recordedSourceRevision == audio.playbackSourceRevision else { return }
         let frozen = recorder.timeline(
-            sourceClip: recordedClip, quantizeStrength: Float(grooveStrength))
+            sourceClip: recordedClip ?? audio.performanceSourceClip, quantizeStrength: Float(grooveStrength))
         guard frozen.isValid && !frozen.events.isEmpty else { return }
         isRenderingAudio = true
         exportedAudio = nil

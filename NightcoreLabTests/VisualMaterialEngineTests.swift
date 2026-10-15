@@ -373,3 +373,45 @@ final class VisualMaterialEngineTests: XCTestCase {
         print("MATERIAL_LAYOUT frameBytes=\(MemoryLayout<MaterialFrame>.stride) parameterBytes=\(MemoryLayout<VisualParameterSet>.stride)")
     }
 }
+
+final class Stage24MusicalEnvelopeTests: XCTestCase {
+    func testKickHasFastAttackSmoothReleaseAndSlowGroove() {
+        var detector = MusicalBeatEnvelope()
+        let initial = detector.advance(bass: 0, rms: 0, dt: 0.02)
+        XCTAssertEqual(initial.beat, 0)
+        let kick = detector.advance(bass: 0.95, rms: 0.9, dt: 0.02)
+        XCTAssertGreaterThan(kick.beat, 0.50, "18 ms fast attack")
+        XCTAssertLessThan(kick.energy, 0.10, "800 ms follower must not jump on a transient")
+        var previous = kick.beat
+        for _ in 0..<12 {
+            let tail = detector.advance(bass: 0, rms: 0, dt: 0.02)
+            XCTAssertLessThanOrEqual(tail.beat, previous + 1e-8)
+            XCTAssertGreaterThanOrEqual(tail.beat, 0)
+            previous = tail.beat
+        }
+        XCTAssertGreaterThan(previous, 0.05, "240 ms decay must not abruptly disappear")
+        XCTAssertLessThan(previous, kick.beat)
+        var high = MusicalBeatEnvelope()
+        for _ in 0..<60 { _ = high.advance(bass: 0.4, rms: 0.85, dt: 0.02) }
+        XCTAssertGreaterThan(high.energy, kick.energy)
+        XCTAssertGreaterThan(high.energy, 0.5)
+    }
+
+    func testMusicalModesDriveBloomAndElasticFoldIndependently() {
+        let material = VisualMaterialCatalog.neonPulse
+        let baseline = MaterialResolver.resolve(material, timestamp: 1)
+        let live = LiveAudioLevels(rms: 0.8, bass: 0.85, onset: 1,
+                                   beatPulse: 0.95, songEnergy: 0.85)
+        let off = MarbleLiveResponse.apply(baseline, levels: live, mode: .off)
+        let fluid = MarbleLiveResponse.apply(baseline, levels: live, mode: .subtle)
+        let reactive = MarbleLiveResponse.apply(baseline, levels: live, mode: .responsive)
+        XCTAssertEqual(off, baseline)
+        XCTAssertEqual(MarbleLiveResponse.gain(.subtle), 0.40)
+        XCTAssertEqual(MarbleLiveResponse.gain(.responsive), 0.85)
+        XCTAssertGreaterThan(reactive.parameters.beatPulse, fluid.parameters.beatPulse)
+        XCTAssertGreaterThan(reactive.parameters.brightnessBoost,
+                             fluid.parameters.brightnessBoost)
+        XCTAssertGreaterThan(reactive.parameters.warpAmount, fluid.parameters.warpAmount)
+        XCTAssertGreaterThan(reactive.signals.movement, fluid.signals.movement)
+    }
+}

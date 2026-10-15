@@ -80,6 +80,20 @@ struct SongDNA: Codable, Equatable, Sendable {
                          ? (expr?.sections?.sections ?? []) : [])
     }
 
+    /// Human-readable only; never replaces the typed, provenance-checked
+    /// harmonic and measured mood evidence.
+    var keyName: String? {
+        guard let hypothesis = key?.hypotheses.first,
+              hypothesis.confidence >= 0.70 else { return nil }
+        return hypothesis.tonic.rawValue + " " + hypothesis.scale.rawValue
+    }
+    var moodName: String? {
+        guard let hint = mood?.hints
+            .filter({ $0.confidence >= 0.60 })
+            .max(by: { $0.confidence < $1.confidence }) else { return nil }
+        return hint.dimension.rawValue
+    }
+
     var isValid: Bool {
         guard !assetID.isEmpty, !sourceRevision.isEmpty,
               sourceDuration.isFinite, sourceDuration > 0,
@@ -124,5 +138,18 @@ struct SongDNA: Codable, Equatable, Sendable {
             item.startTime <= time && time < item.endTime &&
             item.confidence.isFinite && item.confidence >= 0.65 &&
             item.confidence <= 1 ? item : nil
+    }
+}
+
+
+/// All section lookups execute on a background actor. The SwiftUI/audio paths
+/// receive only the last immutable modulation; no per-frame cache traversal.
+actor SongSectionTracker {
+    func modulation(for dna: SongDNA?, sourceTime: TimeInterval,
+                    enabled: Bool) -> SongSectionCadence {
+        // SongDNA validity is checked once before publishing it to the player.
+        // A background actor performs only binary search during playback.
+        guard enabled, let dna else { return .neutral }
+        return SongSectionCadence.at(sourceTime: sourceTime, dna: dna)
     }
 }

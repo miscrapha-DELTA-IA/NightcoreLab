@@ -6,6 +6,91 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    @MainActor
+    func testKaraokePresentationPreservesLiveTransportAndQueueCompletion() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441000))
+        buffer.frameLength = 441000
+        for channel in 0..<2 {
+            for index in 0..<441000 { buffer.floatChannelData![channel][index] = 0.05 }
+        }
+        do { let file = try AVAudioFile(forWriting: url, settings: format.settings); try file.write(from: buffer) }
+        let audio = AudioEngineManager()
+        try audio.load(url: url)
+        audio.seek(to: 2)
+        audio.play()
+        defer { audio.pause() }
+        let session = KaraokeScoringSession()
+        let generation = audio.scheduleGeneration
+        let clock = audio.lyricsClock
+        let category = AVAudioSession.sharedInstance().category
+        for _ in 0..<3 {
+            session.setKaraokePresented(true, lines: karaokeLines(5), at: clock.lyricTime,
+                                       trackEnergy: { 0.1 })
+            XCTAssertEqual(session.mode, .passive)
+            session.setKaraokePresented(false, lines: [], at: clock.lyricTime, trackEnergy: { 0 })
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertTrue(audio.isAudioEngineRunning)
+        XCTAssertTrue(clock === audio.lyricsClock)
+        XCTAssertGreaterThanOrEqual(clock.lyricTime, 1.9)
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        XCTAssertEqual(AVAudioSession.sharedInstance().category, category)
+
+        // A stop-triggered callback can arrive while guarded OR after resuming.
+        audio.beginGraphReconfiguration()
+        audio.playbackFinished(generation: generation)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        audio.finishGraphReconfiguration(resume: true)
+        audio.playbackFinished(generation: generation)
+        XCTAssertTrue(audio.isPlaying)
+        XCTAssertEqual(audio.playbackCompletionCount, 0)
+        XCTAssertGreaterThanOrEqual(audio.lyricsClock.lyricTime, 1.8)
+    }
+
+    func testVocalAdapterConvertsNative48kMonoToSong44100Stereo() throws {
+        // Offline fixture models the hardware bus without requesting a mic.
+        let graph = AVAudioEngine()
+        let input = AVAudioPlayerNode(), adapter = AVAudioMixerNode()
+        let pitch = AVAudioUnitTimePitch()
+        [input, adapter, pitch].forEach { graph.attach($0) }
+        let native = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
+        let song = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        graph.connect(input, to: adapter, format: native)
+        graph.connect(adapter, to: pitch, format: song)
+        graph.connect(pitch, to: graph.mainMixerNode, format: song)
+        try graph.enableManualRenderingMode(.offline, format: song, maximumFrameCount: 1024)
+        let source = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: native, frameCapacity: 48000))
+        source.frameLength = 48000
+        for i in 0..<48000 { source.floatChannelData![0][i] = 0.1 * sin(Float(i) * 2 * .pi * 220 / 48000) }
+        input.scheduleBuffer(source)
+        try graph.start()
+        input.play()
+        defer { graph.stop() }
+        let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: song, frameCapacity: 1024))
+        var peak: Float = 0
+        for _ in 0..<20 {
+            let status = try graph.renderOffline(1024, to: output)
+            if status == .success {
+                for i in 0..<Int(output.frameLength) {
+                    let sample = output.floatChannelData![0][i]
+                    XCTAssertTrue(sample.isFinite)
+                    peak = max(peak, abs(sample))
+                }
+            }
+        }
+        XCTAssertGreaterThan(peak, 0.01)
+    }
+
+    func testGrantedMicrophonePermissionNeverRequestsErrorBanner() {
+        XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.granted))
+        XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.undetermined))
+        XCTAssertTrue(AudioEngineManager.shouldShowMicrophonePermissionError(.denied))
+    }
 
     private func karaokeKey() -> KeyAnalysisResult {
         KeyAnalysisResult(hypotheses: [.init(tonic: .c, scale: .major, confidence: 0.9)],
@@ -141,6 +226,245 @@ final class RuntimeStabilizationTests: XCTestCase {
         session.start(mode: .simulation, lines: lines, at: 0)
         XCTAssertFalse(session.snapshot.hasHarmonicReference)
     }
+
+
+
+    func testExp11FourVocalMacrosAndRouteSafety() throws {
+        for preset in VocalFXPreset.allCases {
+            let setting = VocalFXSetting(preset: preset, intensity: 0.8)
+            XCTAssertEqual(try JSONDecoder().decode(
+                VocalFXSetting.self, from: JSONEncoder().encode(setting)), setting)
+            let resolved = VocalFXParameters.resolve(setting)
+            XCTAssertTrue(resolved.pitchCents.isFinite)
+            XCTAssertTrue(resolved.eqPresenceDB.isFinite)
+            XCTAssertTrue((0...100).contains(resolved.reverbWetMix))
+            XCTAssertTrue((0...100).contains(resolved.delayWetMix))
+            XCTAssertGreaterThan(resolved.lowPassHz, 0)
+        }
+        XCTAssertEqual(VocalFXParameters.resolve(.init(preset: .studioClean, intensity: 1))
+            .pitchCents, 0)
+        XCTAssertGreaterThan(VocalFXParameters.resolve(.init(preset: .nightcore, intensity: 1))
+            .pitchCents, 0)
+        XCTAssertLessThan(VocalFXParameters.resolve(.init(preset: .dreamCloud, intensity: 1))
+            .pitchCents, 0)
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [.builtInSpeaker], latency: 0.008))
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [.bluetoothA2DP], latency: 0.120))
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [.headphones], latency: 0.045))
+        XCTAssertTrue(VocalMonitorSafety.allows(portTypes: [.headphones], latency: 0.018))
+        XCTAssertFalse(VocalMonitorSafety.allows(portTypes: [], latency: 0.018))
+    }
+
+    func testExp11CreatorVocalCodableKeepsLegacyPresets() throws {
+        var controls = CreatorControls()
+        controls.vocalFX = .init(preset: .cyberChoir, intensity: 0.62)
+        let encoded = try JSONEncoder().encode(controls)
+        let roundTrip = try JSONDecoder().decode(CreatorControls.self, from: encoded)
+        XCTAssertEqual(roundTrip, controls)
+        let legacy = try JSONDecoder().decode(CreatorControls.self,
+                                               from: Data(#"{"brightness":0.7}"#.utf8))
+        XCTAssertEqual(legacy.vocalFX.preset, .studioClean)
+        XCTAssertEqual(legacy.vocalFX.intensity, 0.5, accuracy: 0.0001)
+        XCTAssertTrue(legacy.isValid)
+    }
+
+    func testExp11TrackedBeatBarLoopLaunchAndNoFalseBPM() throws {
+        let grid = (0..<16).map { i in
+            RhythmAnalysisResult.BeatEvent(time: Double(i) * 0.5,
+                                           index: i, strength: 0.8,
+                                           isDownbeat: i.isMultiple(of: 4))
+        }
+        let rhythm = RhythmAnalysisResult(
+            onsetEvents: [],
+            bpmCandidates: [.init(bpm: 120, confidence: 0.85)],
+            beatGrid: grid, confidence: 0.9, downbeatConfidence: 0.75)
+        XCTAssertEqual(CreatorLoopGrid.tempo(rhythm), 120)
+        XCTAssertEqual(try XCTUnwrap(CreatorLoopGrid.nextBoundary(
+            after: 0.33, rhythm: rhythm)), 2, accuracy: 0.00001)
+        XCTAssertEqual(try XCTUnwrap(CreatorLoopGrid.nextBoundary(
+            after: 0.33, rhythm: rhythm, bar: false)), 0.5, accuracy: 0.00001)
+        XCTAssertNil(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: nil))
+        XCTAssertNil(CreatorLoopGrid.tempo(nil))
+        let low = RhythmAnalysisResult(onsetEvents: [], bpmCandidates: [],
+                                      beatGrid: grid, confidence: 0.2)
+        XCTAssertNil(CreatorLoopGrid.nextBoundary(after: 0.33, rhythm: low))
+        XCTAssertNil(CreatorLoopGrid.tempo(low))
+    }
+
+
+
+    @MainActor
+    func testExp10LivePadImpulseIsBoundedAndMaterialAware() throws {
+        let emitter = PadVisualAccentEmitter()
+        emitter.trigger("kick", velocity: 0.8, at: 10)
+        let instant = try XCTUnwrap(emitter.accent(at: 10))
+        XCTAssertEqual(instant.band, .low)
+        XCTAssertEqual(instant.strength, 0.8, accuracy: 0.000001)
+        let trailing = try XCTUnwrap(emitter.accent(at: 10.2))
+        XCTAssertLessThan(trailing.strength, instant.strength)
+        XCTAssertNil(emitter.accent(at: 10.9))
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse, timestamp: 0)
+        let boosted = PadVisualAccentResolver.apply(base, accent: instant)
+        XCTAssertGreaterThan(boosted.parameters.beatPulse, base.parameters.beatPulse)
+        XCTAssertGreaterThan(boosted.parameters.warpAmount, base.parameters.warpAmount)
+        XCTAssertEqual(boosted.parameters.stripingFrequency,
+                       base.parameters.stripingFrequency)
+        emitter.trigger("snare", velocity: 3, at: 12)
+        XCTAssertEqual(emitter.accent(at: 12)?.strength, 1)
+        XCTAssertEqual(emitter.accent(at: 12)?.band, .mid)
+        emitter.clear()
+        XCTAssertNil(emitter.accent(at: 12))
+    }
+
+    @MainActor
+    func testExp10PadOverdubClearLastTakeAndCodableRoundTrip() throws {
+        let recorder = PerformanceRecorder()
+        let sample = try XCTUnwrap(PadKit.starter.samples.first)
+        recorder.start(at: 10)
+        recorder.append(sample, velocity: 0.8, sourceTime: 1.1, at: 10.1)
+        recorder.stop()
+        recorder.overdub(at: 20)
+        recorder.append(sample, velocity: 0.6, sourceTime: 2.4, at: 20.2)
+        recorder.stop()
+        XCTAssertEqual(recorder.takeEventIDs.count, 2)
+        let original = recorder.archive(quantizeStrength: 0.5)
+        let decoded = try JSONDecoder().decode(
+            PerformanceTakeArchive.self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(original, decoded)
+        let restored = PerformanceRecorder()
+        restored.restore(decoded)
+        XCTAssertEqual(restored.events.count, 2)
+        restored.clearLastTake()
+        XCTAssertEqual(restored.events.count, 1)
+        XCTAssertEqual(restored.takeEventIDs.count, 1)
+        XCTAssertEqual(restored.events.first?.sourceTime, 1.1)
+        restored.clearLastTake()
+        XCTAssertTrue(restored.events.isEmpty)
+    }
+
+    @MainActor
+    func testExp10PadAccentAndAudioUseOneFrozenStoryTimestamp() throws {
+        var request = try storyRequest()
+        let kick = try XCTUnwrap(PadKit.starter.samples.first)
+        let hit = PadEvent(id: UUID(), padId: kick.id, timestamp: 0.42,
+                           velocity: 0.85, duration: kick.duration,
+                           sourceTime: 1.25, musicalBeat: 2.5,
+                           musicalBar: 1, bpmAtTrigger: 120,
+                           quantizedSourceTime: 1.0)
+        let take = PerformanceTimeline(
+            kitID: PadKit.starter.id, events: [hit], quantizeStrength: 0.5)
+        request.padPerformance = take
+        let timeline = StoryRenderTimeline(request: request, profile: .balanced)
+        // Start at source 0.5, speed 1.25: a 50%-quantized 1.125s
+        // event occurs at video elapsed 0.5s, exact index 10 @ 20fps.
+        let padFrame = timeline.frame(index: 10)
+        XCTAssertEqual(padFrame.sourceTime, 1.125, accuracy: 0.000001)
+        let accent = try XCTUnwrap(padFrame.padAccent)
+        XCTAssertEqual(accent.band, .low)
+        XCTAssertEqual(accent.strength, 0.85, accuracy: 0.000001)
+        let preview = try XCTUnwrap(request.resolvedFrame(
+            padFrame, audioTimeline: nil, rhythm: nil))
+        let exporterScene = StorySceneView(
+            request: request, artwork: nil, frame: timeline.frame(index: 10))
+        XCTAssertEqual(preview.materialFrame, exporterScene.materialFrame)
+        XCTAssertEqual(preview, exporterScene.resolvedCompositionFrame)
+        let bare = try storyRequest()
+        let baseline = try XCTUnwrap(bare.resolvedFrame(
+            StoryRenderTimeline(request: bare, profile: .balanced).frame(index: 10),
+            audioTimeline: nil, rhythm: nil))
+        XCTAssertGreaterThan(preview.materialFrame?.parameters.beatPulse ?? 0,
+                             baseline.materialFrame?.parameters.beatPulse ?? 0)
+
+        let scheduled = try PerformancePadMixdown.schedule(
+            take, kit: .starter, startTime: request.playbackTime,
+            speed: request.speed, sampleRate: 48_000)
+        XCTAssertEqual(scheduled.first?.startFrame, 24_000)
+        let previousFrame = timeline.frame(index: 9)
+        XCTAssertNil(previousFrame.padAccent)
+        XCTAssertEqual(timeline.frame(index: 10), timeline.frame(at: 0.5))
+    }
+
+
+
+    @MainActor
+    func testStage18C3VisibleMaterialBindingsAndCreatorNavigation() throws {
+        let expected: [(String, [String])] = [
+            ("neon-pulse", ["#040406", "#FF0088", "#00FF9D", "#00E5FF", "#F8FAFC"]),
+            ("agate-zebra", ["#FFFFFF", "#050507", "#6C7A9C", "#F28C28", "#FFFFFF"]),
+            ("void-gloss", ["#000000", "#00D2E6", "#00E5A3", "#F4DCE0", "#FF1A1A"]),
+            ("terrazzo-magma", ["#0B0D11", "#E87A1E", "#D91414", "#D8DEC8", "#081E4A"]),
+            ("airbrush-mirage", ["#121214", "#FF3B30", "#8E7CFF", "#FFB340", "#EBF2D5"]),
+            ("groove-ebru", ["#008B94", "#F5A623", "#EE4035", "#F8B195", "#26292C"]),
+            ("cymatic-rorschach", ["#050714", "#6699CC", "#F5F9FF", "#6699CC", "#050714"])
+        ]
+        let cyber = PlayerBackgroundView(style: .turbulent, imageURL: nil,
+                                         theme: .cyber,
+                                         material: CreativePresetCatalog.material(selection: "cyber-night"))
+            .renderedSurface
+        XCTAssertFalse(cyber.textured)
+        for (id, hex) in expected {
+            let card = PlayerBackgroundView(style: .blurred, imageURL: nil,
+                                            theme: .cyber,
+                                            material: CreativePresetCatalog.material(selection: id))
+            let actual = card.renderedSurface
+            XCTAssertEqual(actual.materialID, id)
+            XCTAssertEqual(actual.paletteHex, hex)
+            XCTAssertTrue(actual.textured)
+            XCTAssertEqual(card.effectiveStyle, .turbulent)
+            XCTAssertNotEqual(actual.parameters, cyber.parameters)
+            XCTAssertNotEqual(actual.paletteHex, cyber.paletteHex)
+            let shader = MarbleSurfaceBinding.resolve(material: card.resolvedMaterial)
+            XCTAssertEqual(shader, actual) // identical data bound by TurbulentMarbleView
+        }
+        var route = CreatorStudioRoute()
+        let selectedPreset = "void-gloss"
+        let theme: AppTheme = .ultraviolet
+        route.toggle()
+        XCTAssertTrue(route.isPresented)
+        XCTAssertEqual(selectedPreset, "void-gloss")
+        XCTAssertEqual(theme, .ultraviolet)
+        route.toggle()
+        XCTAssertFalse(route.isPresented)
+    }
+
+    @MainActor
+    func testStage18C3LivePCMMeterChangesOnScreenShaderWithModeGain() throws {
+        let meter = AudioVisualLiveMeter()
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                    frameCapacity: 1024))
+        buffer.frameLength = 1024
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        for i in 0..<1024 {
+            channel[i] = 0.45 * sin(Float(i) * 2 * .pi * 120 / 48_000)
+        }
+        meter.consume(buffer)
+        let level = meter.snapshot()
+        XCTAssertGreaterThan(level.rms, 0)
+        XCTAssertGreaterThan(level.bass, 0)
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.neonPulse,
+                                            timestamp: 2)
+        let off = MarbleLiveResponse.apply(base, levels: level, mode: .off)
+        let subtle = MarbleLiveResponse.apply(base, levels: level, mode: .subtle)
+        let reactive = MarbleLiveResponse.apply(base, levels: level, mode: .responsive)
+        XCTAssertEqual(off, base)
+        XCTAssertGreaterThan(subtle.parameters.distortion, off.parameters.distortion)
+        XCTAssertGreaterThan(reactive.parameters.distortion, subtle.parameters.distortion)
+        XCTAssertGreaterThan(reactive.parameters.brightnessBoost,
+                             subtle.parameters.brightnessBoost)
+        XCTAssertEqual(reactive.parameters.stripingFrequency,
+                       base.parameters.stripingFrequency)
+        var controls = CreatorControls()
+        controls.set(0.9, for: .brightness)
+        let edited = MarbleCreatorResponse.apply(reactive, controls: controls)
+        XCTAssertGreaterThan(edited.parameters.brightnessBoost,
+                             reactive.parameters.brightnessBoost)
+        XCTAssertEqual(edited.parameters.stripingMix, reactive.parameters.stripingMix)
+        meter.reset()
+        XCTAssertEqual(meter.snapshot(), .silence)
+    }
+
+
 
     func testExp7CuratedMaterialsHaveUniquePalettesAndTextureTopology() throws {
         let ids = ["neon-pulse", "agate-zebra", "void-gloss", "terrazzo-magma",
@@ -671,5 +995,88 @@ private enum LegacyCompositionResolver {
             return lower.value + (upper.value - lower.value) * ratio
         }
         return last.value
+    }
+}
+
+final class Stage24FlowClockTests: XCTestCase {
+    func testShaderClockAlwaysAdvancesWithoutKickSpeedBraking() {
+        var flow = MonotonicFlowClock()
+        var previous = flow.phase
+        for index in 0..<2_000 {
+            let simulatedBeat = Double(index % 17) / 16
+            _ = simulatedBeat // Beat can fade, but cannot change clock speed.
+            let now = flow.advance(elapsed: 1.0 / 120.0, speed: 0.6)
+            XCTAssertGreaterThan(now, previous)
+            XCTAssertEqual(now - previous, 0.6 / 120.0, accuracy: 1e-9)
+            previous = now
+        }
+        let paused = flow.advance(elapsed: -2, speed: 0.6)
+        XCTAssertEqual(paused, previous)
+        let resumed = flow.advance(elapsed: 10, speed: 0.6)
+        XCTAssertGreaterThan(resumed, paused)
+        XCTAssertLessThanOrEqual(resumed - paused, 0.06 + 1e-9,
+                                 "Foreground jump is bounded without resetting phase")
+    }
+}
+
+/// Stage 25: section transitions have no audio-engine or per-render callback.
+final class Stage25SectionAwareRuntimeTests: XCTestCase {
+    func testSourceTimeTransitionsModifyVisualFlowAndMagazineDecoration() async {
+        let dna = SongDNA(assetID: "fixture", sourceRevision: "r1",
+                          sourceDuration: 50, bpm: 150, energy: 0.85,
+                          sections: [
+            MusicSection(startTime: 0, endTime: 10, label: .intro, confidence: 0.9),
+            MusicSection(startTime: 10, endTime: 20, label: .verse, confidence: 0.9),
+            MusicSection(startTime: 20, endTime: 30, label: .preChorus, confidence: 0.9),
+            MusicSection(startTime: 30, endTime: 40, label: .chorus, confidence: 0.9),
+            MusicSection(startTime: 40, endTime: 50, label: .drop, confidence: 0.9)
+        ])
+        let tracker = SongSectionTracker()
+        let intro = await tracker.modulation(for: dna, sourceTime: 1, enabled: true)
+        let verse = await tracker.modulation(for: dna, sourceTime: 10, enabled: true)
+        let pre = await tracker.modulation(for: dna, sourceTime: 20, enabled: true)
+        let chorus = await tracker.modulation(for: dna, sourceTime: 30, enabled: true)
+        let drop = await tracker.modulation(for: dna, sourceTime: 40, enabled: true)
+        XCTAssertLessThan(intro.flowSpeed, verse.flowSpeed)
+        XCTAssertLessThan(verse.flowSpeed, pre.flowSpeed)
+        XCTAssertLessThan(pre.flowSpeed, chorus.flowSpeed)
+        XCTAssertGreaterThan(drop.flowSpeed, chorus.flowSpeed)
+        XCTAssertLessThan(intro.foldScale, chorus.foldScale)
+        XCTAssertGreaterThan(drop.foldScale, chorus.foldScale)
+        XCTAssertLessThan(intro.textDecoration, drop.textDecoration)
+
+        let base = MaterialResolver.resolve(VisualMaterialCatalog.smoke, timestamp: 2)
+        let quiet = SongSectionCadence.apply(base, cadence: intro)
+        let peak = SongSectionCadence.apply(base, cadence: drop)
+        XCTAssertLessThan(quiet.parameters.warpAmount, peak.parameters.warpAmount)
+        XCTAssertLessThan(quiet.parameters.brightnessBoost,
+                          peak.parameters.brightnessBoost)
+        XCTAssertEqual(base.parameters.stripingMix, peak.parameters.stripingMix)
+
+        let frame = TypographyFrame(
+            lineID: 1, lyricTime: 2,
+            preset: TypographyPreset(style: .magazineCutout),
+            status: .active, activeWordID: nil, words: [],
+            animations: [1: .neutral])
+        let quietType = TypographyAnimationEngine.evolve(frame, cadence: intro)
+        let peakType = TypographyAnimationEngine.evolve(frame, cadence: drop)
+        XCTAssertLessThan(quietType.animation(for: 1)!.scale,
+                          peakType.animation(for: 1)!.scale)
+        XCTAssertEqual(TypographyAnimationEngine.evolve(frame, cadence: .neutral), frame)
+        let disabled = await tracker.modulation(for: dna, sourceTime: 40, enabled: false)
+        let missing = await tracker.modulation(for: nil, sourceTime: 40, enabled: true)
+        XCTAssertEqual(disabled, .neutral)
+        XCTAssertEqual(missing, .neutral)
+    }
+
+    func testUnclassifiedSongProducesNoNewColorsOrMotion() async {
+        let dna = SongDNA(assetID: "unknown", sourceRevision: "r1",
+                          sourceDuration: 100)
+        let tracker = SongSectionTracker()
+        for second in [0.0, 10, 50, 99.9, 100] {
+            let cadence = await tracker.modulation(
+                for: dna, sourceTime: second, enabled: true)
+            XCTAssertEqual(cadence, .neutral)
+        }
     }
 }

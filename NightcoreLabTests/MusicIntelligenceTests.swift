@@ -279,3 +279,84 @@ private final class LockedCounter: @unchecked Sendable {
     var value: Int { lock.lock(); defer { lock.unlock() }; return count }
     func increment() { lock.lock(); defer { lock.unlock() }; count += 1 }
 }
+
+/// Stage 25: exercise the two real versioned caches without decoding audio
+/// during the live player handoff or inventing any section classification.
+final class Stage25SongDNACacheTests: XCTestCase {
+    func testCachedSongDNACombinesValidatedMusicAndExpression() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("songdna-v25-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let asset = AudioAssetDescriptor(
+            url: folder.appendingPathComponent("track.caf"),
+            assetID: "songdna-v25-fixture", sourceRevision: "content-r1",
+            duration: 60,
+            format: .init(sampleRate: 16_000, channelCount: 1, formatID: 1))
+        let timeline = AudioFeatureTimeline(points: [
+            AudioFeaturePoint(time: 0.1,
+                features: AudioFeatures(bass: 0.7, mid: 0.5, treble: 0.5,
+                                        energy: 0.8, beatDetected: true)),
+            AudioFeaturePoint(time: 59.9,
+                features: AudioFeatures(bass: 0.5, mid: 0.5, treble: 0.5,
+                                        energy: 0.6, beatDetected: false))
+        ], duration: 60)
+        let rhythm = RhythmAnalysisResult(
+            onsetEvents: [0.5, 1.0],
+            bpmCandidates: [.init(bpm: 128, confidence: 0.90)],
+            beatGrid: [
+                .init(time: 0.5, index: 0, strength: 1, isDownbeat: true),
+                .init(time: 1.0, index: 1, strength: 0.8)
+            ], confidence: 0.90, downbeatConfidence: 0.8)
+        let music = MusicAnalysisResult(
+            asset: asset, energy: .available, onsets: .available,
+            timeline: timeline, onsetEvents: [0.5, 1.0],
+            rhythm: .available, rhythmAnalysis: rhythm)
+        XCTAssertTrue(music.isValid(for: asset))
+        let cache = MusicAnalysisCache(directory: folder.appendingPathComponent("music"))
+        try await cache.store(music, for: asset)
+        let provenance = ExpressionProvenance(
+            method: "fixture", fingerprint: .init(algorithmVersion: 1),
+            analyzedThrough: 60, confidence: 0.9)
+        let expression = MusicExpressionResult(asset: asset,
+            statuses: [.key: .available, .sections: .available, .moodHints: .available],
+            key: KeyAnalysisResult(hypotheses: [
+                KeyHypothesis(tonic: .a, scale: .minor, confidence: 0.9)
+            ], provenance: provenance),
+            sections: SectionAnalysisResult(sections: [
+                MusicSection(startTime: 0, endTime: 15,
+                             label: .intro, confidence: 0.95),
+                MusicSection(startTime: 15, endTime: 30,
+                             label: .verse, confidence: 0.95),
+                MusicSection(startTime: 30, endTime: 40,
+                             label: .preChorus, confidence: 0.95),
+                MusicSection(startTime: 40, endTime: 50,
+                             label: .chorus, confidence: 0.95),
+                MusicSection(startTime: 50, endTime: 60,
+                             label: .drop, confidence: 0.95)
+            ], provenance: provenance),
+            moodHints: MoodHintsResult(hints: [
+                MoodHint(dimension: .spectralBrightness, normalizedValue: 0.82,
+                         confidence: 0.88, evidence: "fixture")
+            ], provenance: provenance))
+        let expressions = ExpressionCache(directory: folder.appendingPathComponent("expressions"))
+        try await expressions.store(expression, for: asset)
+        let dna = await SongDNA.cached(for: asset, musicCache: cache,
+                                       expressionCache: expressions)
+        XCTAssertTrue(dna.isValid)
+        XCTAssertEqual(dna.bpm, 128)
+        XCTAssertEqual(dna.keyName, "a minor")
+        XCTAssertEqual(dna.moodName, "spectralBrightness")
+        XCTAssertEqual(dna.energy, 0.7, accuracy: 0.0001)
+        XCTAssertEqual(dna.sections.count, 5)
+        XCTAssertEqual(dna.section(at: 49.999)?.label, .chorus)
+        XCTAssertEqual(dna.section(at: 50)?.label, .drop)
+        let stale = AudioAssetDescriptor(
+            url: asset.url, assetID: asset.assetID,
+            sourceRevision: "content-r2", duration: 60, format: asset.format)
+        let invalidated = await SongDNA.cached(
+            for: stale, musicCache: cache, expressionCache: expressions)
+        XCTAssertEqual(invalidated.bpm, 0)
+        XCTAssertNil(invalidated.keyName)
+        XCTAssertTrue(invalidated.sections.isEmpty)
+    }
+}

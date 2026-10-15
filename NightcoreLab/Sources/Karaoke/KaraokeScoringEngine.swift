@@ -102,7 +102,8 @@ struct KaraokeScoringEngine {
         return max(0, min(1, 1 - max(0, distance - 0.35) / 0.75))
     }
 
-    mutating func advance(to time: Double, voice: KaraokeVoiceFrame, playing: Bool) {
+    mutating func advance(to time: Double, voice: KaraokeVoiceFrame, playing: Bool,
+                          trackPresence: Bool? = nil) {
         guard !snapshot.isFinished, time.isFinite else { return }
         guard playing else { lastTime = time; priorVoice = .silence; return }
         let delta = time - lastTime
@@ -111,7 +112,7 @@ struct KaraokeScoringEngine {
         guard delta <= 0.5 else { lastTime = time; priorVoice = .silence; return }
         let from = lastTime
         lastTime = time
-        let voiced = voice.isVoiced
+        let voiced = trackPresence ?? voice.isVoiced
         if voiced && !priorVoice.isVoiced { attackTime = time }
         snapshot.hasHarmonicReference = reliableKey != nil
         snapshot.vocalAccuracy = 0

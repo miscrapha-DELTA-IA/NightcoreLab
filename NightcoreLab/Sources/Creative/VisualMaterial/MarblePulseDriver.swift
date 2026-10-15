@@ -46,3 +46,18 @@ struct MarblePulseDriver: Equatable, Sendable {
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }
+
+/// Integrated independently from beat intensity: no RMS-scaled time or
+/// rewinding when the musical envelope releases. Pure and XCTest-friendly.
+struct MonotonicFlowClock: Sendable {
+    private(set) var phase: Double = 0
+
+    @discardableResult
+    mutating func advance(elapsed: Double, speed: Double,
+                          clampBackgroundJump: Bool = true) -> Double {
+        guard elapsed.isFinite, speed.isFinite else { return phase }
+        let dt = max(0, clampBackgroundJump ? min(elapsed, 0.1) : elapsed)
+        phase += dt * max(0, speed)
+        return phase
+    }
+}

@@ -111,6 +111,35 @@ final class AudioEngineManager {
     @ObservationIgnored private var performanceOutputLatency: TimeInterval = 0
     /// Opt-in local metrics; no per-hit Observable notifications.
     @ObservationIgnored let padLatencyProbe = PadLatencyProbe()
+    /// Shared with the Creator/Performance sheet and the Story snapshot.
+    @ObservationIgnored let performanceRecorder = PerformanceRecorder()
+    @ObservationIgnored let padAccentEmitter = PadVisualAccentEmitter()
+    @ObservationIgnored private(set) var performanceRecordingSourceRevision: Int?
+    @ObservationIgnored var padQuantizeStrength: Float = 0
+    /// Read by the visible Player at visual FPS; published nowhere on the
+    /// render/audio thread. Uses the existing main mixer output, not a second graph.
+    @ObservationIgnored let liveVisualMeter = AudioVisualLiveMeter()
+    @ObservationIgnored private var liveMeterTapInstalled = false
+
+    /// The *same* live AVAudioEngine houses all four loop voices and native
+    /// vocal units. Mic monitoring is gated after processing, before limiter.
+    @ObservationIgnored let creatorLoops = CreatorLoopEngine()
+    private(set) var activeCreatorLoops: Set<CreatorLoopSlot> = []
+    private(set) var vocalCaptureActive = false
+    private(set) var vocalMonitoringEnabled = false
+    private(set) var vocalSetting = VocalFXSetting()
+    @ObservationIgnored private let vocalInputAdapter = AVAudioMixerNode()
+    @ObservationIgnored private let vocalPitch = AVAudioUnitTimePitch()
+    @ObservationIgnored private let vocalEQ = AVAudioUnitEQ(numberOfBands: 2)
+    @ObservationIgnored private let vocalDelay = AVAudioUnitDelay()
+    @ObservationIgnored private let vocalReverb = AVAudioUnitReverb()
+    @ObservationIgnored private let vocalGate = AVAudioMixerNode()
+    @ObservationIgnored private var microphoneCapture: KaraokeMicrophoneCapture?
+    /// Never read engine.inputNode just to initialize the engine or clean up
+    /// headless CI; retained only after a hardware-format validation.
+    @ObservationIgnored private var connectedVocalInput: AVAudioInputNode?
+    @ObservationIgnored private var vocalGeneration = 0
+    @ObservationIgnored var karaokeCompletion: (() -> Void)?
 
     var performanceKit: PadKit { padRuntime.kit }
     var performanceSourceClip: PerformanceSourceClip? { padRuntime.sourceClip }
@@ -123,11 +152,17 @@ final class AudioEngineManager {
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
-    /// Read-only source for opt-in utility-priority visual analysis.
-    /// No audio node or tap is installed.
+    /// Read-only source for offline visual evidence. Live RMS/bass are
+    /// independently obtained from the existing mixer through liveVisualMeter.
     var visualAnalysisURL: URL? { sourceURL }
     @ObservationIgnored private var needsScheduling = true
-    @ObservationIgnored private var scheduleGeneration = 0
+    @ObservationIgnored private(set) var scheduleGeneration = 0
+    private(set) var isReconfiguringGraph = false
+    var microphonePermissionDenied: Bool {
+        Self.shouldShowMicrophonePermissionError(AVAudioApplication.shared.recordPermission)
+    }
+    nonisolated static func shouldShowMicrophonePermissionError(
+        _ permission: AVAudioApplication.recordPermission) -> Bool { permission == .denied }
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
     @ObservationIgnored private weak var remoteRelay: RemotePlaybackRelay?
@@ -157,6 +192,8 @@ final class AudioEngineManager {
     /// As conexões são feitas em `load(url:)`, quando o formato do arquivo é conhecido.
     private func setupEngine() {
         processingNodes.forEach { engine.attach($0) }
+        // Microphone DSP units are attached only after permission and a
+        // valid hardware input format. The simulator needs no input graph.
         padRuntime.attach(to: engine)
         // Pads can sound before a song has been selected.
         let standaloneFormat = AVAudioFormat(
@@ -164,6 +201,8 @@ final class AudioEngineManager {
         engine.connect(performanceMixer, to: limiter, format: standaloneFormat)
         engine.connect(limiter, to: engine.mainMixerNode, format: standaloneFormat)
         padRuntime.connect(to: engine, mixer: performanceMixer)
+        creatorLoops.attach(to: engine, output: performanceMixer,
+                            format: standaloneFormat)
         engine.mainMixerNode.outputVolume = pow(10, Self.outputHeadroomDB / 20)
         engine.prepare()
 
@@ -182,14 +221,19 @@ final class AudioEngineManager {
               (1...2).contains(file.processingFormat.channelCount) else {
             throw AudioEngineError.unsupportedAudio
         }
-        endKaraokeMicrophone()
+        endVocalCapture()
+        stopAllCreatorLoops()
         stopPlayback()
         audioFile = file
         sourceURL = url
         playbackSourceRevision &+= 1
+        performanceRecorder.clearAll()
+        performanceRecordingSourceRevision = nil
+        padAccentEmitter.clear()
         fileName = url.deletingPathExtension().lastPathComponent
         duration = Double(file.length) / file.processingFormat.sampleRate
 
+        removeVisualMeterTap()
         engine.stop()
         padRuntime.clearSourceClip()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
@@ -204,6 +248,9 @@ final class AudioEngineManager {
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
                           performanceMixer: performanceMixer)
         padRuntime.connect(to: engine, mixer: performanceMixer)
+        // No mic FX wiring during load/prepare/offline tests. It is done on
+        // opt-in activation, after validating actual hardware input.
+        creatorLoops.attach(to: engine, output: performanceMixer, format: graphFormat)
         engine.prepare()
         if performanceModePresented {
             do {
@@ -219,84 +266,203 @@ final class AudioEngineManager {
         setupNowPlaying()
     }
 
-    // MARK: Opt-in karaoke microphone (the existing live engine only)
+    /// One tap, no transport mutation and no AVAudioSession query.
+    func beginPadTake(overdub: Bool = false) {
+        if !overdub || performanceRecorder.events.isEmpty {
+            performanceRecordingSourceRevision = playbackSourceRevision
+            performanceRecorder.start()
+        } else if performanceRecordingSourceRevision == playbackSourceRevision {
+            performanceRecorder.overdub()
+        }
+    }
 
-    private(set) var karaokeMicrophoneActive = false
-    @ObservationIgnored private var karaokeCapture: KaraokeMicrophoneCapture?
-    @ObservationIgnored private var karaokeMicGeneration = 0
-    @ObservationIgnored var karaokeCompletion: (() -> Void)?
+    func stopPadTake() { performanceRecorder.stop() }
+    func clearLastPadTake() { performanceRecorder.clearLastTake() }
 
-    func beginKaraokeMicrophone() async -> Bool {
-        guard !karaokeMicrophoneActive else { return true }
-        karaokeMicGeneration &+= 1
-        let generation = karaokeMicGeneration
-        let allowed = await AVAudioApplication.requestRecordPermission()
-        guard allowed, generation == karaokeMicGeneration, !Task.isCancelled else { return false }
+    /// Frozen, source-identity-matched snapshot for Story preview/export.
+    func frozenPadPerformance(quantizeStrength: Float? = nil) -> PerformanceTimeline? {
+        guard !performanceRecorder.isRecording,
+              performanceRecordingSourceRevision == playbackSourceRevision,
+              !performanceRecorder.events.isEmpty else { return nil }
+        let result = performanceRecorder.timeline(
+            sourceClip: padRuntime.sourceClip,
+            quantizeStrength: quantizeStrength ?? padQuantizeStrength)
+        return result.isValid ? result : nil
+    }
+
+    // MARK: Mic and Creator loops (one pre-existing audio graph)
+
+    func applyVocalFX(_ settings: VocalFXSetting) {
+        guard settings.isValid else { return }
+        vocalSetting = settings
+        guard vocalPitch.engine != nil else { return }
+        let m = VocalFXParameters.resolve(settings)
+        vocalPitch.rate = 1
+        vocalPitch.pitch = m.pitchCents
+        vocalEQ.bands[0].filterType = .parametric
+        vocalEQ.bands[0].frequency = 3300
+        vocalEQ.bands[0].bandwidth = 1.2
+        vocalEQ.bands[0].gain = m.eqPresenceDB
+        vocalEQ.bands[0].bypass = false
+        vocalEQ.bands[1].filterType = .lowPass
+        vocalEQ.bands[1].frequency = m.lowPassHz
+        vocalEQ.bands[1].bypass = m.lowPassHz >= 17_999
+        vocalDelay.delayTime = m.delaySeconds
+        vocalDelay.feedback = 4
+        vocalDelay.wetDryMix = m.delayWetMix
+        vocalReverb.loadFactoryPreset(m.reverbPreset)
+        vocalReverb.wetDryMix = m.reverbWetMix
+        refreshVocalMonitorSafety()
+    }
+
+    /// The adapter mixer owns sample-rate/channel conversion. Never force the
+    /// song format onto the hardware input bus (e.g. 48k mono -> 44.1k stereo).
+    private func connectVocalChain(input: AVAudioInputNode, format: AVAudioFormat) {
+        if vocalPitch.engine == nil {
+            [vocalInputAdapter, vocalPitch, vocalEQ, vocalDelay, vocalReverb, vocalGate]
+                .forEach { engine.attach($0) }
+        }
+        vocalGate.outputVolume = 0
+        let songFormat = performanceMixer.outputFormat(forBus: 0)
+        engine.connect(input, to: vocalInputAdapter, format: format)
+        engine.connect(vocalInputAdapter, to: vocalPitch, format: songFormat)
+        engine.connect(vocalPitch, to: vocalEQ, format: songFormat)
+        engine.connect(vocalEQ, to: vocalDelay, format: songFormat)
+        engine.connect(vocalDelay, to: vocalReverb, format: songFormat)
+        engine.connect(vocalReverb, to: vocalGate, format: songFormat)
+        engine.connect(vocalGate, to: performanceMixer, format: songFormat)
+    }
+
+    private func refreshVocalMonitorSafety() {
+        let session = AVAudioSession.sharedInstance()
+        let safe = vocalCaptureActive && VocalMonitorSafety.allows(
+            session.currentRoute.outputs, latency: session.outputLatency)
+        vocalMonitoringEnabled = safe
+        vocalGate.outputVolume = safe ? min(0.5, vocalSetting.intensity * 0.42) : 0
+    }
+
+    /// Explicit opt-in only. Opening lyrics never calls this method.
+    func beginVocalCapture() async -> Bool {
+        if vocalCaptureActive { return true }
+        vocalGeneration &+= 1
+        let requested = vocalGeneration
+        let permission = AVAudioApplication.shared.recordPermission
+        let allowed = permission == .granted ? true :
+            (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
+        guard allowed, requested == vocalGeneration, !Task.isCancelled else { return false }
         let resume = isPlaying
-        pause()
-        suspendGraphForKaraoke()
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
         let capture = KaraokeMicrophoneCapture()
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
+            // Inspect input only AFTER activating the recording session.
+            guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
             let input = engine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            guard format.channelCount > 0, format.sampleRate > 0 else {
-                throw AudioEngineError.unsupportedAudio
+            let native = input.outputFormat(forBus: 0)
+            guard native.channelCount > 0, native.sampleRate.isFinite,
+                  native.sampleRate > 0 else { throw AudioEngineError.unsupportedAudio }
+            let scoringClock = lyricsClock
+            // Analysis reads native PCM; the separate adapter converts monitor audio.
+            input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+                capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
-            let clock = lyricsClock
-            input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
-                // No DSP, Task creation or observable publication on this callback.
-                guard clock.isPlaying else { return }
-                capture.capture(buffer, sourceTime: clock.lyricTime)
-            }
-            karaokeCapture = capture
-            karaokeMicrophoneActive = true
-            cancelIdleStop()
+            connectedVocalInput = input
+            connectVocalChain(input: input, format: native)
+            microphoneCapture = capture
+            vocalCaptureActive = true
+            applyVocalFX(vocalSetting)
             try engine.start()
-            lyricsClock.refreshOutputLatency()
-            if resume { play() }
+            installVisualMeterTap()
             return true
         } catch {
+            if let input = connectedVocalInput {
+                input.removeTap(onBus: 0)
+                engine.disconnectNodeOutput(input)
+            }
+            connectedVocalInput = nil
             capture.stop()
-            endKaraokeMicrophone()
+            microphoneCapture = nil
+            vocalCaptureActive = false
+            refreshVocalMonitorSafety()
             configureSession()
-            if resume { play() }
-            return false
+            return false // Busy hardware keeps passive scoring; not a permission error.
         }
     }
 
-    private func suspendGraphForKaraoke() {
-        scheduleGeneration += 1
+    /// Invalidate BEFORE stop: callbacks already enqueued remain stale after
+    /// the guard is lowered. A Boolean alone cannot protect delayed callbacks.
+    func beginGraphReconfiguration() {
+        let position = min(duration, max(0, lyricsClock.lyricTime))
+        isReconfiguringGraph = true
+        scheduleGeneration &+= 1
+        cancelIdleStop()
+        lastKnownTime = position
+        lyricsClock.didPause(at: position)
+        isPlaying = false
         player.stop()
-        padRuntime.stopAll()
-        engine.stop()
         needsScheduling = true
-        scheduledStartTime = lastKnownTime
-        lyricsClock.didPause(at: lastKnownTime)
+        scheduledStartTime = position
+        removeVisualMeterTap()
+        engine.stop()
     }
 
-    func karaokeVoiceFrame() -> KaraokeVoiceFrame {
-        karaokeCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
-    }
-
-    func endKaraokeMicrophone() {
-        karaokeMicGeneration &+= 1 // also cancels an outstanding permission request
-        karaokeCompletion = nil
-        guard karaokeMicrophoneActive else { return }
-        let resume = isPlaying
-        if resume { pause() }
-        suspendGraphForKaraoke()
-        engine.inputNode.removeTap(onBus: 0)
-        karaokeCapture?.stop(); karaokeCapture = nil
-        karaokeMicrophoneActive = false
-        configureSession()
+    func finishGraphReconfiguration(resume: Bool) {
+        isReconfiguringGraph = false
         lyricsClock.refreshOutputLatency()
         if resume { play() }
         else if performanceModePresented { try? engine.start() }
         else { scheduleIdleStop() }
+    }
+
+    // Compatibility with the already-merged KaraokeScoringControls surface.
+    var karaokeMicrophoneActive: Bool { vocalCaptureActive }
+    func beginKaraokeMicrophone() async -> Bool { await beginVocalCapture() }
+    func endKaraokeMicrophone() { endVocalCapture() }
+
+    func karaokeVoiceFrame() -> KaraokeVoiceFrame {
+        microphoneCapture?.frame(at: lyricsClock.lyricTime) ?? .silence
+    }
+
+    func endVocalCapture() {
+        vocalGeneration &+= 1
+        karaokeCompletion = nil
+        guard vocalCaptureActive || microphoneCapture != nil ||
+              connectedVocalInput != nil else { return }
+        let resume = isPlaying
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
+        microphoneCapture?.stop()
+        microphoneCapture = nil
+        vocalCaptureActive = false
+        vocalGate.outputVolume = 0
+        vocalMonitoringEnabled = false
+        configureSession()
+    }
+
+    func toggleCreatorLoop(_ slot: CreatorLoopSlot, rhythm: RhythmAnalysisResult?,
+                           key: KeyAnalysisResult?) -> Bool {
+        let launched = creatorLoops.toggle(
+            slot, sourceTime: currentTime, speed: speed,
+            rhythm: rhythm, key: key, engine: engine,
+            onStopped: { [weak self] slot in
+                _ = self?.activeCreatorLoops.remove(slot)
+            })
+        if launched { activeCreatorLoops = creatorLoops.active }
+        return launched
+    }
+
+    func stopAllCreatorLoops() {
+        creatorLoops.stopAll()
+        activeCreatorLoops = []
     }
 
     // MARK: Performance pads
@@ -335,7 +501,7 @@ final class AudioEngineManager {
     private func refreshPerformanceOutputLatency() {
         let latency = AVAudioSession.sharedInstance().outputLatency
         performanceOutputLatency = latency.isFinite ?
-            min(0.35, max(0, latency)) : 0
+            min(0.200, max(0, latency)) : 0
     }
 
     /// Prepare at most five seconds from the currently loaded local source.
@@ -432,6 +598,11 @@ final class AudioEngineManager {
                 nodePlayMS: nodeTiming.playMS,
                 wasCold: wasCold, succeeded: played))
         }
+        if played {
+            // AFTER the audio command; the shader samples this lock-free of
+            // any SwiftUI invalidation via its own TimelineView.
+            padAccentEmitter.trigger(padID, velocity: velocity)
+        }
         return played
     }
 
@@ -449,6 +620,7 @@ final class AudioEngineManager {
         defer { transportSignposter.endInterval("Audio resume", interval) }
         do {
             if !engine.isRunning { try engine.start() }
+            installVisualMeterTap()
             if performanceModePresented { padRuntime.primeVoices() }
             if needsScheduling {
                 // Preserve the existing replay-from-start behavior at EOF.
@@ -484,14 +656,14 @@ final class AudioEngineManager {
 
     private func scheduleIdleStop() {
         cancelIdleStop()
-        guard !performanceModePresented, !karaokeMicrophoneActive else { return }
+        guard !performanceModePresented, !vocalCaptureActive else { return }
         let generation = idleStopGeneration
         let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
                   generation == self.idleStopGeneration,
-                  !self.isPlaying, !self.performanceModePresented, !self.karaokeMicrophoneActive else { return }
+                  !self.isPlaying, !self.performanceModePresented, !self.vocalCaptureActive else { return }
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
@@ -641,11 +813,13 @@ final class AudioEngineManager {
     /// Standalone offline graph. Does not seek, pause or replace the live player.
     nonisolated static func exportStorySegment(source: StoryAudioSource,
                                                startTime: TimeInterval,
-                                               duration: TimeInterval) async throws -> URL {
+                                               duration: TimeInterval,
+                                               performance: PerformanceTimeline? = nil) async throws -> URL {
         let renderTask = Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: source.url, settings: source.settings,
                                    format: .m4a, progress: { _ in },
-                                   startTime: startTime, maxDuration: duration)
+                                   startTime: startTime, maxDuration: duration,
+                                   performance: performance)
         }
         // Detached tasks do not inherit cancellation automatically.
         // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.
@@ -674,9 +848,9 @@ final class AudioEngineManager {
         needsScheduling = false
     }
 
-    private func playbackFinished(generation: Int) {
+    func playbackFinished(generation: Int) {
         // Ignora callbacks de agendamentos antigos (stop() também dispara o callback).
-        guard generation == scheduleGeneration else { return }
+        guard !isReconfiguringGraph, generation == scheduleGeneration else { return }
         karaokeCompletion?()
         player.stop()
         // Pads are an independent performance surface: ending the song must
@@ -688,7 +862,6 @@ final class AudioEngineManager {
         lyricsClock.didSeek(to: 0)
         setupNowPlaying()
         scheduleIdleStop()
-        endKaraokeMicrophone()
         playbackCompletionCount += 1
     }
 
@@ -701,6 +874,24 @@ final class AudioEngineManager {
         lastKnownTime = 0
         scheduledStartTime = 0
         lyricsClock.didSeek(to: 0)
+    }
+
+    /// One output tap, shared by all background instances. Main actor controls
+    /// installation; the CoreAudio callback never captures the engine or UI.
+    private func installVisualMeterTap() {
+        guard !liveMeterTapInstalled else { return }
+        let meter = liveVisualMeter
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) {
+            buffer, _ in meter.consume(buffer)
+        }
+        liveMeterTapInstalled = true
+    }
+
+    private func removeVisualMeterTap() {
+        guard liveMeterTapInstalled else { return }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        liveMeterTapInstalled = false
+        liveVisualMeter.reset()
     }
 
     // MARK: - Now Playing (Tela de Bloqueio / Control Center)
@@ -844,8 +1035,31 @@ final class AudioEngineManager {
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
         } catch {
+            #if DEBUG
             print("AudioEngineManager: falha ao configurar AVAudioSession – \(error)")
+            #endif
         }
+    }
+
+    /// Release transient voices at every hardware interruption/route loss.
+    /// Never query inputNode on a headless simulator: only disconnect a mic
+    /// node that was validated and attached during explicit opt-in capture.
+    private func suspendLivePerformanceForSystemEvent() {
+        stopPerformancePads()
+        stopAllCreatorLoops()
+        stopPadTake()
+        padAccentEmitter.clear()
+        vocalGate.outputVolume = 0
+        vocalMonitoringEnabled = false
+        if let input = connectedVocalInput {
+            input.removeTap(onBus: 0)
+            engine.disconnectNodeOutput(input)
+            connectedVocalInput = nil
+        }
+        microphoneCapture?.stop()
+        microphoneCapture = nil
+        vocalCaptureActive = false
+        karaokeCompletion = nil
     }
 
     private func observeInterruptions() {
@@ -864,8 +1078,9 @@ final class AudioEngineManager {
                 case .began:
                     let wasPlaying = self.isPlaying
                     let source = self.sourceURL
-                    self.pause()
-                    self.endKaraokeMicrophone()
+                    self.beginGraphReconfiguration()
+                    self.suspendLivePerformanceForSystemEvent()
+                    self.finishGraphReconfiguration(resume: false)
                     // Pause invalidates any previous request. Capture *after*
                     // it so a later user pause or replacement cancels resumption.
                     self.interruptedSourceURL = wasPlaying ? source : nil
@@ -896,16 +1111,25 @@ final class AudioEngineManager {
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
-            let removed = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ==
-                .oldDeviceUnavailable
+            let reason = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+            let removed = reason == .oldDeviceUnavailable
+            let hardwareChanged = removed || reason == .newDeviceAvailable
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lyricsClock.refreshOutputLatency()
                 self.refreshPerformanceOutputLatency()
+                // Hardware input formats and scheduled voices may become
+                // invalid during route negotiation. The current song file is
+                // retained; no accidental auto-resume on unplug.
+                if hardwareChanged && !removed && self.vocalCaptureActive {
+                    self.endVocalCapture()
+                }
+                self.refreshVocalMonitorSafety()
                 if removed {
+                    self.beginGraphReconfiguration()
+                    self.suspendLivePerformanceForSystemEvent()
                     self.interruptedSourceURL = nil
-                    self.pause()
-                    self.endKaraokeMicrophone()
+                    self.finishGraphReconfiguration(resume: false)
                 }
             }
         }
