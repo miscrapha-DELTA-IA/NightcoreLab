@@ -1472,3 +1472,36 @@ final class Stage38UnifiedIntegrationTests: XCTestCase {
                        both.playbackTracks.count)
     }
 }
+
+
+final class Stage39PowerAndMemoryContractTests: XCTestCase {
+    func testShaderPauseAndPowerAwareCadenceAreConnected() throws {
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        func load(_ name: String) throws -> String {
+            try String(contentsOf: base.appendingPathComponent(name), encoding: .utf8)
+        }
+        let marble = try load("TurbulentMarbleView.swift")
+        let background = try load("TurbulentBackgroundView.swift")
+        let player = try load("NowPlayingScreen.swift")
+        XCTAssertTrue(marble.contains("scenePhase != .active"))
+        XCTAssertTrue(marble.contains("shouldPauseLiveShader"))
+        XCTAssertTrue(marble.contains("isLowPowerModeEnabled"))
+        XCTAssertTrue(background.contains("paused: !animates"))
+        XCTAssertTrue(player.contains("isPaused: searchDrawer.isOpen"))
+    }
+
+    @MainActor
+    func testMemoryPressureDiscardsOnlyVolatileLyricCache() {
+        let store = LyricsStore()
+        store.discardVolatileLyricCache()
+        XCTAssertNil(store.trackID)
+    }
+
+    func testVisualFrameBusDropsVolatilePacketsUnderPressure() async {
+        let bus = AudioVisualFrameBus(capacity: 2)
+        await bus.discardUnderMemoryPressure()
+        let latest = await bus.drainLatest()
+        XCTAssertNil(latest)
+    }
+}
