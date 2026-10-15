@@ -425,25 +425,54 @@ struct ContentView: View {
 
             Spacer(minLength: 0)
 
-            GlassGroup(spacing: 8) {
-                HStack(spacing: 8) {
-                    headerButton("square.grid.3x3.fill", label: "Abrir Performance Mode") {
+            // Keep the legacy one-tap actions on wider phones; never let them
+            // squeeze the nontruncating Nightcore Lab brand on compact devices.
+            ViewThatFits(in: .horizontal) {
+                GlassGroup(spacing: 8) {
+                    HStack(spacing: 8) {
+                        headerButton("square.grid.3x3.fill", label: "Abrir Performance Mode") {
+                            showPerformanceMode = true
+                        }
+                        headerButton("heart.fill", label: "Apoiar o projeto") {
+                            openURL(donationURL)
+                        }
+                        headerButton(isVertical ? "slider.horizontal.3" : "slider.vertical.3",
+                                     label: isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)") {
+                            withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                                isVertical.toggle()
+                            }
+                        }
+                        .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
+                        importButton
+                    }
+                }
+                Menu {
+                    Button("Abrir Performance Mode", systemImage: "square.grid.3x3.fill") {
                         showPerformanceMode = true
                     }
-                    headerButton("heart.fill", label: "Apoiar o projeto") {
+                    Button("Apoiar o projeto", systemImage: "heart.fill") {
                         openURL(donationURL)
                     }
-
-                    // Mostra o ícone do modo para o qual o botão vai trocar
-                    headerButton(isVertical ? "slider.horizontal.3" : "slider.vertical.3",
-                                 label: isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)") {
-                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) { isVertical.toggle() }
+                    Button(isVertical ? "Sliders horizontais" : "Sliders verticais",
+                           systemImage: "slider.vertical.3") {
+                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                            isVertical.toggle()
+                        }
                     }
-                    .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
-
-                    importButton
+                    Button("Importar música", systemImage: "plus") {
+                        showImporter = true
+                    }
+                    .disabled(audio.isExporting || downloader.isDownloading)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(currentTheme.accent)
+                        .frame(width: 40, height: 40)
+                        .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
                 }
+                .accessibilityLabel("Ações do cabeçalho")
             }
+            .layoutPriority(0)
         }
     }
 
