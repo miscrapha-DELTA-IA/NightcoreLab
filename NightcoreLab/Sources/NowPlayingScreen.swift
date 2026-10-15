@@ -331,6 +331,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
     @State private var liveUniforms = CreativeLiveUniforms()
+    @State private var sectionTracker = SongSectionTracker()
     @State private var creatorRoute = CreatorStudioRoute()
     @State private var creatorControls = CreatorControls()
     @State private var suggestedSongProfile: SongCreativeProfile?
@@ -370,7 +371,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         ZStack {
             Color.black.ignoresSafeArea()
             if showsKaraoke {
-                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     BackgroundLayer(
                         style: backgroundStyle,
                         theme: MarbleTheme(appTheme: appTheme),
@@ -382,6 +383,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
+                        sectionCadence: section,
                         creatorControls: creatorControls,
                         padAccentEmitter: audio.padAccentEmitter
                     )
@@ -391,7 +393,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                 // Keep the Liquid Marble visible when panels are collapsed.
                 // One full-screen shader is enough; it pauses with Reduce Motion
                 // and when the app moves out of the foreground.
-                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     TurbulentMarbleView(
                         theme: MarbleTheme(appTheme: appTheme),
                         speed: 0.6,
@@ -403,6 +405,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         pulseDriver: pulse,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
+                        sectionCadence: section,
                         creatorControls: creatorControls,
                         padAccentEmitter: audio.padAccentEmitter
                     )
@@ -632,6 +635,59 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
 
 
+        // Read the two existing versioned caches immediately. Cache misses
+        // use the shared AnalysisScheduler detached utility worker; neither
+        // decoding nor file hashing ever runs on an audio/render callback.
+        .task(id: audio.playbackSourceRevision) {
+            let revision = audio.playbackSourceRevision
+            liveUniforms.setSongDNA(nil)
+            guard let url = audio.visualAnalysisURL, url.isFileURL else { return }
+            let descriptor = await Task.detached(priority: .utility) {
+                try? AudioAssetDescriptor.read(at: url)
+            }.value
+            guard !Task.isCancelled, audio.playbackSourceRevision == revision,
+                  audio.visualAnalysisURL == url, let descriptor else { return }
+            let cached = await SongDNA.cached(
+                for: descriptor, musicCache: MusicAnalysisCache(),
+                expressionCache: ExpressionCache())
+            guard !Task.isCancelled, audio.playbackSourceRevision == revision,
+                  audio.visualAnalysisURL == url else { return }
+            if cached.isValid { liveUniforms.setSongDNA(cached) }
+
+            // Cached verified sections can animate immediately. Incomplete
+            // energy/rhythm intelligence is enriched without delaying playback.
+            if cached.bpm == 0 || cached.energy == 0 {
+                let analysis = try? await MusicIntelligenceEngine.shared.analysis(for: url)
+                guard !Task.isCancelled, audio.playbackSourceRevision == revision,
+                      audio.visualAnalysisURL == url else { return }
+                let expression = await ExpressionCache().load(
+                    for: descriptor,
+                    requiring: SongCreativeProfileResolver.acceptedExpressionFingerprints)
+                let enriched = await Task.detached(priority: .utility) {
+                    SongDNA.from(asset: descriptor, analysis: analysis, expression: expression)
+                }.value
+                guard !Task.isCancelled, audio.playbackSourceRevision == revision,
+                      audio.visualAnalysisURL == url else { return }
+                if enriched.isValid { liveUniforms.setSongDNA(enriched) }
+            }
+        }
+        // The source-time lookup is actor isolated at ~8 Hz, not in the 60 Hz
+        // SwiftUI/Metal timeline. Only section CHANGES invalidate leaf readers.
+        .task(id: "\(audio.playbackSourceRevision)|\(reactionMode.rawValue)") {
+            let revision = audio.playbackSourceRevision
+            while !Task.isCancelled && revision == audio.playbackSourceRevision {
+                let section = await sectionTracker.modulation(
+                    for: liveUniforms.songDNA, sourceTime: clock.lyricTime,
+                    enabled: clock.isPlaying && reactionMode != .off)
+                guard !Task.isCancelled, revision == audio.playbackSourceRevision else { break }
+                liveUniforms.setSectionCadence(section)
+                do { try await Task.sleep(for: .milliseconds(120)) }
+                catch { break }
+            }
+            if revision == audio.playbackSourceRevision {
+                liveUniforms.setSectionCadence(.neutral)
+            }
+        }
         .task(id: track.id) {
             // Cache-only handoff, off the touch/audio thread. No FFT is run
             // just to open Player; rejected/missing evidence uses Original.
@@ -741,7 +797,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .padding(.vertical, showsKaraoke ? 10 : 11)
         .background {
             if !showsKaraoke {
-                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse in
+                LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     PlayerBackgroundView(
                         style: effectivePlayerBackgroundStyle,
                         imageURL: track.coverURL, theme: appTheme,
@@ -750,6 +806,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         pulseDriver: pulse, material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
                         reactionMode: isPlaying ? reactionMode : .off,
+                        sectionCadence: section,
                         creatorControls: creatorControls,
                         padAccentEmitter: audio.padAccentEmitter)
                 }
@@ -1056,6 +1113,7 @@ private struct BackgroundLayer: View {
     var material: VisualMaterial = .legacyMarble
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
+    var sectionCadence: SongSectionCadence = .neutral
     var creatorControls: CreatorControls = .neutral
     var padAccentEmitter: PadVisualAccentEmitter? = nil
 
@@ -1075,6 +1133,7 @@ private struct BackgroundLayer: View {
                                     pulseDriver: pulseDriver,
                                     liveMeter: liveMeter,
                                     reactionMode: reactionMode,
+                                    sectionCadence: sectionCadence,
                                     creatorControls: creatorControls,
                                     padAccentEmitter: padAccentEmitter)
                     .transition(.opacity)
