@@ -52,6 +52,7 @@ final class AudioVisualLiveMeter: @unchecked Sendable {
         var lowpass: Float = 0
         var midpass: Float = 0
         var envelope = MusicalBeatEnvelope()
+        var elapsedSincePublish: Double = 0
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -88,11 +89,18 @@ final class AudioVisualLiveMeter: @unchecked Sendable {
         let warmth = min(1, sqrt(midPower / Double(n)) * 4.0)
         let dt = Double(count) / buffer.format.sampleRate
         state.withLock {
+            // Keep the audio DSP envelope at buffer cadence, but publish the
+            // latest value to visual consumers at <= ~30 Hz. No dispatch,
+            // Task, heap container, formatting or SwiftUI writes on this tap.
             let response = $0.envelope.advance(bass: bass, rms: rms, dt: dt)
-            $0.sample = LiveAudioLevels(rms: rms, bass: bass, mid: warmth,
-                                        onset: response.onset,
-                                        beatPulse: response.beat,
-                                        songEnergy: response.energy)
+            $0.elapsedSincePublish += dt
+            if $0.elapsedSincePublish >= 1.0 / 30.0 {
+                $0.elapsedSincePublish.formTruncatingRemainder(dividingBy: 1.0 / 30.0)
+                $0.sample = LiveAudioLevels(rms: rms, bass: bass, mid: warmth,
+                                            onset: response.onset,
+                                            beatPulse: response.beat,
+                                            songEnergy: response.energy)
+            }
             $0.lowpass = low
             $0.midpass = mid
         }
