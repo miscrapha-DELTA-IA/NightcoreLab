@@ -74,11 +74,18 @@ enum StoryExportMotion {
 
     static func smoothBeat(at time: TimeInterval, dna: SongDNA?) -> Double {
         guard time.isFinite, let beats = dna?.beatTimestamps else { return 0 }
+        // O(log N), not O(total song beats) for every off-screen MP4 frame.
+        // Keep the Gaussian untruncated to avoid boundary jumps.
+        guard !beats.isEmpty else { return 0 }
+        var low = 0, high = beats.count
+        while low < high {
+            let mid = (low + high) / 2
+            if beats[mid] < time { low = mid + 1 } else { high = mid }
+        }
+        let lower = max(0, low - 2), upper = min(beats.count, low + 2)
         var peak = 0.0
-        for beat in beats {
-            let distance = abs(time - beat)
-            guard distance < 0.6 else { continue }
-            let normalized = distance / 0.18
+        for index in lower..<upper {
+            let normalized = abs(time - beats[index]) / 0.18
             peak = max(peak, exp(-0.5 * normalized * normalized))
         }
         return min(1, peak)
