@@ -4,6 +4,7 @@ import SwiftUI
 struct KaraokeScoreHUD: View {
     let session: KaraokeScoringSession
     var accent: Color = .cyan
+    var onResult: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -48,6 +49,16 @@ struct KaraokeScoreHUD: View {
                     .tint(accent)
                     .accessibilityLabel(session.mode == .passive ? "Sincronia da faixa" : "Precisão vocal")
                     .accessibilityValue("\(Int(session.snapshot.vocalAccuracy * 100)) por cento")
+                if session.snapshot.judgedVerses > 0, let onResult {
+                    Button(action: onResult) {
+                        Label("Ver Resultado", systemImage: "trophy.fill")
+                            .font(.caption.weight(.semibold))
+                            .frame(minHeight: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(accent)
+                    .accessibilityIdentifier("karaoke.showResult")
+                }
                 if session.snapshot.isFinished {
                     KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode != .microphone)
                 }

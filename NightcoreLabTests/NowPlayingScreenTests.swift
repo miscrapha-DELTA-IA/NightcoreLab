@@ -20,6 +20,35 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertFalse(audio.isPlaying)
     }
 
+    @MainActor
+    func testSelectingTrackCollapsesDrawerWithoutChangingTransport() {
+        let audio = AudioEngineManager()
+        let generation = audio.scheduleGeneration
+        let clock = audio.lyricsClock
+        var drawer = SearchDrawerState()
+        drawer.openForSearch()
+        let focus = drawer.focusRequest
+        drawer.selectedTrack()
+        XCTAssertFalse(drawer.isOpen)
+        XCTAssertEqual(drawer.focusRequest, focus)
+        XCTAssertEqual(audio.scheduleGeneration, generation)
+        XCTAssertTrue(audio.lyricsClock === clock)
+    }
+
+    func testNewTrackIdentityReplacesCreatorAndShareHeader() {
+        let artwork = URL(string: "https://example.com/new-cover.jpg")!
+        let selected = Track(id: "new-track", title: "Singer - New Song",
+                             thumbnailURL: artwork)
+        let info = TrackInfo(track: selected, fileName: nil, coverURL: artwork)
+        let snapshot = ShareSnapshot(trackID: info.id, title: info.title,
+            artist: info.artist, artworkURL: info.coverURL, theme: .acid,
+            visualStyle: .marble, marblePhase: 0, timestamp: .now)
+        XCTAssertEqual(snapshot.trackID, selected.id)
+        XCTAssertEqual(snapshot.title, selected.title)
+        XCTAssertEqual(snapshot.artworkURL, artwork)
+        XCTAssertEqual(info.coverURL, artwork)
+    }
+
     func testPlayerOwnsDrawerAndMusicSelectionUsesExistingPlaybackPath() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")

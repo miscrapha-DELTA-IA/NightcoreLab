@@ -11,6 +11,20 @@ enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Existing preference key; unchanged so the user's choice survives.
     static let storageKey = "karaokeTypography"
 
+    static let storyObjectModels: [TypographyStyle] = [
+        .magazineCutout, .vinylSticker, .dymoTicket, .liquidCapsule
+    ]
+
+    var shortObjectTitle: String {
+        switch self {
+        case .magazineCutout: return "Recorte"
+        case .vinylSticker: return "Adesivo"
+        case .dymoTicket: return "Fita"
+        case .liquidCapsule: return "Cristal ⚡"
+        default: return title
+        }
+    }
+
     var id: String { rawValue }
 
     var title: String {

@@ -35,6 +35,7 @@ final class LyricsStore {
     private(set) var status: LyricsStatus = .idle
     private(set) var needsReview = false
     private(set) var activeLineIndex: Int?
+    private(set) var scrollAnchorLineID: Int? = 0
     private(set) var isPlaying = false
 
     /// Calibração do usuário (Bluetooth etc.). Positivo = letra adianta.
@@ -61,6 +62,7 @@ final class LyricsStore {
             self.trackID = trackID
             lines = []
             activeLineIndex = nil
+            scrollAnchorLineID = 0
             hasWordSync = false
         }
         status = .searching
@@ -73,6 +75,7 @@ final class LyricsStore {
         status = .unavailable
         lines = []
         activeLineIndex = nil
+        scrollAnchorLineID = 0
         hasWordSync = false
         needsReview = false
     }
@@ -91,6 +94,7 @@ final class LyricsStore {
         status = .searching
         lines = []
         activeLineIndex = nil
+        scrollAnchorLineID = 0
         hasWordSync = false
 
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -109,7 +113,7 @@ final class LyricsStore {
     func clear() {
         loadTask?.cancel()
         scoring.resetForTrack()
-        trackID = nil; lines = []; activeLineIndex = nil; hasWordSync = false
+        trackID = nil; lines = []; activeLineIndex = nil; scrollAnchorLineID = 0; hasWordSync = false
         status = .idle; needsReview = false; isPlaying = false
     }
 

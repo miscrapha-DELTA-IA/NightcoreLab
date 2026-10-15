@@ -53,27 +53,37 @@ actor LyricsPrefetcher {
     private let cache = LyricsDiskCache()
     private let store: LyricsStore
     private var task: Task<Void, Never>?
+    private var warmTask: Task<Void, Never>?
     private var activeID: String?
     private var warmedID: String?
 
     init(store: LyricsStore) { self.store = store }
 
     /// Chame quando a reprodução COMEÇA (não quando a aba/modo de letras abre).
-    func start(_ meta: TrackMetadata) {
+    func start(_ meta: TrackMetadata) async {
+        // The player commits the source and resets LyricsStore synchronously.
+        // A delayed launch from an older selection must never take ownership.
+        guard await store.trackID == meta.videoID else { return }
         task?.cancel()
+        warmTask?.cancel()
         activeID = meta.videoID
         warmedID = nil
-        task = Task(priority: .utility) { [weak self] in await self?.run(meta, apply: true) }
+        task = Task(priority: .userInitiated) { [weak self] in await self?.run(meta, apply: true) }
     }
 
     /// Aquece o cache da próxima faixa da fila (ex.: quando a atual passa de 70%). Não toca no store.
     func warm(_ meta: TrackMetadata) {
         guard meta.videoID != activeID, meta.videoID != warmedID else { return }
         warmedID = meta.videoID
-        Task(priority: .background) { [weak self] in await self?.run(meta, apply: false) }
+        warmTask = Task(priority: .background) { [weak self] in
+            await self?.run(meta, apply: false)
+        }
     }
 
-    func cancel() { task?.cancel(); activeID = nil; warmedID = nil }
+    func cancel() {
+        task?.cancel(); warmTask?.cancel()
+        activeID = nil; warmedID = nil
+    }
 
     /// A tela de letras consulta a seleção persistida sem chamar a rede.
     func cachedChoice(for videoID: String) -> CachedLyricsChoice? { cache.load(videoID) }
@@ -102,7 +112,7 @@ actor LyricsPrefetcher {
     // MARK: -
 
     private func run(_ m: TrackMetadata, apply: Bool) async {
-        if apply { await store.beginLoading(trackID: m.videoID) }
+        guard !Task.isCancelled, !apply || activeID == m.videoID else { return }
 
         if let cached = cache.load(m.videoID) { await finish(cached, m, apply); return }
 

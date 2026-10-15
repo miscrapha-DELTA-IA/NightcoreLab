@@ -190,6 +190,7 @@ struct KaraokeLyricsView: View {
     let clock: PlaybackClock
     var theme: KaraokeTheme = .acid
     var accent: Color? = nil
+    var onShowResult: (() -> Void)? = nil
 
     /// Same catalog helpers the StoryRequestBuilder freezes (Stage 12.5).
     private var typographyPreset: TypographyPreset {
@@ -225,6 +226,7 @@ struct KaraokeLyricsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 24) {
+                        Color.clear.frame(height: 1).id("karaoke-top")
                         ForEach(store.lines) { line in
                             let emphasis = KaraokeFocusResolver.emphasis(
                                 lineID: line.id, activeID: store.activeLineIndex,
@@ -335,6 +337,13 @@ struct KaraokeLyricsView: View {
                     followsPlayback = true
                     lastRequestedLineID = nil
                     animateLineTransition = false
+                    proxy.scrollTo("karaoke-top", anchor: .top)
+                }
+                .onChange(of: store.lines) { _, lines in
+                    if store.scrollAnchorLineID == 0, let first = lines.first,
+                       lastRequestedLineID == nil {
+                        proxy.scrollTo(first.id, anchor: .top)
+                    }
                 }
                 .task(id: store.trackID) {
                     // Reopen at the current line, even if the active index
@@ -346,7 +355,8 @@ struct KaraokeLyricsView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 8) {
-            KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill)
+            KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill,
+                            onResult: onShowResult)
         }
         .onAppear { store.startTracking() }
         .onChange(of: store.isPlaying) { _, playing in

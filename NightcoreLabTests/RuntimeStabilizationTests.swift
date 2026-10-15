@@ -6,6 +6,30 @@ import XCTest
 /// Stage 10C — Performance & Runtime Stabilization.
 /// Every optimization here must be output-identical to the code it replaced.
 final class RuntimeStabilizationTests: XCTestCase {
+    @MainActor
+    func testCommittedTrackResetsScoreAndLyricsScrollIdentity() {
+        let store = LyricsStore()
+        let lines = karaokeLines(3)
+        store.beginLoading(trackID: "old")
+        store.scoring.present(true)
+        store.scoring.start(mode: .simulation, lines: lines, at: 0)
+        for index in 1...20 {
+            store.scoring.advance(time: Double(index) * 0.05,
+                                  playing: true, lines: lines)
+        }
+        XCTAssertGreaterThan(store.scoring.snapshot.totalScore, 0)
+        store.beginLoading(trackID: "new")
+        XCTAssertEqual(store.trackID, "new")
+        XCTAssertEqual(store.status, .searching)
+        XCTAssertTrue(store.lines.isEmpty)
+        XCTAssertNil(store.activeLineIndex)
+        XCTAssertEqual(store.scrollAnchorLineID, 0)
+        XCTAssertEqual(store.scoring.snapshot.totalScore, 0)
+        XCTAssertEqual(store.scoring.snapshot.streakCombo, 0)
+        XCTAssertEqual(store.scoring.snapshot.multiplier, 1)
+        XCTAssertNil(store.scoring.snapshot.lastVerseRating)
+    }
+
     func testObjectWordAppearanceIsFrameOrderIndependent() throws {
         let word = WordSync(id: 2, text: "NOITE", start: 1, end: 3, spaceAfter: false)
         let seed = TypographyResolver.stableSeed(lineID: 7, word: word)
