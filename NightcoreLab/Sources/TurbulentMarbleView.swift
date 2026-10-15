@@ -122,6 +122,8 @@ struct TurbulentMarbleView: View {
     /// frames keep their existing frozen, time-deterministic path.
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
+    /// Updated only at verified section boundaries (not from the FFT).
+    var sectionCadence: SongSectionCadence = .neutral
     var creatorControls: CreatorControls = .neutral
     var padAccentEmitter: PadVisualAccentEmitter? = nil
 
@@ -146,7 +148,8 @@ struct TurbulentMarbleView: View {
                     let levels = liveMeter?.snapshot() ?? .silence
                     let now = motion.advance(
                         date: context.date, start: startedAt ?? start,
-                        baseSpeed: speed)
+                        baseSpeed: speed * (reactionMode == .off
+                            ? 1 : sectionCadence.flowSpeed))
                     marbleFrame(
                         time: now,
                         resolved: resolvedFrame(live: true, levels: levels))
@@ -185,8 +188,11 @@ struct TurbulentMarbleView: View {
             ? MarbleLiveResponse.apply(resolved, levels: levels, mode: reactionMode)
             : resolved
         let edited = MarbleCreatorResponse.apply(liveOutput, controls: creatorControls)
+        let sectioned = live && reactionMode != .off
+            ? SongSectionCadence.apply(edited, cadence: sectionCadence)
+            : edited
         return live ? PadVisualAccentResolver.apply(
-            edited, accent: padAccentEmitter?.accent()) : edited
+            sectioned, accent: padAccentEmitter?.accent()) : sectioned
     }
 
     /// Same palette mapping consumed by the shader and asserted by tests.
@@ -365,11 +371,17 @@ enum MarbleLiveResponse {
 private final class MarbleMotionState {
     private var flow = MonotonicFlowClock()
     private var lastDate: Date?
+    private var smoothSectionSpeed = 0.6
     func advance(date: Date, start: Date, baseSpeed: Double) -> Float {
         if let lastDate {
             // Beat release NEVER brakes shader time.
-            flow.advance(elapsed: date.timeIntervalSince(lastDate), speed: baseSpeed)
+            let delta = max(0, min(0.1, date.timeIntervalSince(lastDate)))
+            // 450 ms transition between structural speeds, preserving phase.
+            smoothSectionSpeed += (baseSpeed - smoothSectionSpeed) *
+                (1 - exp(-delta / 0.45))
+            flow.advance(elapsed: delta, speed: smoothSectionSpeed)
         } else {
+            smoothSectionSpeed = baseSpeed
             flow.advance(elapsed: date.timeIntervalSince(start),
                          speed: baseSpeed, clampBackgroundJump: false)
         }
