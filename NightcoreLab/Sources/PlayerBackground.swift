@@ -55,6 +55,7 @@ struct PlayerBackgroundView: View {
     var material: VisualMaterial = .legacyMarble
     var liveMeter: AudioVisualLiveMeter? = nil
     var reactionMode: CreativePreset.AudioReaction = .off
+    var sectionCadence: SongSectionCadence = .neutral
     var creatorControls: CreatorControls = .neutral
     var padAccentEmitter: PadVisualAccentEmitter? = nil
 
@@ -84,6 +85,7 @@ struct PlayerBackgroundView: View {
                     pulseDriver: frozenTime == nil ? pulseDriver : nil,
                     liveMeter: frozenTime == nil ? liveMeter : nil,
                     reactionMode: reactionMode,
+                    sectionCadence: sectionCadence,
                     creatorControls: creatorControls,
                     padAccentEmitter: padAccentEmitter
                 )
