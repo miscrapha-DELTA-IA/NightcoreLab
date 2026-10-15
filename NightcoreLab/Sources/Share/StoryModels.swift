@@ -127,6 +127,12 @@ struct StoryVideoRequest: Sendable {
             rhythmAnalysis: rhythm, performance: padPerformance,
             padAccent: frame.padAccent)
         guard var resolved else { return nil }
+        let cadence = reactionMode == .off ? SongSectionCadence.neutral
+            : SongSectionCadence.at(sourceTime: frame.sourceTime, dna: songDNA)
+        if let typography = resolved.typographyFrame {
+            resolved = resolved.withTypography(
+                TypographyAnimationEngine.evolve(typography, cadence: cadence))
+        }
         if resolved.materialFrame != nil {
             let base = MaterialResolver.resolve(
                 (runtime ?? renderRuntime)?.material ?? .legacyMarble,
