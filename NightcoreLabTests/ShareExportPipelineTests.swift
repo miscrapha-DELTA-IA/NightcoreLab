@@ -304,4 +304,55 @@ final class ShareExportPipelineTests: XCTestCase {
         output.cleanup()
         XCTAssertFalse(FileManager.default.fileExists(atPath: output.videoURL.path))
     }
+
+    @MainActor
+    func testStage37ShareReactivityOffIsSilentWhilePaletteAndPhaseStayLive() throws {
+        let clip = try request(mode: .player, duration: 30)
+        var silent = clip
+        silent.reactionMode = .off
+        silent.liveVisualResponseEnabled = true
+        silent.songDNA = SongDNA(assetID: "fixture", sourceRevision: "r1",
+                                 sourceDuration: 30, beatTimestamps: [29.65])
+        let profile = StoryEncodingProfile(width: 270, height: 480,
+                                           fps: 30, bitRate: 700_000)
+        let frames = (0..<4).map { StoryRenderTimeline(request: silent,
+                                                       profile: profile).frame(index: $0) }
+        for frame in frames {
+            let scene = StorySceneView(request: silent, artwork: nil, frame: frame)
+            XCTAssertEqual(scene.materialFrame.parameters.beatPulse, 0)
+            XCTAssertEqual(scene.materialFrame.signals.energy, 0)
+            XCTAssertEqual(scene.materialFrame.signals.movement, 0)
+            XCTAssertEqual(scene.materialFrame.audioResponse.pulse, 0)
+        }
+        XCTAssertGreaterThan(frames[1].marblePhase, frames[0].marblePhase)
+        XCTAssertEqual(silent.theme, clip.theme)
+        let snapshot = ShareSnapshotBuilder.make(
+            track: TrackInfo(track: nil, fileName: "Stage37.mp3", coverURL: nil),
+            theme: .cyber, visualStyle: .marble,
+            marbleStartedAt: .now, speed: 0.6, reactionMode: .off)
+        XCTAssertEqual(snapshot.reactionMode, .off)
+        XCTAssertEqual(snapshot.theme, .cyber)
+    }
+
+    func testStage37ShareCustomizerReplacesCreatorMazeAndAddsDirectPNG() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let ui = try String(contentsOf: root.appendingPathComponent("Share/StoryDraftPreview.swift"),
+                             encoding: .utf8)
+        for title in ["Fundo & Movimento", "Estilo da Legenda", "Exibir no Card",
+                      "Desligado", "Fluido", "Reativo", "Magazine", "Sticker",
+                      "Dymo", "Cristal ⚡", "Sem Legenda", "Capa & Música",
+                      "Placar Karaokê", "Marca Nightcore Lab",
+                      "Exportar Vídeo (.mp4)", "Salvar Imagem"] {
+            XCTAssertTrue(ui.contains(title), "Missing direct export control \(title)")
+        }
+        XCTAssertFalse(ui.contains("DisclosureGroup(\"Creator Controls\")"))
+        XCTAssertFalse(ui.contains("navigationTitle(\"Creator Studio\")"))
+        XCTAssertTrue(ui.contains("NightcoreBrandLockup"))
+        XCTAssertTrue(ui.contains("thumbnailSize: 62"))
+        XCTAssertTrue(ui.contains("StoryFrameRenderer.render"))
+        XCTAssertTrue(ui.contains("share.reactivityMode"))
+        XCTAssertTrue(ui.contains("share.cardToggles"))
+    }
+
 }
