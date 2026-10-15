@@ -238,6 +238,10 @@ struct ContentView: View {
 
     private var offlineAwareCanvas: some View {
         playerCanvas
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    lyricsStore.discardVolatileLyricCache()
+            }
             .onChange(of: searchDrawer.isOpen) { _, open in
                 if open, let lyricsPrefetcher {
                     offlineLibrary.refresh(downloader.allCachedTracks,
@@ -416,7 +420,7 @@ struct ContentView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(2)
-                Text("v38-UNIFIED · " + currentTheme.displayName.uppercased())
+                Text("v39-PERF · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)

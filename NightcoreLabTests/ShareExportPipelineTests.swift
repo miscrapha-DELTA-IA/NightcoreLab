@@ -354,7 +354,7 @@ final class ShareExportPipelineTests: XCTestCase {
         XCTAssertFalse(ui.contains("DisclosureGroup(\"Creator Controls\")"))
         XCTAssertFalse(ui.contains("navigationTitle(\"Creator Studio\")"))
         XCTAssertTrue(ui.contains("NightcoreBrandLockup"))
-        XCTAssertTrue(ui.contains("thumbnailSize: 62"))
+        XCTAssertTrue(ui.contains("thumbnailSize: 76"))
         XCTAssertTrue(ui.contains("StoryFrameRenderer.render"))
         XCTAssertTrue(ui.contains("share.reactivityMode"))
         XCTAssertTrue(ui.contains("share.cardToggles"))

@@ -50,6 +50,10 @@ final class LyricsStore {
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var refinedCache: [String: (source: String, lines: [TimedLyricLine])] = [:]
+    /// Called by the app's memory-warning owner. Active song state stays intact.
+    func discardVolatileLyricCache() {
+        refinedCache.removeAll(keepingCapacity: false)
+    }
     @ObservationIgnored private var rawSource: String?
     @ObservationIgnored private var acousticRefinementKey: String?
     @ObservationIgnored private var latestDNA: SongDNA?

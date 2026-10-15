@@ -192,10 +192,15 @@ struct TurbulentBackgroundView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    private var animates: Bool { !reduceMotion && scenePhase == .active }
+    private var animates: Bool {
+        !reduceMotion && scenePhase == .active
+    }
+    private var motionInterval: Double {
+        ProcessInfo.processInfo.isLowPowerModeEnabled ? 1.0 / 12.0 : 1.0 / 20.0
+    }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !animates)) { context in
+        TimelineView(.animation(minimumInterval: motionInterval, paused: !animates)) { context in
             // Fixed arrangement for Reduce Motion / offscreen scenes.
             let time = animates ? context.date.timeIntervalSinceReferenceDate : 0.0
             let palette = TurbulentPalette.colors(for: theme)

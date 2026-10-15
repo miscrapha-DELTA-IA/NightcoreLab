@@ -1448,7 +1448,7 @@ final class Stage38UnifiedIntegrationTests: XCTestCase {
         XCTAssertTrue(content.contains("MusicControlPage.stems"))
         XCTAssertTrue(content.contains("StemMixerControls(audio: audio)"))
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
-        XCTAssertTrue(content.contains("v38-UNIFIED · "))
+        XCTAssertTrue(content.contains("v39-PERF · "))
         XCTAssertTrue(share.contains("thumbnailSize: 76"))
         XCTAssertTrue(share.contains("Movimento do Fundo"))
         XCTAssertTrue(share.contains("Text(\"Desligado\")"))
@@ -1470,5 +1470,38 @@ final class Stage38UnifiedIntegrationTests: XCTestCase {
             anchor: song, candidates: [song, sibling, sibling], mode: .both)
         XCTAssertEqual(Set(both.playbackTracks.map(\.id)).count,
                        both.playbackTracks.count)
+    }
+}
+
+
+final class Stage39PowerAndMemoryContractTests: XCTestCase {
+    func testShaderPauseAndPowerAwareCadenceAreConnected() throws {
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        func load(_ name: String) throws -> String {
+            try String(contentsOf: base.appendingPathComponent(name), encoding: .utf8)
+        }
+        let marble = try load("TurbulentMarbleView.swift")
+        let background = try load("TurbulentBackgroundView.swift")
+        let player = try load("NowPlayingScreen.swift")
+        XCTAssertTrue(marble.contains("scenePhase != .active"))
+        XCTAssertTrue(marble.contains("shouldPauseLiveShader"))
+        XCTAssertTrue(marble.contains("isLowPowerModeEnabled"))
+        XCTAssertTrue(background.contains("paused: !animates"))
+        XCTAssertTrue(player.contains("isPaused: searchDrawer.isOpen"))
+    }
+
+    @MainActor
+    func testMemoryPressureDiscardsOnlyVolatileLyricCache() {
+        let store = LyricsStore()
+        store.discardVolatileLyricCache()
+        XCTAssertNil(store.trackID)
+    }
+
+    func testVisualFrameBusDropsVolatilePacketsUnderPressure() async {
+        let bus = AudioVisualFrameBus(capacity: 2)
+        await bus.discardUnderMemoryPressure()
+        let latest = await bus.drainLatest()
+        XCTAssertNil(latest)
     }
 }

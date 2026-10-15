@@ -50,6 +50,7 @@ struct PlayerBackgroundView: View {
     let imageURL: URL?
     let theme: AppTheme
     var frozenTime: Float? = nil
+    var isPaused: Bool = false
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
@@ -78,6 +79,7 @@ struct PlayerBackgroundView: View {
                     theme: MarbleTheme(appTheme: theme),
                     speed: 0.6,
                     maxFPS: 60,
+                    isPaused: isPaused,
                     extendIntoSafeArea: false,
                     frozenTime: frozenTime,
                     reactiveDistortion: reactiveDistortion,
