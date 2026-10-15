@@ -80,6 +80,20 @@ struct SongDNA: Codable, Equatable, Sendable {
                          ? (expr?.sections?.sections ?? []) : [])
     }
 
+    /// Human-readable only; never replaces the typed, provenance-checked
+    /// harmonic and measured mood evidence.
+    var keyName: String? {
+        guard let hypothesis = key?.hypotheses.first,
+              hypothesis.confidence >= 0.70 else { return nil }
+        return hypothesis.tonic.rawValue + " " + hypothesis.scale.rawValue
+    }
+    var moodName: String? {
+        guard let hint = mood?.hints
+            .filter({ $0.confidence >= 0.60 })
+            .max(by: { $0.confidence < $1.confidence }) else { return nil }
+        return hint.dimension.rawValue
+    }
+
     var isValid: Bool {
         guard !assetID.isEmpty, !sourceRevision.isEmpty,
               sourceDuration.isFinite, sourceDuration > 0,
