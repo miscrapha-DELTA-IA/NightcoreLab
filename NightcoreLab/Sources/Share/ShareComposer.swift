@@ -112,10 +112,12 @@ struct ShareCardView: View {
                 isPaused: true,
                 extendIntoSafeArea: false,
                 frozenTime: snapshot.marblePhase,
-                materialFrame: SongSectionCadence.apply(
-                    MaterialResolver.resolve(snapshot.material, timestamp: 0,
-                        reactionGain: CreativeReactionProfile.gain(snapshot.reactionMode)),
-                    cadence: snapshot.sectionCadence)
+                materialFrame: snapshot.reactionMode == .off
+                    ? MaterialResolver.resolve(snapshot.material, timestamp: 0, reactionGain: 0)
+                    : SongSectionCadence.apply(
+                        MaterialResolver.resolve(snapshot.material, timestamp: 0,
+                            reactionGain: CreativeReactionProfile.gain(snapshot.reactionMode)),
+                        cadence: snapshot.sectionCadence)
             )
             .frame(width: Self.size.width, height: Self.size.height)
         }

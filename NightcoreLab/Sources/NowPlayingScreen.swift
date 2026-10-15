@@ -584,6 +584,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                                         visualTimeline: visualTimeline,
                                         visualRhythm: visualRhythm)
                 },
+                onSaveImage: { image in
+                    storyDraft = nil
+                    Task { @MainActor in
+                        // Finish dismissing the editor before presenting iOS share.
+                        try? await Task.sleep(for: .milliseconds(250))
+                        shareResult = ShareExportPayload(image: image)
+                    }
+                },
                 onCancel: { storyDraft = nil }
             )
         }

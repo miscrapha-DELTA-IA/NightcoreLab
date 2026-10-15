@@ -41,7 +41,7 @@ struct StoryVideoRequest: Sendable {
     let title: String
     let artist: String
     let artworkURL: URL?
-    let theme: AppTheme
+    var theme: AppTheme
     let playerStyle: PlayerBackgroundStyle
     let karaokeBackground: BackgroundStyle
     let marblePhase: Float
@@ -85,6 +85,9 @@ struct StoryVideoRequest: Sendable {
     var songDNA: SongDNA? = nil
     var scoreStamp: KaraokePerformanceStamp? = nil
     var showsScoreStamp = true
+    var showsTrackCard = true
+    var showsBrand = true
+    var showsLyrics = true
 
     /// The active line's typography layer at a lyric time. The ONE builder
     /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).
@@ -162,7 +165,7 @@ struct StoryVideoRequest: Sendable {
         sourceTime(at: elapsed) + lyricOffset
     }
     func marbleTime(at elapsed: TimeInterval) -> Float {
-        marblePhase + Float(elapsed) * marbleSpeed
+        StoryExportMotion.phase(at: elapsed, start: marblePhase, speed: marbleSpeed)
     }
     func activeLine(at elapsed: TimeInterval) -> TimedLyricLine? {
         let t = lyricTime(at: elapsed)

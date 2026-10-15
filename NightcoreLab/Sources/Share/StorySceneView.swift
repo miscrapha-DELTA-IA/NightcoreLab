@@ -74,6 +74,17 @@ struct StorySceneView: View {
 
     var reactiveDistortion: Double { materialFrame.parameters.distortion }
 
+    /// Only the off-screen visual surface is stabilized. Preserve the existing
+    /// composition/material result so Stage 36 previews, exported typography,
+    /// and integration consumers resolve exactly the same audio frame.
+    var exportMaterialFrame: MaterialFrame {
+        let stableBase = MaterialResolver.resolve(marbleMaterial,
+            timestamp: frame.sourceTime, reactionGain: 0)
+        return StoryExportMotion.material(base: stableBase,
+            mode: request.reactionMode, sourceTime: frame.sourceTime,
+            dna: request.songDNA)
+    }
+
     private var elapsed: TimeInterval { frame.elapsed }
     private var phase: Float { frame.marblePhase }
     private var sourceTime: TimeInterval { frame.sourceTime }
@@ -99,12 +110,16 @@ struct StorySceneView: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    NightcoreBrandLockup(theme: request.theme,
-                                         iconSize: 27, titleSize: 17)
+                    if request.showsBrand {
+                        NightcoreBrandLockup(theme: request.theme,
+                                             iconSize: 27, titleSize: 17)
+                    }
                     Spacer()
-                    TrackIdentityPill(title: request.title, artist: request.artist,
-                                      artwork: artwork, thumbnailSize: 38)
-                        .frame(width: 205)
+                    if request.showsTrackCard {
+                        TrackIdentityPill(title: request.title, artist: request.artist,
+                                          artwork: artwork, thumbnailSize: 38)
+                            .frame(width: 205)
+                    }
                     Spacer()
                     Text(request.theme.displayName.uppercased())
                         .font(.system(size: 13, weight: .bold))
@@ -116,9 +131,9 @@ struct StorySceneView: View {
 
                 scoreBadge
 
-                if request.mode == .player {
+                if request.mode == .player || !request.showsLyrics {
                     Spacer(minLength: 25)
-                    playerCard
+                    if request.showsTrackCard { playerCard }
                     Spacer(minLength: 45)
                 } else {
                     Spacer(minLength: 70)
@@ -155,12 +170,16 @@ struct StorySceneView: View {
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             HStack {
-                NightcoreBrandLockup(theme: request.theme,
-                                     iconSize: 24, titleSize: 15)
+                if request.showsBrand {
+                    NightcoreBrandLockup(theme: request.theme,
+                                         iconSize: 24, titleSize: 15)
+                }
                 Spacer()
-                TrackIdentityPill(title: request.title, artist: request.artist,
-                                  artwork: artwork, thumbnailSize: 36)
-                    .frame(width: min(205, layout.titleArea.width * 0.43))
+                if request.showsTrackCard {
+                    TrackIdentityPill(title: request.title, artist: request.artist,
+                                      artwork: artwork, thumbnailSize: 36)
+                        .frame(width: min(205, layout.titleArea.width * 0.43))
+                }
                 Spacer()
                 Text(request.theme.displayName.uppercased())
                     .font(.system(size: 12, weight: .bold))
@@ -175,10 +194,12 @@ struct StorySceneView: View {
                 .position(x: layout.titleArea.midX,
                           y: layout.titleArea.maxY + 24)
 
-            if request.mode == .player {
-                playerCard
-                    .frame(width: layout.mainArea.width)
-                    .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+            if request.mode == .player || !request.showsLyrics {
+                if request.showsTrackCard {
+                    playerCard
+                        .frame(width: layout.mainArea.width)
+                        .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+                }
             } else {
                 lyricsCard
                     .storyLayer(.typography, frame: resolvedCompositionFrame)
@@ -215,11 +236,9 @@ struct StorySceneView: View {
                 .blur(radius: 50)
                 .clipped()
         } else {
-            TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
-                                speed: 0, maxFPS: 1, isPaused: true,
-                                extendIntoSafeArea: false, frozenTime: phase,
-                                // The resolved MaterialFrame is the whole contract.
-                                materialFrame: materialFrame)
+            StoryExportMarbleView(theme: request.theme,
+                renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
+                startingPhase: request.marblePhase, materialFrame: exportMaterialFrame)
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }

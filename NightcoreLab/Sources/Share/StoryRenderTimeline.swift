@@ -63,3 +63,57 @@ struct StoryRenderTimeline: Sendable {
         return frame(index: Int((bounded * Double(profile.fps)).rounded()))
     }
 }
+
+
+/// Continuous export modulation. Geometry is always the authored, frozen base;
+/// audio only drives a gentle bloom and never time-warps folds or UVs.
+enum StoryExportMotion {
+    static func phase(at renderTimestamp: TimeInterval, start: Float, speed: Float) -> Float {
+        start + Float(max(0, renderTimestamp)) * speed
+    }
+
+    static func smoothBeat(at time: TimeInterval, dna: SongDNA?) -> Double {
+        guard time.isFinite, let beats = dna?.beatTimestamps else { return 0 }
+        // O(log N), not O(total song beats) for every off-screen MP4 frame.
+        // Keep the Gaussian untruncated to avoid boundary jumps.
+        guard !beats.isEmpty else { return 0 }
+        var low = 0, high = beats.count
+        while low < high {
+            let mid = (low + high) / 2
+            if beats[mid] < time { low = mid + 1 } else { high = mid }
+        }
+        let lower = max(0, low - 2), upper = min(beats.count, low + 2)
+        var peak = 0.0
+        for index in lower..<upper {
+            let normalized = abs(time - beats[index]) / 0.18
+            peak = max(peak, exp(-0.5 * normalized * normalized))
+        }
+        return min(1, peak)
+    }
+
+    static func material(base: MaterialFrame, mode: CreativePreset.AudioReaction,
+                         sourceTime: TimeInterval, dna: SongDNA?) -> MaterialFrame {
+        let p = base.parameters
+        let pulse = mode == .responsive ? 0.18 * smoothBeat(at: sourceTime, dna: dna) : 0
+        let breath = mode == .off ? 0 :
+            (0.5 + 0.5 * sin(sourceTime * 2 * .pi / 3.6)) * (mode == .subtle ? 0.045 : 0.018)
+        let brightness = min(0.3, p.brightnessBoost + breath + pulse * 0.24)
+        let params = VisualParameterSet(
+            distortion: p.distortion, beatPulse: pulse,
+            pulseDecay: p.pulseDecay, offbeatScale: p.offbeatScale,
+            warpAmount: p.warpAmount, brightnessBoost: brightness,
+            stripingFrequency: p.stripingFrequency, stripingMix: p.stripingMix,
+            speckleIntensity: p.speckleIntensity, embossStrength: p.embossStrength,
+            scanlineDensity: p.scanlineDensity, diffusionSoftness: p.diffusionSoftness,
+            voidThreshold: p.voidThreshold, combStretch: p.combStretch,
+            bilateralSymmetry: p.bilateralSymmetry, halftoneGrating: p.halftoneGrating)
+        let energy = mode == .off ? 0 : min(1, pulse + breath)
+        return MaterialFrame(materialID: base.materialID, type: base.type,
+            parameters: params, intensity: base.intensity,
+            audioResponse: MaterialAudioResponse(distortion: 0, brightness: energy,
+                pulse: pulse, accent: 0), timestamp: base.timestamp,
+            seed: base.seed, controls: base.controls,
+            signals: MaterialReactiveSignals(energy: energy, bass: 0,
+                movement: 0, brightness: energy), viewport: base.viewport)
+    }
+}
