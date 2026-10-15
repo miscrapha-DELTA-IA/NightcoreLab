@@ -19,6 +19,9 @@ struct LyricsControlCenter: View {
     @Environment(LyricsStore.self) private var lyricsStore
     @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
+    @AppStorage(KaraokeGuidePreference.pacing) private var pacingGuide = true
+    @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
+    @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
 
     var body: some View {
         NavigationStack {
@@ -50,6 +53,17 @@ struct LyricsControlCenter: View {
                         .foregroundStyle(.secondary)
                 } header: {
                     Label("Experiência", systemImage: "sparkles")
+                }
+
+                Section {
+                    Toggle("Guia de Canto (Acompanhamento)", isOn: $pacingGuide)
+                    Toggle("Contagem Regressiva (3-2-1)", isOn: $entranceCountdown)
+                    Toggle("Prévia do Próximo Verso", isOn: $nextVersePreview)
+                    Text("Acompanhe o verso, veja a entrada após pausas e prepare a próxima frase.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Label("Guia de canto", systemImage: "music.mic")
                 }
 
                 Section {

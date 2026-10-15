@@ -173,6 +173,9 @@ struct KaraokeLyricsView: View {
     @AppStorage("story.lyricTypography") private var typography: TypographyFont = .classic
     @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
+    @AppStorage(KaraokeGuidePreference.pacing) private var pacingGuide = true
+    @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
+    @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
     @AppStorage(CreativePresetCatalog.storageKey)
     private var creativePresetID = CreativePresetCatalog.defaultID
     @AppStorage("creativeReactionMode")
@@ -204,6 +207,10 @@ struct KaraokeLyricsView: View {
     var body: some View {
         let preset = typographyPreset
         let mapping = typographyMapping
+        let activeLine = store.lines.first { $0.id == store.activeLineIndex }
+        let nextLineID = activeLine.flatMap { active in
+            store.lines.first { $0.start >= active.end && !$0.words.isEmpty }?.id
+        }
         GeometryReader { viewport in
             let inset = KaraokeLayoutMetrics.horizontalInset(for: viewport.size.width)
             let wordLimit = KaraokeLayoutMetrics.textWidth(for: viewport.size.width)
@@ -235,7 +242,10 @@ struct KaraokeLyricsView: View {
                                 typographyPreset: preset,
                                 typographyMapping: mapping,
                                 liveUniforms: liveUniforms,
-                                allowStatusAnimation: animateLineTransition
+                                allowStatusAnimation: animateLineTransition,
+                                pacingGuide: pacingGuide,
+                                nextPreviewEnabled: nextVersePreview,
+                                previewFrom: line.id == nextLineID ? activeLine?.end : nil
                             )
                             .frame(maxWidth: .infinity)
                             .opacity(emphasis.opacity)
@@ -305,6 +315,15 @@ struct KaraokeLyricsView: View {
                         .padding(.trailing, 18)
                         .padding(.bottom, 15)
                         .accessibilityIdentifier("karaoke.returnToLive")
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if entranceCountdown {
+                        KaraokeEntranceCue(lines: store.lines, clock: clock,
+                                           offset: store.userOffset,
+                                           isPlaying: store.isPlaying,
+                                           accent: accent ?? theme.fill)
+                            .padding(.top, 12)
                     }
                 }
                 .onChange(of: store.activeLineIndex) { _, new in
@@ -397,6 +416,9 @@ private struct KaraokeLineView: View {
     let typographyMapping: CreativeAudioMapping
     let liveUniforms: CreativeLiveUniforms?
     let allowStatusAnimation: Bool
+    let pacingGuide: Bool
+    let nextPreviewEnabled: Bool
+    let previewFrom: TimeInterval?
     private let preparedTypography: TypographyPreparedLine
     private var typographyStyle: TypographyStyle { typographyPreset.style }
 
@@ -414,7 +436,9 @@ private struct KaraokeLineView: View {
          offset: TimeInterval, clock: PlaybackClock, theme: KaraokeTheme,
          accent: Color?, maxWordWidth: CGFloat, fontSize: CGFloat,
          typographyPreset: TypographyPreset, typographyMapping: CreativeAudioMapping,
-         liveUniforms: CreativeLiveUniforms?, allowStatusAnimation: Bool) {
+         liveUniforms: CreativeLiveUniforms?, allowStatusAnimation: Bool,
+         pacingGuide: Bool, nextPreviewEnabled: Bool,
+         previewFrom: TimeInterval?) {
         self.line = line
         self.status = status
         self.isPlaying = isPlaying
@@ -428,6 +452,9 @@ private struct KaraokeLineView: View {
         self.typographyMapping = typographyMapping
         self.liveUniforms = liveUniforms
         self.allowStatusAnimation = allowStatusAnimation
+        self.pacingGuide = pacingGuide
+        self.nextPreviewEnabled = nextPreviewEnabled
+        self.previewFrom = previewFrom
         preparedTypography = TypographyPreparedLine(line)
         KaraokePerformanceProbe.shared.preparedLineConstructed()
     }
@@ -453,14 +480,23 @@ private struct KaraokeLineView: View {
     var body: some View {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
-        } else if status == .active && line.precision == .word {
+        } else if status == .active && (line.precision == .word || pacingGuide) {
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
                                     paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
                 let _ = KaraokePerformanceProbe.shared.timelineTick(
                     expectedInterval: energyBudget.visualInterval)
                 let source = clock.lyricTime                // lido direto do engine, a cada frame
                 layout(frame: resolve(sourceTime: source,
-                                      features: liveUniforms?.typographyFeatures(at: source)))
+                                      features: liveUniforms?.typographyFeatures(at: source)),
+                       pacing: KaraokeTimingGuide.pacing(
+                           start: line.start, end: line.end, at: source + offset))
+            }
+        } else if status == .upcoming && nextPreviewEnabled, let previewFrom {
+            TimelineView(.animation(minimumInterval: 0.08,
+                                    paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
+                layout(frame: resolve(sourceTime: -offset, features: nil),
+                       preview: KaraokeTimingGuide.previewsNext(
+                           activeEnd: previewFrom, at: clock.lyricTime + offset))
             }
         } else {
             layout(frame: resolve(sourceTime: -offset, features: nil))
@@ -470,7 +506,8 @@ private struct KaraokeLineView: View {
         }
     }
 
-    private func layout(frame: TypographyFrame) -> some View {
+    private func layout(frame: TypographyFrame, pacing: Double = 0,
+                        preview: Bool = false) -> some View {
         FlowLayout(lineSpacing: 6) {
             ForEach(frame.words) { resolved in
                 KaraokeWordView(
@@ -488,6 +525,84 @@ private struct KaraokeLineView: View {
                     animation: frame.animation(for: resolved.id)
                 )
                 .gapAfter(resolved.word.spaceAfter ? 9 : 0)
+            }
+        }
+        .modifier(KaraokeGuideDecoration(
+            pacing: status == .active && pacingGuide ? pacing : nil,
+            preview: preview, accent: accent ?? theme.fill))
+    }
+}
+
+private struct KaraokeGuideDecoration: ViewModifier {
+    let pacing: Double?
+    let preview: Bool
+    let accent: Color
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if preview {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(accent.opacity(0.13))
+                }
+            }
+            .background(alignment: .leading) {
+                if let pacing {
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(accent.opacity(0.12))
+                            .frame(width: geometry.size.width * pacing)
+                    }
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let pacing {
+                    GeometryReader { geometry in
+                        Capsule().fill(accent.opacity(0.78))
+                            .frame(width: geometry.size.width * pacing, height: 3)
+                    }
+                    .frame(height: 3)
+                    .offset(y: 7)
+                }
+            }
+            .shadow(color: preview ? accent.opacity(0.35) : .clear,
+                    radius: preview ? 10 : 0)
+            .padding(.bottom, pacing == nil ? 0 : 9)
+    }
+}
+
+private struct KaraokeEntranceCue: View {
+    @Environment(\.energyBudget) private var energyBudget
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let lines: [TimedLyricLine]
+    let clock: PlaybackClock
+    let offset: TimeInterval
+    let isPlaying: Bool
+    let accent: Color
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.08,
+                                paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
+            if let cue = KaraokeTimingGuide.entrance(lines: lines,
+                                                     at: clock.lyricTime + offset) {
+                HStack(spacing: 10) {
+                    Text("\(cue.number)")
+                        .font(.title3.bold().monospacedDigit())
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { index in
+                            Circle()
+                                .fill(index < cue.litDots ? accent : .white.opacity(0.24))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(accent.opacity(0.45)))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: cue.number)
+                .accessibilityLabel("Entrada em \(cue.number)")
+                .accessibilityIdentifier("karaoke.entranceCountdown")
             }
         }
     }

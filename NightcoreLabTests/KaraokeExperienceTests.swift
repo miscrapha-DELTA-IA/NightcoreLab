@@ -4,6 +4,43 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    func testEntranceCountdownForFirstLineAndInstrumentalBreak() {
+        let lines = [timingLine(id: 0, start: 4, end: 5),
+                     timingLine(id: 1, start: 10, end: 11),
+                     timingLine(id: 2, start: 12, end: 13)]
+        XCTAssertNil(KaraokeTimingGuide.entrance(lines: lines, at: 0))
+        XCTAssertEqual(KaraokeTimingGuide.entrance(lines: lines, at: 1),
+                       .init(lineID: 0, number: 3))
+        XCTAssertEqual(KaraokeTimingGuide.entrance(lines: lines, at: 2),
+                       .init(lineID: 0, number: 2))
+        XCTAssertEqual(KaraokeTimingGuide.entrance(lines: lines, at: 3.2),
+                       .init(lineID: 0, number: 1))
+        XCTAssertNil(KaraokeTimingGuide.entrance(lines: lines, at: 4))
+        XCTAssertEqual(KaraokeTimingGuide.entrance(lines: lines, at: 7),
+                       .init(lineID: 1, number: 3))
+        XCTAssertEqual(KaraokeTimingGuide.entrance(lines: lines, at: 8.5)?.litDots, 2)
+        XCTAssertNil(KaraokeTimingGuide.entrance(lines: lines, at: 11.8))
+    }
+
+    func testPacingSweepsContinuouslyAcrossActiveLine() {
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 3), 0)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 4), 0)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 5), 0.25)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 6), 0.5)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 7), 0.75)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 8), 1)
+        XCTAssertEqual(KaraokeTimingGuide.pacing(start: 4, end: 8, at: 9), 1)
+        XCTAssertFalse(KaraokeTimingGuide.previewsNext(activeEnd: 8, at: 6.49))
+        XCTAssertTrue(KaraokeTimingGuide.previewsNext(activeEnd: 8, at: 6.5))
+        XCTAssertFalse(KaraokeTimingGuide.previewsNext(activeEnd: 8, at: 8))
+    }
+
+    private func timingLine(id: Int, start: Double, end: Double) -> TimedLyricLine {
+        let word = WordSync(id: 0, text: "Cante", start: start,
+                            end: end, spaceAfter: false)
+        return TimedLyricLine(id: id, start: start, end: end,
+                              words: [word], precision: .word)
+    }
     @MainActor
     func testKaraokePresentationNeverAwardsPlaybackEnergy() {
         let session = KaraokeScoringSession()
