@@ -289,13 +289,13 @@ struct StoryDraftPreview: View {
                 selectedTypographyPreset = CreativePresetCatalog.typographyPreset(
                     selection: selection, style: style,
                     font: draft.request.typographyPreset.font,
-                    reacts: draft.request.reactiveProgram != nil)
+                    reacts: draft.request.reactionMode != .off)
             }
             .onChange(of: selectedTypography) { _, style in
                 selectedTypographyPreset = CreativePresetCatalog.typographyPreset(
                     selection: selectedExperienceID, style: style,
                     font: draft.request.typographyPreset.font,
-                    reacts: draft.request.reactiveProgram != nil)
+                    reacts: draft.request.reactionMode != .off)
             }
             .onChange(of: selectedPreset) { _, preset in
                 freezeSession(preset)
@@ -312,7 +312,7 @@ struct StoryDraftPreview: View {
                 artworkIsLoaded = true
             }
             .task(id: draft.id) {
-                guard draft.request.reactiveProgram != nil,
+                guard draft.request.reactionMode != .off,
                       let url = draft.request.reactiveSourceURL else {
                     visualIsReady = true
                     return
