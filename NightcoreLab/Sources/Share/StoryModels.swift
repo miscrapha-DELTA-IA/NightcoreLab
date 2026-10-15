@@ -79,6 +79,9 @@ struct StoryVideoRequest: Sendable {
     /// Frozen live selection and source-matched musical intelligence.
     var experienceID: String = CreativePresetCatalog.defaultID
     var reactionMode: CreativePreset.AudioReaction = .off
+    /// Explicit live-screen capture opts into the Stage 26 PCM response.
+    /// Legacy program-only requests retain their established material contract.
+    var liveVisualResponseEnabled = false
     var songDNA: SongDNA? = nil
     var scoreStamp: KaraokePerformanceStamp? = nil
     var showsScoreStamp = true
@@ -121,13 +124,15 @@ struct StoryVideoRequest: Sendable {
             rhythmAnalysis: rhythm, performance: padPerformance,
             padAccent: frame.padAccent)
         guard var resolved else { return nil }
-        let cadence = reactionMode == .off ? SongSectionCadence.neutral :
+        let cadence = !liveVisualResponseEnabled || reactionMode == .off
+            ? SongSectionCadence.neutral :
             SongSectionCadence.at(sourceTime: frame.sourceTime, dna: songDNA)
         if let typography = resolved.typographyFrame {
             resolved = resolved.withTypography(
                 TypographyAnimationEngine.evolve(typography, cadence: cadence))
         }
-        if let material = resolved.materialFrame, reactionMode != .off {
+        if let material = resolved.materialFrame,
+           liveVisualResponseEnabled, reactionMode != .off {
             let features = CompositionAudioSampler.sample(audioTimeline, at: frame.sourceTime)
             let pulse = max(material.parameters.beatPulse,
                             StoryBeatEnvelope.at(sourceTime: frame.sourceTime, dna: songDNA))
@@ -222,6 +227,7 @@ enum StoryRequestBuilder {
             ? padPerformance : nil
         request.experienceID = creativePresetID
         request.reactionMode = activeReaction
+        request.liveVisualResponseEnabled = reactionMode != nil
         request.songDNA = songDNA?.isValid == true ? songDNA : nil
         request.scoreStamp = scoreStamp
         // One immutable source of truth for preview and the StoryFrameRenderer

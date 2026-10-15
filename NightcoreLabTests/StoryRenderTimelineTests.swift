@@ -86,6 +86,7 @@ final class StoryRenderTimelineTests: XCTestCase {
     func testThreeBeatAndSectionFramesMatchPreviewAndEncoderState() throws {
         var clip = try request(.lyrics, start: 9.5, speed: 1)
         clip.reactionMode = .responsive
+        clip.liveVisualResponseEnabled = true
         clip.songDNA = SongDNA(assetID: "fixture", sourceRevision: "r1",
             sourceDuration: 90, beatTimestamps: [9.5, 10, 10.5],
             sections: [
