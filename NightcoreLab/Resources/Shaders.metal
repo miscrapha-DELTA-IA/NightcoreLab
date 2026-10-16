@@ -44,8 +44,7 @@ static inline float3 ramp(float t, float3 c1, float3 c2, float3 c3) {
     return mix(lo, c3, smoothstep(0.5, 1.0, t));
 }
 
-[[ stitchable ]]
-half4 liquidMarble(float2 position, half4 currentColor,
+static inline half4 evaluateLiquidMarble(float2 position, half4 currentColor,
                    float2 size, float time,
                    half4 color1, half4 color2, half4 color3,
                    float reactiveDistortion, float beatPulse,
@@ -108,11 +107,21 @@ half4 liquidMarble(float2 position, half4 currentColor,
 
     return half4(half3(saturate(col)), 1.0h);
 }
+
+// SwiftUI stitchable ABI wrapper. Never call this from an MTL compute kernel.
+[[ stitchable ]]
+half4 liquidMarble(float2 position, half4 currentColor,
+                   float2 size, float time,
+                   half4 color1, half4 color2, half4 color3,
+                   float reactiveDistortion, float beatPulse,
+                   float pulseWarp, float pulseGlow) {
+    return evaluateLiquidMarble(position, currentColor, size, time, color1, color2, color3, reactiveDistortion, beatPulse, pulseWarp, pulseGlow);
+}
+
 // Stage 13B: single procedural shader, using existing noise helpers and
 // existing SwiftUI colorEffect; no feedback buffers or independent renderer.
 // Glass creates a translucent caustic illusion (not framebuffer refraction).
-[[ stitchable ]]
-half4 proceduralMaterial(float2 position, half4 currentColor,
+static inline half4 evaluateProceduralMaterial(float2 position, half4 currentColor,
                          float2 size, float time,
                          half4 color1, half4 color2, half4 color3,
                          float kind, float p0, float p1, float p2, float p3,
@@ -176,13 +185,24 @@ half4 proceduralMaterial(float2 position, half4 currentColor,
     return half4(half3(saturate(col)), half(saturate(alpha)));
 }
 
+// SwiftUI stitchable ABI wrapper. Never call this from an MTL compute kernel.
+[[ stitchable ]]
+half4 proceduralMaterial(float2 position, half4 currentColor,
+                         float2 size, float time,
+                         half4 color1, half4 color2, half4 color3,
+                         float kind, float p0, float p1, float p2, float p3,
+                         float beat, float energy, float bass, float movement,
+                         float brightness, float seed) {
+    return evaluateProceduralMaterial(position, currentColor, size, time, color1, color2, color3, kind, p0, p1, p2, p3, beat, energy, bass, movement, brightness, seed);
+}
+
+
 
 // EXP-7: five-color textured Marble, fully procedural. The original
 // liquidMarble and proceduralMaterial functions stay pixel-identical.
 // Uniform texture controls never depend on live FFT; only the slow/bounded
 // warp and accent respond to the existing resolved Marble pulse.
-[[ stitchable ]]
-half4 texturedMarble(float2 position, half4 currentColor,
+static inline half4 evaluateTexturedMarble(float2 position, half4 currentColor,
                      float2 size, float time,
                      half4 color0, half4 color1, half4 color2,
                      half4 color3, half4 color4,
@@ -298,32 +318,66 @@ half4 texturedMarble(float2 position, half4 currentColor,
     return half4(half3(saturate(col)), 1.0h);
 }
 
-// Stage 40: off-screen entry point CALLS the live functions above. Keeping the
-// math in one place prevents export from drifting into a generic approximation.
-kernel void storyMarbleFrame(texture2d<float, access::write> output [[texture(0)]],
-                             constant float *v [[buffer(0)]],
-                             constant float4 *c [[buffer(1)]],
-                             uint2 gid [[thread_position_in_grid]]) {
+// SwiftUI stitchable ABI wrapper. Never call this from an MTL compute kernel.
+[[ stitchable ]]
+half4 texturedMarble(float2 position, half4 currentColor,
+                     float2 size, float time,
+                     half4 color0, half4 color1, half4 color2,
+                     half4 color3, half4 color4,
+                     float stripingFrequency, float stripingMix,
+                     float speckleIntensity, float embossStrength,
+                     float scanlineDensity, float diffusionSoftness,
+                     float voidThreshold, float combStretch,
+                     float bilateralSymmetry, float halftoneGrating,
+                     float reactiveDistortion, float beatPulse,
+                     float pulseWarp, float pulseGlow, float detailQuality) {
+    return evaluateTexturedMarble(position, currentColor, size, time, color0, color1, color2, color3, color4, stripingFrequency, stripingMix, speckleIntensity, embossStrength, scanlineDensity, diffusionSoftness, voidThreshold, combStretch, bilateralSymmetry, halftoneGrating, reactiveDistortion, beatPulse, pulseWarp, pulseGlow, detailQuality);
+}
+
+
+// Stage 40: three small compute kernels call only the PURE math evaluators.
+// They never invoke SwiftUI [[stitchable]] entrypoints, so the Metal compiler
+// does not need to resolve the SwiftUI function-table ABI while creating a
+// GPU/simulator compute pipeline. Each family remains pixel-matched to live.
+// Uniform indices are shared with StoryMetalSurface and are unchanged.
+kernel void storyLiquidMarbleFrame(texture2d<float, access::write> output [[texture(0)]],
+                                   constant float *v [[buffer(0)]],
+                                   constant float4 *c [[buffer(1)]],
+                                   uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
     float2 size(v[0], v[1]);
     float2 position = (float2(gid) + 0.5f) * size /
         float2(output.get_width(), output.get_height());
-    half4 color;
-    if (v[3] > 1.5f) {
-        color = texturedMarble(position, half4(0), size, v[2],
-            half4(c[0]), half4(c[1]), half4(c[2]), half4(c[3]), half4(c[4]),
-            v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12],
-            v[13], v[14], v[15], v[16], v[17], 1.0f);
-    } else if (v[3] < 0.5f) {
-        color = liquidMarble(position, half4(0), size, v[2],
-            half4(c[0]), half4(c[1]), half4(c[2]), v[14], v[15], v[16], v[17]);
-    } else {
-        color = proceduralMaterial(position, half4(0), size, v[2],
-            half4(c[0]), half4(c[1]), half4(c[2]), v[18], v[19], v[20],
-            v[21], v[22], v[15], v[23], v[24], v[25], v[26], v[27]);
-    }
-    // SwiftUI color effects emit premultiplied RGB. The live scene sits on
-    // black, so flattening that backing preserves RGB while ensuring that
-    // smoke/glass do not turn into translucent PNGs or encoder-dependent mats.
+    half4 color = evaluateLiquidMarble(position, half4(0), size, v[2],
+        half4(c[0]), half4(c[1]), half4(c[2]), v[14], v[15], v[16], v[17]);
+    output.write(float4(float3(color.rgb), 1.0f), gid);
+}
+
+kernel void storyTexturedMarbleFrame(texture2d<float, access::write> output [[texture(0)]],
+                                     constant float *v [[buffer(0)]],
+                                     constant float4 *c [[buffer(1)]],
+                                     uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+    float2 size(v[0], v[1]);
+    float2 position = (float2(gid) + 0.5f) * size /
+        float2(output.get_width(), output.get_height());
+    half4 color = evaluateTexturedMarble(position, half4(0), size, v[2],
+        half4(c[0]), half4(c[1]), half4(c[2]), half4(c[3]), half4(c[4]),
+        v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12],
+        v[13], v[14], v[15], v[16], v[17], 1.0f);
+    output.write(float4(float3(color.rgb), 1.0f), gid);
+}
+
+kernel void storyProceduralMarbleFrame(texture2d<float, access::write> output [[texture(0)]],
+                                       constant float *v [[buffer(0)]],
+                                       constant float4 *c [[buffer(1)]],
+                                       uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+    float2 size(v[0], v[1]);
+    float2 position = (float2(gid) + 0.5f) * size /
+        float2(output.get_width(), output.get_height());
+    half4 color = evaluateProceduralMaterial(position, half4(0), size, v[2],
+        half4(c[0]), half4(c[1]), half4(c[2]), v[18], v[19], v[20],
+        v[21], v[22], v[15], v[23], v[24], v[25], v[26], v[27]);
     output.write(float4(float3(color.rgb), 1.0f), gid);
 }
