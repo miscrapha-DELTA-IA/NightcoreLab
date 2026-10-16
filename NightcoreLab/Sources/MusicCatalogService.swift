@@ -88,7 +88,7 @@ actor MusicCatalogService {
         return candidates.filter { candidate in
             let key = MetadataCleaner.key(cleanedTitle(candidate))
             let titleMatches = key == title || title.hasSuffix(" " + key)
-            let artistMatches = artist == nil || AlbumArtistCollectionResolver.normalize(artist) == AlbumArtistCollectionResolver.normalize(candidate.cleanArtist)
+            let artistMatches = artist == nil || AlbumArtistCollectionResolver.normalize(artist) == AlbumArtistCollectionResolver.normalize(AlbumArtistCollectionResolver.artistName(for: candidate))
             return titleMatches && artistMatches
         }.first
     }
