@@ -66,7 +66,7 @@ struct StemMixerControls: View {
                             StemDevCredentials.save(new)
                             connectionFeedback = nil
                         }
-                    Text(StemDevCredentials.load()?.count == 64
+                    Text(devToken.trimmingCharacters(in: .whitespacesAndNewlines).count == 64
                          ? "Token salvo no iPhone (64 caracteres)."
                          : "Token ainda não confirmado no iPhone.")
                         .font(.caption2).foregroundStyle(.secondary)
