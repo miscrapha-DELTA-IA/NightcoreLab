@@ -36,8 +36,14 @@ enum StemMixPreset: String, CaseIterable, Identifiable {
     }
 }
 
+enum StemSource: String, Sendable { case spectral, demucs }
+
 struct StemAsset: Sendable {
     let urls: [StemKind: URL]
+    let source: StemSource
+    init(urls: [StemKind: URL], source: StemSource = .spectral) {
+        self.urls = urls; self.source = source
+    }
     var vocalURL: URL? { urls[.vocal] }
 }
 
@@ -92,7 +98,15 @@ enum StemSplitterEngine {
     static func prepare(source: URL, cacheFolder: URL,
                         model: (any StemModelProvider)? = nil) async throws -> StemAsset {
         if let model, verified(model) {
-            return try await model.separate(source: source, destination: cacheFolder)
+            let result = try await model.separate(source: source, destination: cacheFolder)
+            return StemAsset(urls: result.urls, source: .demucs)
+        }
+        if DevStemBackend.enabled {
+            guard let server = DevStemBackend.endpoint() else {
+                throw URLError(.badURL)
+            }
+            return try await DevStemBackend.separate(source: source,
+                cacheFolder: cacheFolder, server: server)
         }
         return try await StemPreparationCoordinator.shared.prepare(
             source: source, cacheFolder: cacheFolder)
