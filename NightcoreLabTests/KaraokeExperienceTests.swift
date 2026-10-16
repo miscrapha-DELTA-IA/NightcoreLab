@@ -5,6 +5,45 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeExperienceTests: XCTestCase {
+    func testOpeningKaraokeNeverActivatesMicrophoneOrPausesThePlayer() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("NightcoreLab/Sources")
+        let screen = try String(contentsOf: sources.appendingPathComponent("NowPlayingScreen.swift"),
+                                encoding: .utf8)
+        let start = try XCTUnwrap(screen.range(of:
+            "private func updateKaraokePresentation(_ shown: Bool)"))
+        let end = try XCTUnwrap(screen.range(of: "private var micButton: some View",
+                                             range: start.upperBound..<screen.endIndex))
+        let presentation = String(screen[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(presentation.contains("setKaraokePresented(shown"))
+        XCTAssertFalse(presentation.contains("beginKaraokeMicrophone"))
+        XCTAssertFalse(presentation.contains("beginVocalCapture"))
+        XCTAssertFalse(presentation.contains("audio.pause()"))
+        XCTAssertFalse(presentation.contains("audio.seek("))
+        XCTAssertFalse(presentation.contains("setCategory"))
+        XCTAssertFalse(presentation.contains("Task {"))
+        // Microphone scoring is an explicit action through the Legenda menu.
+        let controls = try String(contentsOf: sources.appendingPathComponent(
+            "Karaoke/KaraokeScoreHUD.swift"), encoding: .utf8)
+        XCTAssertTrue(controls.contains("Button(\"Pontuar com microfone\""))
+        XCTAssertTrue(controls.contains("await audio.beginKaraokeMicrophone()"))
+    }
+
+    func testStanzaTransitionMaintainsTheSameViewAndBoundedAnimation() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("NightcoreLab/Sources")
+        let view = try String(contentsOf: sources.appendingPathComponent("KaraokeLyricsView.swift"),
+                              encoding: .utf8)
+        XCTAssertTrue(view.contains("paused: status != .active || !isPlaying"))
+        XCTAssertTrue(view.contains("withAnimation(.easeOut(duration: decision.duration))"))
+        XCTAssertFalse(view.contains("withAnimation(.easeOut(duration: 0.28))"))
+        XCTAssertFalse(view.contains("else if status == .active"))
+        XCTAssertFalse(view.contains(".drawingGroup()"))
+        XCTAssertTrue(view.contains("guard store.activeLineIndex == nil"))
+    }
+
     @MainActor
     func testMissingCatalogLyricsProducesCachedLocalGuide() async throws {
         let directory = FileManager.default.temporaryDirectory
