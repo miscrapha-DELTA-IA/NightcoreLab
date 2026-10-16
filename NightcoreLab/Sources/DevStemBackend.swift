@@ -50,6 +50,54 @@ enum DevStemBackend {
         return url
     }
 
+    /// Verifies the exact HTTPS host and Keychain token used by the iPhone.
+    /// An empty upload is intentionally rejected by our own worker with 400
+    /// AFTER authorization succeeds. No track is sent or processed.
+    static func verifyConfiguration() async throws -> String {
+        guard enabled, let server = endpoint() else {
+            throw StemServerFailure.failed("Ative o Modo DEV e informe a URL raiz HTTPS atual do Cloudflare.")
+        }
+        let token = StemDevCredentials.load() ?? ""
+        guard token.count >= 16 else {
+            throw StemServerFailure.failed("O token não foi salvo no iPhone. Cole novamente o token do Windows.")
+        }
+        var health = URLRequest(url: server.appendingPathComponent("health"))
+        health.timeoutInterval = 12
+        let responseData: Data
+        let response: URLResponse
+        do {
+            (responseData, response) = try await URLSession.shared.data(for: health)
+        } catch {
+            throw StemServerFailure.failed("O túnel não respondeu: \(error.localizedDescription)")
+        }
+        guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200,
+              let result = try? JSONDecoder().decode(Health.self, from: responseData),
+              result.status == "ok", result.enabled else {
+            throw StemServerFailure.failed("URL incorreta ou Demucs inativo. Confira /health no Safari.")
+        }
+
+        var probe = URLRequest(url: server.appendingPathComponent("api/stems"))
+        probe.httpMethod = "POST"
+        probe.httpBody = Data()
+        probe.timeoutInterval = 15
+        probe.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        probe.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        let checkResponse: URLResponse
+        do {
+            (_, checkResponse) = try await URLSession.shared.data(for: probe)
+        } catch {
+            throw StemServerFailure.failed("Falha ao verificar token pelo túnel: \(error.localizedDescription)")
+        }
+        guard let code = (checkResponse as? HTTPURLResponse)?.statusCode else {
+            throw StemServerFailure.failed("O túnel não devolveu uma resposta HTTP válida.")
+        }
+        switch code {
+        case 400: return "Conexão HTTPS e token confirmados neste iPhone. Pronto para preparar Demucs."
+        case 429: return "Token confirmado; servidor ocupado com outra separação."
+        default: throw StemServerFailure.failed(diagnostic(for: code))
+        }
+    }
+
     static func separate(source: URL, cacheFolder: URL, server: URL,
                          onStatus: (@Sendable (String) async -> Void)? = nil) async throws -> StemAsset {
         guard let size = (try? source.resourceValues(forKeys: [.fileSizeKey])).flatMap(\.fileSize),
