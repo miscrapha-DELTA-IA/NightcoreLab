@@ -100,7 +100,7 @@ enum StemSplitterEngine {
 
     fileprivate static func prepareNative(source: URL, cacheFolder: URL) throws -> StemAsset {
         let fingerprint = try source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let identity = "\(source.path)|\(fingerprint.fileSize ?? 0)|\(fingerprint.contentModificationDate?.timeIntervalSince1970 ?? 0)|v1"
+        let identity = "\(source.path)|\(fingerprint.fileSize ?? 0)|\(fingerprint.contentModificationDate?.timeIntervalSince1970 ?? 0)|v2-stft2048-75pct"
         let key = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         let folder = cacheFolder.appendingPathComponent("stems-" + key, isDirectory: true)
         let urls = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
@@ -111,49 +111,7 @@ enum StemSplitterEngine {
         }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         do {
-            let input = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32,
-                                        interleaved: false)
-            let rate = input.processingFormat.sampleRate
-            let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
-            let writers = try Dictionary(uniqueKeysWithValues: StemKind.allCases.map { kind in
-                (kind, try AVAudioFile(forWriting: urls[kind]!, settings: format.settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false))
-            })
-            guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat,
-                                                     frameCapacity: 4096),
-                  let inputL = inputBuffer.floatChannelData?[0] else {
-                throw CocoaError(.fileReadCorruptFile)
-            }
-            let outputBuffers = Dictionary(uniqueKeysWithValues: StemKind.allCases.compactMap { kind in
-                AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096).map { (kind, $0) }
-            })
-            var filters = Filters(rate: rate)
-            while true {
-                try Task.checkCancellation()
-                try input.read(into: inputBuffer)
-                let count = Int(inputBuffer.frameLength)
-                if count == 0 { break }
-                for buffer in outputBuffers.values { buffer.frameLength = AVAudioFrameCount(count) }
-                let inputR = inputBuffer.floatChannelData?[input.processingFormat.channelCount == 2 ? 1 : 0] ?? inputL
-                // Resolve buffers once per chunk: no per-sample Dictionary allocations.
-                guard let vocals = outputBuffers[.vocal]?.floatChannelData,
-                      let instruments = outputBuffers[.instrumental]?.floatChannelData,
-                      let drums = outputBuffers[.drums]?.floatChannelData,
-                      let bass = outputBuffers[.bass]?.floatChannelData else {
-                    throw CocoaError(.fileWriteUnknown)
-                }
-                for frame in 0..<count {
-                    let value = filters.split(left: inputL[frame], right: inputR[frame])
-                    vocals[0][frame] = value.vocal.0; vocals[1][frame] = value.vocal.1
-                    instruments[0][frame] = value.instrumental.0
-                    instruments[1][frame] = value.instrumental.1
-                    drums[0][frame] = value.drums.0; drums[1][frame] = value.drums.1
-                    bass[0][frame] = value.bass.0; bass[1][frame] = value.bass.1
-                }
-                for kind in StemKind.allCases {
-                    try writers[kind]!.write(from: outputBuffers[kind]!)
-                }
-            }
+            try WienerStemSeparator.separate(source: source, urls: urls)
             return StemAsset(urls: urls)
         } catch {
             try? FileManager.default.removeItem(at: folder)
