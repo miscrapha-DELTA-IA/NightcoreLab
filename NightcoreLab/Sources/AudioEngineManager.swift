@@ -518,20 +518,44 @@ final class AudioEngineManager {
             (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
         guard allowed, requested == karaokeGeneration, !Task.isCancelled else { return false }
         let session = AVAudioSession.sharedInstance()
-        guard session.isInputAvailable else { return false }
-        let input = engine.inputNode
-        let native = input.outputFormat(forBus: 0)
-        guard native.channelCount > 0, native.sampleRate.isFinite,
-              native.sampleRate > 0 else { return false }
         let capture = KaraokeMicrophoneCapture()
-        let scoringClock = lyricsClock
-        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
-            capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+        do {
+            // Mic permission is independent of SFSpeechRecognizer. A denied
+            // message is NEVER derived from route/format/session exceptions.
+            if session.category != .playAndRecord {
+                try session.setCategory(.playAndRecord, mode: .default,
+                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+            }
+            try session.setActive(true)
+            guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
+            let input = engine.inputNode
+            let hardware = input.inputFormat(forBus: 0)
+            let native = input.outputFormat(forBus: 0)
+            guard native.sampleRate.isFinite, native.sampleRate > 0,
+                  native.channelCount > 0 else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            let tapFormat: AVAudioFormat? = hardware.sampleRate.isFinite &&
+                hardware.sampleRate > 0 && hardware.channelCount > 0 ? hardware : nil
+            if let previous = karaokeInput { previous.removeTap(onBus: 0) }
+            let scoringClock = lyricsClock
+            input.installTap(onBus: 0, bufferSize: 1024,
+                             format: tapFormat) { buffer, _ in
+                capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+            }
+            guard requested == karaokeGeneration, !Task.isCancelled else {
+                input.removeTap(onBus: 0); capture.stop(); return false
+            }
+            karaokeInput = input
+            karaokeCapture = capture
+            karaokeCaptureActive = true
+            return true
+        } catch {
+            capture.stop()
+            // An audio route or format failure must not report permissionDenied.
+            NSLog("Karaoke microphone hardware initialization failed: %@", error.localizedDescription)
+            return false
         }
-        karaokeInput = input
-        karaokeCapture = capture
-        karaokeCaptureActive = true
-        return true
     }
     func endKaraokeMicrophone() {
         karaokeGeneration &+= 1
