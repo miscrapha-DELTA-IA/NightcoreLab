@@ -24,6 +24,21 @@ final class EnhancedLRCParserTests: XCTestCase {
         XCTAssertEqual(out.lines[1].words[1].end, 15.4 + EnhancedLRCParser.maxImpliedLastWord, accuracy: 0.001)
     }
 
+    func testBackendAlignmentContractPreservesWordEndsAndPartialPlainLines() {
+        let raw = """
+        [00:12.00] <00:12.00> Palavra <00:12.40> <00:12.50> seguinte <00:13.20>
+        [00:15.00] Outra linha incompleta
+        """
+        let lines = EnhancedLRCParser.parse(raw).lines
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines[0].words.map(\.text), ["Palavra", "seguinte"])
+        XCTAssertEqual(lines[0].words[0].end, 12.4, accuracy: 0.001)
+        XCTAssertEqual(lines[0].words[1].start, 12.5, accuracy: 0.001)
+        XCTAssertEqual(lines[0].words[1].end, 13.2, accuracy: 0.001)
+        XCTAssertEqual(lines[1].precision, .line)
+        XCTAssertEqual(lines[1].text.trimmingCharacters(in: .whitespaces), "Outra linha incompleta")
+    }
+
     func testSyllablesGluedAndPlainLineFallback() {
         let raw = """
         [00:01.00]<00:01.00>Hel<00:01.30>lo <00:01.60>you

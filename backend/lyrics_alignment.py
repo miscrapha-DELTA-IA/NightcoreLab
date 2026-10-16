@@ -74,8 +74,12 @@ def _enhanced_lrc(lyrics: str, words: list) -> str:
         aligned[line_index].append((original, start, end))
 
     result = []
-    for line in aligned:
+    for source_line, line in zip(lines, aligned):
         if not line:
+            raise AlignmentError("Há uma linha sem correspondência no áudio.")
+        if len(line) != len(source_line):
+            # Keep every source word visible without inventing word timestamps.
+            result.append(f"[{_timestamp(line[0][1])}] " + " ".join(source_line))
             continue
         chunks = [f"<{_timestamp(start)}> {token} <{_timestamp(end)}>"
                   for token, start, end in line]

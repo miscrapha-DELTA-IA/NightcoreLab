@@ -3,6 +3,19 @@ import AVFoundation
 @testable import NightcoreLab
 
 final class PerformanceRegressionTests: XCTestCase {
+
+    func testOutputLatencyIsConvertedToSourceTimeAtPlaybackSpeed() {
+        XCTAssertEqual(EnginePlaybackClock.audibleSourceTime(
+            anchorMedia: 10, elapsed: 0, speed: 0.5, outputLatency: 0.2),
+            9.9, accuracy: 0.0001)
+        XCTAssertEqual(EnginePlaybackClock.audibleSourceTime(
+            anchorMedia: 10, elapsed: 0, speed: 1, outputLatency: 0.2),
+            9.8, accuracy: 0.0001)
+        XCTAssertEqual(EnginePlaybackClock.audibleSourceTime(
+            anchorMedia: 10, elapsed: 0, speed: 2, outputLatency: 0.2),
+            9.6, accuracy: 0.0001)
+    }
+
     @MainActor
     private func waitForIdleStop(_ audio: AudioEngineManager,
                                  file: StaticString = #filePath, line: UInt = #line) async throws {

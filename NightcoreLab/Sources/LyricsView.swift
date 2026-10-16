@@ -291,23 +291,23 @@ struct LyricsView: View {
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.white.opacity(0.7))
                         Button {
-                            lyricStore.userOffset -= 0.5
+                            lyricStore.userOffset = max(-1, lyricStore.userOffset - 0.1)
                         } label: {
                             Label("Atrasar", systemImage: "minus.circle")
                                 .labelStyle(.iconOnly)
                         }
-                        .accessibilityLabel("Atrasar a legenda meio segundo")
+                        .accessibilityLabel("Atrasar a legenda um décimo de segundo")
                         Text(String(format: "%+.1fs", lyricStore.userOffset))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.white)
                             .frame(minWidth: 44)
                         Button {
-                            lyricStore.userOffset += 0.5
+                            lyricStore.userOffset = min(1, lyricStore.userOffset + 0.1)
                         } label: {
                             Label("Adiantar", systemImage: "plus.circle")
                                 .labelStyle(.iconOnly)
                         }
-                        .accessibilityLabel("Adiantar a legenda meio segundo")
+                        .accessibilityLabel("Adiantar a legenda um décimo de segundo")
                         if lyricStore.userOffset != 0 {
                             Button("Zerar") { lyricStore.userOffset = 0 }
                                 .font(.caption2)

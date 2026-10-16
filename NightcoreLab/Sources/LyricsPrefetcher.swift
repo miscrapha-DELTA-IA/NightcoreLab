@@ -97,7 +97,7 @@ actor LyricsPrefetcher {
         if let lrc = record.syncedLyrics {
             await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
         } else {
-            await store.beginLoading(trackID: videoID)
+            await store.beginLoading(trackID: videoID, clearExisting: true)
         }
         if let plain = record.plainLyrics, !plain.isEmpty {
             guard let generated = await alignedLRC(videoID: videoID, lyrics: plain) else {
@@ -122,6 +122,7 @@ actor LyricsPrefetcher {
     // MARK: -
 
     private func run(_ m: TrackMetadata, apply: Bool) async {
+        guard !Task.isCancelled, !apply || activeID == m.videoID else { return }
         if apply { await store.beginLoading(trackID: m.videoID) }
 
         if let cached = cache.load(m.videoID) { await finish(cached, m, apply); return }

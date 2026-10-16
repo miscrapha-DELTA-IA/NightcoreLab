@@ -212,11 +212,17 @@ async def align_lyrics(request: AlignLyricsRequest):
     background_tasks = BackgroundTasks()
     try:
         response = await download(DownloadRequest(url=request.url), background_tasks)
+        transcription = asyncio.create_task(asyncio.to_thread(
+            generate_enhanced_lrc, Path(response.path), request.lyrics
+        ))
         try:
-            lrc = await asyncio.to_thread(
-                generate_enhanced_lrc, Path(response.path), request.lyrics
-            )
+            lrc = await asyncio.shield(transcription)
         finally:
+            # A disconnected client must not unpin/delete the file while the
+            # API worker is still reading or uploading it.
+            if not transcription.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(transcription)
             await background_tasks()
     except AlignmentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

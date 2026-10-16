@@ -1,7 +1,9 @@
 """Offline coverage for Whisper parameters, source matching and endpoint cleanup."""
 
+import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -26,6 +28,22 @@ class LyricsAlignmentTests(unittest.TestCase):
         words = [SimpleNamespace(word="inventada", start=1.0, end=1.5)]
         with self.assertRaises(lyrics_alignment.AlignmentError):
             lyrics_alignment._enhanced_lrc("Palavra seguinte", words)
+
+    def test_partial_line_keeps_all_source_words_without_fake_word_timing(self):
+        words = [SimpleNamespace(word=text, start=start, end=end) for text, start, end in [
+            ("a", 1.0, 1.2), ("canção", 1.5, 1.8), ("continua", 2.0, 2.3),
+            ("agora", 3.0, 3.3), ("sim", 3.5, 3.8),
+        ]]
+        lrc = lyrics_alignment._enhanced_lrc("A bela canção continua\nAgora sim", words)
+        self.assertEqual(lrc.splitlines()[0], "[00:01.00] A bela canção continua")
+        self.assertIn("<00:03.00> Agora", lrc.splitlines()[1])
+
+    def test_rejects_an_entire_unmatched_line(self):
+        words = [SimpleNamespace(word=text, start=float(i), end=float(i) + 0.2)
+                 for i, text in enumerate("um dois três quatro cinco seis sete oito nove dez".split())]
+        lyrics = "Um dois três quatro cinco\nVerso ausente\nSeis sete oito nove dez"
+        with self.assertRaises(lyrics_alignment.AlignmentError):
+            lyrics_alignment._enhanced_lrc(lyrics, words)
 
     def test_whisper_request_uses_required_word_parameters_and_plain_prompt(self):
         with TemporaryDirectory() as folder:
@@ -74,6 +92,33 @@ class AlignLyricsEndpointTests(unittest.IsolatedAsyncioTestCase):
                 await main.align_lyrics(main.AlignLyricsRequest(
                     url="https://www.youtube.com/watch?v=abcdefghijk", lyrics="Olá"))
         self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(released, [True])
+
+    async def test_disconnect_keeps_audio_pinned_until_transcription_stops(self):
+        started, finish = Event(), Event()
+        released = []
+
+        async def fake_download(_request, background_tasks):
+            background_tasks.add_task(lambda: released.append(True))
+            return SimpleNamespace(path="song.m4a")
+
+        def slow_alignment(_path, _lyrics):
+            started.set()
+            finish.wait(timeout=2)
+            return "aligned"
+
+        with patch.dict(main.os.environ, {"OPENAI_API_KEY": "test"}), \
+             patch.object(main, "download", fake_download), \
+             patch.object(main, "generate_enhanced_lrc", slow_alignment):
+            task = asyncio.create_task(main.align_lyrics(main.AlignLyricsRequest(
+                url="https://www.youtube.com/watch?v=abcdefghijk", lyrics="Olá")))
+            await asyncio.to_thread(started.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertEqual(released, [])
+            finish.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
         self.assertEqual(released, [True])
 
 

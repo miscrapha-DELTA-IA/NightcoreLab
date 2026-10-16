@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import QuartzCore
@@ -7,9 +8,14 @@ import QuartzCore
 /// Quem toca o áudio implementa isto. Leitura barata, sem alocação, thread-safe.
 protocol PlaybackClock: AnyObject, Sendable {
     var isPlaying: Bool { get }
+    var playbackSpeed: Double { get }
     /// Segundos na linha do tempo ORIGINAL do arquivo (não do tempo de parede).
     /// Com speed 1.3x, após 10 s reais isto vale ~13 s.
     var lyricTime: TimeInterval { get }
+}
+
+extension PlaybackClock {
+    var playbackSpeed: Double { 1 }
 }
 
 // MARK: - Store
@@ -37,8 +43,16 @@ final class LyricsStore {
     private(set) var activeLineIndex: Int?
     private(set) var isPlaying = false
 
-    /// Calibração do usuário (Bluetooth etc.). Positivo = letra adianta.
-    var userOffset: TimeInterval = 0
+    /// Calibração em segundos de tempo real (Bluetooth etc.). Positivo = letra adianta.
+    var userOffset: TimeInterval = 0 {
+        didSet {
+            if userOffset.isFinite { offsetDefaults.set(userOffset, forKey: offsetKey) }
+        }
+    }
+
+    @ObservationIgnored private let offsetDefaults: UserDefaults
+    @ObservationIgnored private var offsetKey: String
+    @ObservationIgnored private var outputRouteObserver: NSObjectProtocol?
 
     /// O Player define: toque numa linha -> seek.
     @ObservationIgnored var seekHandler: (@MainActor (TimeInterval) -> Void)?
@@ -49,14 +63,39 @@ final class LyricsStore {
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 
+    init(offsetDefaults: UserDefaults = .standard) {
+        self.offsetDefaults = offsetDefaults
+        self.offsetKey = Self.currentOffsetKey()
+        let saved = offsetDefaults.double(forKey: offsetKey)
+        self.userOffset = saved.isFinite ? min(1, max(-1, saved)) : 0
+    }
+
+    private static func currentOffsetKey() -> String {
+        let uid = AVAudioSession.sharedInstance().currentRoute.outputs.first?.uid ?? "default"
+        return "karaoke.lyricsOffset.\(uid)"
+    }
+
+    private func refreshOffsetForOutputRoute() {
+        let key = Self.currentOffsetKey()
+        guard key != offsetKey else { return }
+        offsetKey = key
+        let saved = offsetDefaults.double(forKey: key)
+        userOffset = saved.isFinite ? min(1, max(-1, saved)) : 0
+        syncNow()
+    }
+
     // MARK: Contrato
 
     func attach(clock: PlaybackClock) { self.clock = clock }
 
+    func sourceTimelineOffset(for clock: PlaybackClock) -> TimeInterval {
+        userOffset * clock.playbackSpeed
+    }
+
     /// O prefetcher começa o trabalho antes do utilizador entrar em Karaokê.
-    func beginLoading(trackID: String) {
+    func beginLoading(trackID: String, clearExisting: Bool = false) {
         loadTask?.cancel()
-        if trackID != self.trackID {
+        if trackID != self.trackID || clearExisting {
             scoring.resetForTrack()
             self.trackID = trackID
             lines = []
@@ -116,6 +155,12 @@ final class LyricsStore {
     /// Chamar em onAppear da sheet.
     func startTracking() {
         guard driver == nil else { return }
+        refreshOffsetForOutputRoute()
+        outputRouteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshOffsetForOutputRoute() }
+        }
         let d = DisplayLinkDriver { [weak self] in self?.syncNow() }
         driver = d
         d.start()
@@ -126,6 +171,10 @@ final class LyricsStore {
     func stopTracking() {
         driver?.stop()
         driver = nil
+        if let outputRouteObserver {
+            NotificationCenter.default.removeObserver(outputRouteObserver)
+            self.outputRouteObserver = nil
+        }
     }
 
     // MARK: Tick (≤ 30 Hz, só escreve quando algo muda)
@@ -135,7 +184,7 @@ final class LyricsStore {
         let playing = clock.isPlaying
         if playing != isPlaying { isPlaying = playing }
 
-        let t = clock.lyricTime + userOffset
+        let t = clock.lyricTime + sourceTimelineOffset(for: clock)
         scoring.advance(time: t, playing: playing, lines: lines, pitchShift: scoringPitchShift?() ?? 0)
         let idx = lines.activeIndex(at: t)
         if idx != activeLineIndex {

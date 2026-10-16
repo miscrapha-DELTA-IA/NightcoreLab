@@ -95,7 +95,7 @@ struct KaraokeScoringControls: View {
                 request?.cancel(); audio.endKaraokeMicrophone()
                 requesting = false
                 store.scoring.start(mode: .simulation, lines: store.lines,
-                                    at: clock.lyricTime + store.userOffset)
+                                    at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
                 audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
             }
             .disabled(store.status != .ready)
@@ -143,7 +143,7 @@ struct KaraokeScoringControls: View {
             }
             guard allowed else { showsError = true; return }
             store.scoring.start(mode: .microphone, lines: store.lines,
-                                at: clock.lyricTime + store.userOffset)
+                                at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
             store.scoring.microphoneFrame = { [weak audio] _ in audio?.karaokeVoiceFrame() ?? .silence }
             audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
         }

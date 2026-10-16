@@ -2,6 +2,12 @@ import XCTest
 @testable import NightcoreLab
 
 final class KaraokeCleanModeTests: XCTestCase {
+    private final class FixedSpeedClock: PlaybackClock, @unchecked Sendable {
+        let isPlaying = true
+        let lyricTime: TimeInterval = 10
+        let playbackSpeed: Double = 2
+    }
+
     func testArtworkIsContainedInPortraitAndLandscape() {
         let portrait = CGSize(width: 390, height: 844)
         let video = CGSize(width: 375, height: 667)
@@ -49,9 +55,34 @@ final class KaraokeCleanModeTests: XCTestCase {
 
     @MainActor
     func testCleanModeDoesNotChangeLyricsOffsetOrUserPanelChoices() {
-        let store = LyricsStore()
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = LyricsStore(offsetDefaults: defaults)
         store.userOffset = 1.5
         XCTAssertFalse(KaraokeCleanLayout.showsQuickThemeBar(cleanMode: true))
         XCTAssertEqual(store.userOffset, 1.5)
+    }
+
+    @MainActor
+    func testLyricsOffsetSurvivesStoreRecreationForCurrentOutput() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = LyricsStore(offsetDefaults: defaults)
+        first.userOffset = -0.35
+        let restored = LyricsStore(offsetDefaults: defaults)
+        XCTAssertEqual(restored.userOffset, -0.35, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testRealTimeCalibrationFollowsPlaybackSpeed() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = LyricsStore(offsetDefaults: defaults)
+        store.userOffset = 0.2
+        XCTAssertEqual(store.sourceTimelineOffset(for: FixedSpeedClock()),
+                       0.4, accuracy: 0.0001)
     }
 }

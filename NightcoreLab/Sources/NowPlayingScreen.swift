@@ -553,7 +553,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                                    (showsKaraoke ? 0.8 : 0.6)),
                 playbackTime: audio.playbackTime, sourceDuration: audio.duration,
                 speed: audio.speed, lines: matchedLyrics,
-                lyricOffset: lyricsStore.userOffset, typography: storyTypography,
+                lyricOffset: lyricsStore.sourceTimelineOffset(for: audio.lyricsClock),
+                typography: storyTypography,
                 typographyStyle: karaokeTypography,
                 includeAudio: includeAudio,
                 reactiveProgram: (reactionMode == .off ||
@@ -912,6 +913,15 @@ private struct KaraokeBottomBar: View {
                     Slider(value: $store.userOffset, in: -1.0...1.0)
                         .tint(theme.accent)
                         .accessibilityLabel("Atraso da letra")
+                    HStack {
+                        Text("− atrasa · + adianta")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Zerar") { store.userOffset = 0 }
+                            .font(.caption.weight(.semibold))
+                            .disabled(store.userOffset == 0)
+                    }
                 }
                 .padding(18)
                 .frame(width: 250)

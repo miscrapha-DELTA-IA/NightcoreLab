@@ -86,11 +86,11 @@ struct LyricsControlCenter: View {
                     if hasSynchronizedLyrics {
                         HStack(spacing: 18) {
                             Button {
-                                lyricsStore.userOffset -= 0.5
+                                lyricsStore.userOffset = max(-1, lyricsStore.userOffset - 0.1)
                             } label: {
                                 Image(systemName: "minus.circle.fill").font(.title2)
                             }
-                            .accessibilityLabel("Atrasar a legenda meio segundo")
+                            .accessibilityLabel("Atrasar a legenda um décimo de segundo")
 
                             Spacer(minLength: 0)
 
@@ -102,11 +102,11 @@ struct LyricsControlCenter: View {
                             Spacer(minLength: 0)
 
                             Button {
-                                lyricsStore.userOffset += 0.5
+                                lyricsStore.userOffset = min(1, lyricsStore.userOffset + 0.1)
                             } label: {
                                 Image(systemName: "plus.circle.fill").font(.title2)
                             }
-                            .accessibilityLabel("Adiantar a legenda meio segundo")
+                            .accessibilityLabel("Adiantar a legenda um décimo de segundo")
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(theme.accent)

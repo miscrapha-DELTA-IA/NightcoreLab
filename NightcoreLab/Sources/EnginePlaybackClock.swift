@@ -70,6 +70,14 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
     // MARK: PlaybackClock
 
     var isPlaying: Bool { player.isPlaying }
+    var playbackSpeed: Double { state.withLock { $0.speed } }
+
+    /// Convert the route's wall-clock latency to the source timeline.
+    /// A 200 ms output delay spans 400 ms of lyrics at 2× speed.
+    static func audibleSourceTime(anchorMedia: TimeInterval, elapsed: TimeInterval,
+                                  speed: Double, outputLatency: TimeInterval) -> TimeInterval {
+        max(0, anchorMedia + elapsed * speed - outputLatency * speed)
+    }
 
     var lyricTime: TimeInterval {
         let playing = player.isPlaying
@@ -87,7 +95,9 @@ final class EnginePlaybackClock: PlaybackClock, @unchecked Sendable {
 
             let delta = Int64(bitPattern: mach_absolute_time() &- s.anchorHost)
             let secs = AVAudioTime.seconds(forHostTime: delta.magnitude) * (delta < 0 ? -1 : 1)
-            let t = max(0, s.anchorMedia + min(max(secs, 0), 0.15) * s.speed - s.outputLatency)
+            let t = Self.audibleSourceTime(
+                anchorMedia: s.anchorMedia, elapsed: min(max(secs, 0), 0.15),
+                speed: s.speed, outputLatency: s.outputLatency)
             s.frozen = t
             return t
         }
