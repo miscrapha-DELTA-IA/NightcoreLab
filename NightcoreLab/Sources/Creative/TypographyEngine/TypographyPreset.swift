@@ -6,6 +6,23 @@ import Foundation
 /// selections and encoded CreativePreset payloads keep decoding.
 enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     case neon, magazineCutout, glitch, kinetic, minimal
+    case vinylSticker, dymoTicket, liquidCapsule
+
+    static let storyObjectModels: [TypographyStyle] = [
+        .magazineCutout, .vinylSticker, .dymoTicket, .liquidCapsule
+    ]
+
+    var isMagazineClout: Bool { Self.storyObjectModels.contains(self) }
+
+    var shortObjectTitle: String {
+        switch self {
+        case .magazineCutout: return "Magazine Clout"
+        case .vinylSticker: return "Brand Logo Clout"
+        case .dymoTicket: return "Gothic & Chicano"
+        case .liquidCapsule: return "Acid Zine Clout"
+        default: return title
+        }
+    }
 
     /// Existing preference key; unchanged so the user's choice survives.
     static let storageKey = "karaokeTypography"
@@ -15,10 +32,13 @@ enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .neon: return "Neon"
-        case .magazineCutout: return "Magazine Cutout"
+        case .magazineCutout: return "Magazine Clout · Editorial Classic"
         case .glitch: return "Glitch"
         case .kinetic: return "Kinetic"
         case .minimal: return "Minimal"
+        case .vinylSticker: return "Brand Logo Clout · Streetwear & Logos"
+        case .dymoTicket: return "Gothic & Chicano Clout · Tattoo & Chrome"
+        case .liquidCapsule: return "Acid Zine Clout · Punk & Brutalist"
         }
     }
 

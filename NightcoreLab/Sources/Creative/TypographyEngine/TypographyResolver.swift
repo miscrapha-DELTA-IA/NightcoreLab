@@ -67,7 +67,7 @@ enum TypographyResolver {
             }
 
             let magazine: TypographyMagazineAppearance?
-            if preset.style == .magazineCutout {
+            if preset.style.isMagazineClout {
                 magazine = available?.appearances[word.id]
             } else {
                 magazine = nil
