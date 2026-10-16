@@ -180,7 +180,7 @@ final class InstantStemAudioUnit: AUAudioUnit {
                     }
                     if let kind { masker.set(kind, level: parameter.value) }
                 }
-                event = current.pointee.head.next
+                event = current.pointee.head.next.map { UnsafePointer($0) }
             }
             let buffers = UnsafeMutableAudioBufferListPointer(outputData)
             guard buffers.count >= 2,
