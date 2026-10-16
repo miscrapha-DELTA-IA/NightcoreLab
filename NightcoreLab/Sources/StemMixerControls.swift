@@ -6,6 +6,8 @@ struct StemMixerControls: View {
     @AppStorage("stems.devBackendEnabled") private var devBackend = false
     @AppStorage("stems.devBackendURL") private var devURL = ""
     @State private var devToken = ""
+    @State private var isCheckingConnection = false
+    @State private var connectionFeedback: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack {
@@ -21,8 +23,20 @@ struct StemMixerControls: View {
                     : "4 faixas STFT aproximadas · ajuste ao vivo")
                  : "Prepare os stems quando quiser · música original preservada")
                 .font(.caption2).foregroundStyle(.secondary)
+            if let status = audio.stemPreparationStatus {
+                HStack(alignment: .top, spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(status).font(.caption2).foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("stem.preparationStatus")
+            } else if let message = audio.stemPreparationError {
+                Text(message)
+                    .font(.caption2).foregroundStyle(.red)
+                    .accessibilityIdentifier("stem.preparationError")
+            }
             if !audio.stemsAvailable {
                 Button("Preparar stems") { audio.requestStemPreparation() }
+                    .disabled(audio.stemPreparationStatus != nil)
             }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {
@@ -48,7 +62,33 @@ struct StemMixerControls: View {
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
                     SecureField("Token do servidor", text: $devToken)
-                        .onChange(of: devToken) { _, new in StemDevCredentials.save(new) }
+                        .onChange(of: devToken) { _, new in
+                            StemDevCredentials.save(new)
+                            connectionFeedback = nil
+                        }
+                    Text(devToken.trimmingCharacters(in: .whitespacesAndNewlines).count == 64
+                         ? "Token salvo no iPhone (64 caracteres)."
+                         : "Token ainda não confirmado no iPhone.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Button {
+                        isCheckingConnection = true
+                        connectionFeedback = "Testando túnel e autenticação…"
+                        Task { @MainActor in
+                            do { connectionFeedback = try await DevStemBackend.verifyConfiguration() }
+                            catch { connectionFeedback = error.localizedDescription }
+                            isCheckingConnection = false
+                        }
+                    } label: {
+                        Label("Testar conexão e token · sem enviar música",
+                              systemImage: "checkmark.shield")
+                    }
+                    .disabled(isCheckingConnection || audio.stemPreparationStatus != nil)
+                    .accessibilityIdentifier("stem.testConnection")
+                    if let connectionFeedback {
+                        Text(connectionFeedback)
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("stem.connectionResult")
+                    }
                     Text("O áudio da faixa atual é enviado apenas quando você tocar Preparar com Demucs. Use a URL HTTPS do túnel e o token local gerado pelo instalador.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
@@ -59,12 +99,12 @@ struct StemMixerControls: View {
                           systemImage: "waveform.path")
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(audio.stemPreparationStatus != nil)
                 .accessibilityIdentifier("stem.retryPreparation")
-                if let message = audio.stemPreparationError {
-                    Text(message)
+                if audio.stemPreparationStatus != nil {
+                    Button("Cancelar espera no iPhone") { audio.cancelStemPreparation() }
                         .font(.caption2)
-                        .foregroundStyle(.red)
-                        .accessibilityIdentifier("stem.preparationError")
+                        .accessibilityIdentifier("stem.cancelPreparation")
                 }
             }
             .font(.caption)

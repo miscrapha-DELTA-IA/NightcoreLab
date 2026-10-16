@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from fastapi import FastAPI
-from stems_dev import router as stem_router
+from stems_dev import router as stem_router, _model_name, _timeout_seconds
 
 app = FastAPI(title="NightcoreLab HTDemucs Dev", version="1.0.0")
 app.include_router(stem_router)
@@ -20,6 +20,7 @@ def health():
     return {
         "status": "ok",
         "service": "nightcorelab-demucs-dev",
-        "model": "htdemucs",
+        "model": _model_name(),
+        "timeout_seconds": _timeout_seconds(),
         "enabled": os.getenv("STEMS_DEV_ENABLED") == "1",
     }

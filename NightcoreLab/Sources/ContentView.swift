@@ -357,6 +357,9 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
+                // Republish the system player as iOS moves playback off-screen.
+                audio.setupNowPlaying()
+                synchronizeRemoteAvailability()
                 if let currentTrack {
                     playbackTransition.saveSession(currentTrack, position: audio.playbackTime)
                 }

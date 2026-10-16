@@ -54,8 +54,34 @@ available in the STEMS panel.
 - Cloudflare Quick Tunnel supplies TLS and a temporary public address, NOT
   access control by itself. Authorization is enforced by the bearer token on
   every `/api/stems` call. Only use files you are authorized to process.
-- CPU separation can take minutes. The app polls for up to 15 minutes, while
-  the dev worker has a 12-minute subprocess timeout. It is not live separation.
+- CPU separation is **not real-time** and can take tens of minutes on laptops.
+  The Stage 42 CPU hotfix raises the worker default deadline to **35 minutes**
+  (configurable up to 60) and iOS polling to **60 minutes**. It avoids
+  misreporting timeout, exit failures, and incomplete WAV outputs as one error.
+  The server returns actual elapsed time/model; the iPhone shows it as time
+  elapsed, NOT fabricated percent progress.
+- CPU-efficient Demucs defaults now use `--overlap 0.1 --shifts 0 -j 1
+  --segment 7`; segmenting saves memory at a possible quality/speed tradeoff,
+  and one job avoids multiplying RAM. The original model remains `htdemucs`.
+  Try the smaller quantized `mdx_q` only when speed/resource use matters more
+  than preserving HTDemucs fidelity; neither fixed speedups nor 4-stem
+  perceptual quality are guaranteed.
+- To select the lighter model (restart the Windows launcher with this flag):
+  `powershell -ExecutionPolicy Bypass -File
+  .\\scripts\\dev-stems\\start-demucs-windows.ps1 -PythonVersion 3.11
+  -Model mdx_q -TimeoutMinutes 35`.
+  On PowerShell 5.1 the command must be on a single line.
+  The first new-model run downloads weights and may take extra time.
+- Completed outputs remain available locally for up to two hours from
+  submission (lazy cleanup). A subprocess-local `demucs.log` is persisted
+  under the job's `nightcore-stems-*` temporary directory; the server's
+  `server-stderr.log` reports the job ID, model, deadline, completion or error
+  and log path, **without** the bearer token. When debugging, look at
+  `Get-Content "$env:LOCALAPPDATA\\NightcoreLab\\DevStems\\server-stderr.log" -Tail 40`.
+- The Windows worker must be updated/restarted to use new backend code.
+  Restarting the temporary Quick Tunnel changes its HTTPS hostname;
+  replace the iPhone DEV URL with the new one, keeping the token private.
+  Old in-flight worker jobs will be lost on restart.
 - WAV stem outputs consume significantly more storage than the 20-track
   compressed AAC music cache. They are dev artifacts, not part of that quota.
 - For production/always-on use, obtain a GPU-capable dedicated host and

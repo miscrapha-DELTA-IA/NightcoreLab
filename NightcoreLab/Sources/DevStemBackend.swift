@@ -17,6 +17,29 @@ enum DevStemBackend {
         let id: String
         let status: String
         let message: String?
+        let elapsed_seconds: Int?
+        let timeout_seconds: Int?
+        let model: String?
+    }
+
+    private struct Health: Decodable {
+        let status: String
+        let enabled: Bool
+        let model: String?
+        let timeout_seconds: Int?
+    }
+
+    /// The server returns HTTP errors before a model job exists. Keep failures
+    /// actionable without ever disclosing an authentication token.
+    static func diagnostic(for status: Int) -> String {
+        switch status {
+        case 401, 403: return "Token incorreto. Confira o token exibido no PowerShell."
+        case 404: return "Endpoint não encontrado. Use apenas a URL raiz HTTPS do túnel."
+        case 413: return "Áudio maior que o limite de 35 MB do servidor DEV."
+        case 429: return "Servidor ocupado separando outra música. Aguarde o trabalho atual terminar."
+        case 502, 503, 504: return "Túnel ou servidor indisponível. Mantenha o PowerShell e o Cloudflared abertos."
+        default: return "Servidor retornou HTTP \(status). Confira os logs do PowerShell."
+        }
     }
 
     static var enabled: Bool { UserDefaults.standard.bool(forKey: "stems.devBackendEnabled") }
@@ -32,21 +55,104 @@ enum DevStemBackend {
         return url
     }
 
-    static func separate(source: URL, cacheFolder: URL, server: URL) async throws -> StemAsset {
-        guard let size = (try? source.resourceValues(forKeys: [.fileSizeKey])).flatMap(\.fileSize),
-              size > 0, size <= 35 * 1024 * 1024 else {
-            throw URLError(.dataLengthExceedsMaximum)
+    /// Verifies the exact HTTPS host and Keychain token used by the iPhone.
+    /// An empty upload is intentionally rejected by our own worker with 400
+    /// AFTER authorization succeeds. No track is sent or processed.
+    static func verifyConfiguration() async throws -> String {
+        guard enabled, let server = endpoint() else {
+            throw StemServerFailure.failed("Ative o Modo DEV e informe a URL raiz HTTPS atual do Cloudflare.")
         }
         let token = StemDevCredentials.load() ?? ""
-        guard token.count >= 16 else { throw URLError(.userAuthenticationRequired) }
+        guard token.count >= 16 else {
+            throw StemServerFailure.failed("O token não foi salvo no iPhone. Cole novamente o token do Windows.")
+        }
+        var health = URLRequest(url: server.appendingPathComponent("health"))
+        health.timeoutInterval = 12
+        let responseData: Data
+        let response: URLResponse
+        do {
+            (responseData, response) = try await URLSession.shared.data(for: health)
+        } catch {
+            throw StemServerFailure.failed("O túnel não respondeu: \(error.localizedDescription)")
+        }
+        guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200,
+              let result = try? JSONDecoder().decode(Health.self, from: responseData),
+              result.status == "ok", result.enabled else {
+            throw StemServerFailure.failed("URL incorreta ou Demucs inativo. Confira /health no Safari.")
+        }
+
+        var probe = URLRequest(url: server.appendingPathComponent("api/stems"))
+        probe.httpMethod = "POST"
+        probe.httpBody = Data()
+        probe.timeoutInterval = 15
+        probe.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        probe.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        let checkResponse: URLResponse
+        do {
+            (_, checkResponse) = try await URLSession.shared.data(for: probe)
+        } catch {
+            throw StemServerFailure.failed("Falha ao verificar token pelo túnel: \(error.localizedDescription)")
+        }
+        guard let code = (checkResponse as? HTTPURLResponse)?.statusCode else {
+            throw StemServerFailure.failed("O túnel não devolveu uma resposta HTTP válida.")
+        }
+        switch code {
+        case 400: return "Conexão HTTPS e token confirmados neste iPhone. Pronto para preparar Demucs."
+        case 429: return "Token confirmado; servidor ocupado com outra separação."
+        default: throw StemServerFailure.failed(diagnostic(for: code))
+        }
+    }
+
+    static func separate(source: URL, cacheFolder: URL, server: URL,
+                         onStatus: (@Sendable (String) async -> Void)? = nil) async throws -> StemAsset {
+        guard let size = (try? source.resourceValues(forKeys: [.fileSizeKey])).flatMap(\.fileSize),
+              size > 0, size <= 35 * 1024 * 1024 else {
+            throw StemServerFailure.failed("Selecione um arquivo local válido de até 35 MB.")
+        }
+        let token = StemDevCredentials.load() ?? ""
+        guard token.count >= 16 else {
+            throw StemServerFailure.failed("Insira o token do servidor (mínimo 16 caracteres) no Modo DEV.")
+        }
+        await onStatus?("Verificando conexão com o servidor Demucs…")
+        var healthRequest = URLRequest(url: server.appendingPathComponent("health"))
+        healthRequest.timeoutInterval = 12
+        let healthData: Data
+        let healthResponse: URLResponse
+        do {
+            (healthData, healthResponse) = try await URLSession.shared.data(for: healthRequest)
+        } catch {
+            throw StemServerFailure.failed(
+                "Servidor inacessível: verifique a URL HTTPS e mantenha a janela do PowerShell aberta. \(error.localizedDescription)")
+        }
+        guard let healthHTTP = healthResponse as? HTTPURLResponse else {
+            throw StemServerFailure.failed("Resposta inválida do túnel Cloudflare.")
+        }
+        guard healthHTTP.statusCode == 200 else {
+            throw StemServerFailure.failed(diagnostic(for: healthHTTP.statusCode))
+        }
+        guard let health = try? JSONDecoder().decode(Health.self, from: healthData),
+              health.status == "ok", health.enabled else {
+            throw StemServerFailure.failed("O endereço não aponta para um servidor Demucs DEV ativo.")
+        }
+        try Task.checkCancellation()
+        await onStatus?("Enviando o áudio ao computador…")
         var request = URLRequest(url: server.appendingPathComponent("api/stems"))
         request.httpMethod = "POST"
         request.timeoutInterval = 90
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-        let (responseData, response) = try await URLSession.shared.upload(for: request, fromFile: source)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 202 else {
-            throw URLError(.badServerResponse)
+        let responseData: Data
+        let response: URLResponse
+        do {
+            (responseData, response) = try await URLSession.shared.upload(for: request, fromFile: source)
+        } catch {
+            throw StemServerFailure.failed("Falha ao enviar áudio pelo túnel: \(error.localizedDescription)")
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw StemServerFailure.failed("O servidor não retornou uma resposta HTTP.")
+        }
+        guard http.statusCode == 202 else {
+            throw StemServerFailure.failed(diagnostic(for: http.statusCode))
         }
         let job = try JSONDecoder().decode(Job.self, from: responseData)
         guard !job.id.isEmpty, job.id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else {
@@ -54,25 +160,37 @@ enum DevStemBackend {
         }
         let jobURL = server.appendingPathComponent("api/stems").appendingPathComponent(job.id)
         var ready = false
-        // HTDemucs may take up to 12 minutes on a CPU-only developer laptop.
-        // Allow 15 minutes so the server can return a real error/ready status.
-        for _ in 0..<300 {
+        // The Windows worker can run for up to 35-60 minutes on slow CPUs.
+        // Poll for up to 60 minutes, preserving the server's error message.
+        // Do not manufacture a percentage without measured model progress.
+        await onStatus?("Áudio recebido. Separando voz, bateria, baixo e instrumentos no computador…")
+        for attempt in 0..<1200 {
             try Task.checkCancellation()
             var polling = URLRequest(url: jobURL)
             polling.timeoutInterval = 20
             polling.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
             let (data, reply) = try await URLSession.shared.data(for: polling)
-            guard (reply as? HTTPURLResponse)?.statusCode == 200 else {
-                throw URLError(.badServerResponse)
+            guard let status = (reply as? HTTPURLResponse)?.statusCode, status == 200 else {
+                throw StemServerFailure.failed(diagnostic(for: (reply as? HTTPURLResponse)?.statusCode ?? 0))
             }
             let result = try JSONDecoder().decode(Job.self, from: data)
             if result.status == "ready" { ready = true; break }
             if result.status == "failed" {
                 throw StemServerFailure.failed(result.message ?? "O processamento falhou no servidor.")
             }
+            if attempt % 5 == 0 {
+                let elapsed = max(0, result.elapsed_seconds ?? attempt * 3)
+                let model = result.model ?? health.model ?? "Demucs"
+                let configuredLimit = result.timeout_seconds ?? health.timeout_seconds
+                let limitText = configuredLimit.map { " · limite \($0 / 60) min" } ?? ""
+                await onStatus?("\(model) no PC · \(elapsed / 60)m \(elapsed % 60)s decorridos\(limitText). A música continua tocando.")
+            }
             try await Task.sleep(for: .seconds(3))
         }
-        guard ready else { throw URLError(.timedOut) }
+        guard ready else {
+            throw StemServerFailure.failed("O aplicativo aguardou uma hora sem resposta final. Confira os logs do Demucs no PC.")
+        }
+        await onStatus?("Separação concluída. Baixando quatro stems…")
         let folder = cacheFolder.appendingPathComponent("demucs-" + job.id, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var paths: [StemKind: URL] = [:]
@@ -81,15 +199,16 @@ enum DevStemBackend {
         ]
         do {
             var duration: Double?
-            for kind in StemKind.allCases {
+            for (index, kind) in StemKind.allCases.enumerated() {
                 try Task.checkCancellation()
+                await onStatus?("Baixando e validando stem \(index + 1) de 4…")
                 let name = remoteNames[kind]!
                 var fetch = URLRequest(url: jobURL.appendingPathComponent(name))
                 fetch.timeoutInterval = 180
                 fetch.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
                 let (temporary, response) = try await URLSession.shared.download(for: fetch)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
+                guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200 else {
+                    throw StemServerFailure.failed(diagnostic(for: (response as? HTTPURLResponse)?.statusCode ?? 0))
                 }
                 let output = folder.appendingPathComponent(kind.rawValue + ".wav")
                 try FileManager.default.moveItem(at: temporary, to: output)

@@ -96,7 +96,8 @@ enum StemSplitterEngine {
     /// Runs on a utility task, never in the render callback. The original song
     /// remains audible while the cache is populated.
     static func prepare(source: URL, cacheFolder: URL,
-                        model: (any StemModelProvider)? = nil) async throws -> StemAsset {
+                        model: (any StemModelProvider)? = nil,
+                        onStatus: (@Sendable (String) async -> Void)? = nil) async throws -> StemAsset {
         if let model, verified(model) {
             let result = try await model.separate(source: source, destination: cacheFolder)
             return StemAsset(urls: result.urls, source: .demucs)
@@ -106,7 +107,7 @@ enum StemSplitterEngine {
                 throw URLError(.badURL)
             }
             return try await DevStemBackend.separate(source: source,
-                cacheFolder: cacheFolder, server: server)
+                cacheFolder: cacheFolder, server: server, onStatus: onStatus)
         }
         return try await StemPreparationCoordinator.shared.prepare(
             source: source, cacheFolder: cacheFolder)
