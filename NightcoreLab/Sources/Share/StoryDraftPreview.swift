@@ -121,10 +121,10 @@ struct StoryDraftPreview: View {
 
     private func modelName(_ style: TypographyStyle) -> String {
         switch style {
-        case .magazineCutout: return "Magazine"
-        case .vinylSticker: return "Sticker"
-        case .dymoTicket: return "Dymo"
-        case .liquidCapsule: return "Cristal ⚡"
+        case .magazineCutout: return "Magazine Clout"
+        case .vinylSticker: return "Brand Logo Clout"
+        case .dymoTicket: return "Gothic & Chicano"
+        case .liquidCapsule: return "Acid Zine Clout"
         default: return style.title
         }
     }

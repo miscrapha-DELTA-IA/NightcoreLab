@@ -17,10 +17,10 @@ enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var shortObjectTitle: String {
         switch self {
-        case .magazineCutout: return "Recorte"
-        case .vinylSticker: return "Adesivo"
-        case .dymoTicket: return "Fita"
-        case .liquidCapsule: return "Cristal ⚡"
+        case .magazineCutout: return "Magazine Clout"
+        case .vinylSticker: return "Brand Logo Clout"
+        case .dymoTicket: return "Gothic & Chicano"
+        case .liquidCapsule: return "Acid Zine Clout"
         default: return title
         }
     }
@@ -30,13 +30,13 @@ enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .neon: return "Neon"
-        case .magazineCutout: return "Magazine Cutout (Recorte Clássico)"
+        case .magazineCutout: return "Magazine Clout · Editorial Classic"
         case .glitch: return "Glitch"
         case .kinetic: return "Kinetic"
         case .minimal: return "Minimal"
-        case .vinylSticker: return "Vinyl Sticker (Adesivo Street)"
-        case .dymoTicket: return "Dymo Ticket (Fita / Ingresso Brutalista)"
-        case .liquidCapsule: return "Liquid Capsule (Cristal ⚡)"
+        case .vinylSticker: return "Brand Logo Clout · Streetwear & Logos"
+        case .dymoTicket: return "Gothic & Chicano Clout · Tattoo & Chrome"
+        case .liquidCapsule: return "Acid Zine Clout · Punk & Brutalist"
         }
     }
 
@@ -49,6 +49,8 @@ enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     var isObjectModel: Bool {
         self == .vinylSticker || self == .dymoTicket || self == .liquidCapsule
     }
+
+    var isMagazineClout: Bool { Self.storyObjectModels.contains(self) }
 }
 
 enum TypographyAudioReaction: String, Codable, Sendable {

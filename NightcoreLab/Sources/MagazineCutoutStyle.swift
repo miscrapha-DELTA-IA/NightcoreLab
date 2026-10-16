@@ -4,14 +4,30 @@ import SwiftUI
 /// Magazine Cutout per-word details. The effect selection itself is
 /// `TypographyStyle`; these types only describe the cutout tiles.
 enum MagazineCutoutFont: Int, CaseIterable {
-    case system, serif, monospaced
+    case system, serif, monospaced, display
 
-    func font(size: CGFloat) -> Font {
-        switch self {
-        case .system: return .system(size: size, weight: .black, design: .rounded)
-        case .serif: return .system(size: size * 1.02, weight: .heavy, design: .serif)
-        case .monospaced: return .system(size: size * 0.92, weight: .bold, design: .monospaced)
+    /// The descriptor is pure data so live lyrics and frozen Story frames pick
+    /// the same font even when resolved on different threads.
+    func family(for style: TypographyStyle) -> String {
+        switch style {
+        case .vinylSticker:
+            return ["HelveticaNeue-CondensedBlack", "BodoniSvtyTwoITCTT-Bold",
+                    "Futura-CondensedExtraBold", "HelveticaNeue-Black"] [rawValue]
+        case .dymoTicket:
+            return ["OldEnglishTextMT", "SnellRoundhand-Black",
+                    "Copperplate-Bold", "AcademyEngravedLetPlain"] [rawValue]
+        case .liquidCapsule:
+            return ["Impact", "Courier-Bold", "Futura-CondensedExtraBold",
+                    "AmericanTypewriter-Bold"] [rawValue]
+        default:
+            return ["Impact", "Didot-Bold", "Courier-Bold",
+                    "Futura-CondensedExtraBold"] [rawValue]
         }
+    }
+
+    func font(size: CGFloat, style: TypographyStyle = .magazineCutout) -> Font {
+        .custom(family(for: style), size: size,
+                relativeTo: .title)
     }
 }
 
@@ -34,6 +50,38 @@ struct MagazineWordAppearance: Equatable {
     let rotation: Double
     let font: MagazineCutoutFont
     let tone: MagazineCutoutTone
+    var pack: TypographyStyle = .magazineCutout
+
+    var fontDescriptor: String { font.family(for: pack) }
+    var hasSolidCutoutBlock: Bool { pack.isMagazineClout }
+
+    func displayText(_ text: String) -> String {
+        if pack == .vinylSticker && font == .monospaced { return "\"\(text.uppercased())\"" }
+        return pack == .vinylSticker || pack == .liquidCapsule
+            ? text.uppercased() : text
+    }
+
+    func background(tone: MagazineCutoutTone, theme: KaraokeTheme) -> Color {
+        guard tone != .accent else { return theme.fill }
+        switch pack {
+        case .vinylSticker where font == .system:
+            return Color(red: 0.86, green: 0.04, blue: 0.13)
+        case .dymoTicket where tone == .white:
+            return Color(red: 0.78, green: 0.81, blue: 0.84)
+        case .liquidCapsule where tone == .white:
+            return Color(red: 0.98, green: 0.95, blue: 0.10)
+        case .liquidCapsule where font == .serif:
+            return Color(red: 0.91, green: 0.04, blue: 0.55)
+        default:
+            return tone.background(theme: theme)
+        }
+    }
+
+    func ink(for tone: MagazineCutoutTone) -> Color {
+        if pack == .vinylSticker && font == .system && tone != .accent { return .white }
+        if pack == .liquidCapsule && font == .serif && tone != .accent { return .white }
+        return tone.text
+    }
 }
 
 /// Pure resolver, evaluated only when a KaraokeLineView is constructed, not
