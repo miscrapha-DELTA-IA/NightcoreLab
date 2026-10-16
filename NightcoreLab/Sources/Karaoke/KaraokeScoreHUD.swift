@@ -170,7 +170,7 @@ struct KaraokeScoringControls: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .accessibilityLabel("Pontuação do karaokê")
-        .alert("Permissão do microfone desativada", isPresented: $showsError) {
+        .alert("Permissão do microfone desativada", isPresented: Binding(get: { showsError && audio.microphonePermissionDenied }, set: { showsError = $0 })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Autorize o microfone nos Ajustes ou escolha Experimentar simulação. Nenhum resultado simulado é apresentado como canto real.")
