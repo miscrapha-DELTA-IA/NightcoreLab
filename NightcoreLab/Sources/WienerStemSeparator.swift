@@ -35,7 +35,7 @@ enum WienerStemSeparator {
         }
         var incoming = [[Float]](repeating: [Float](repeating: 0, count: n), count: 2)
         var overlapOutput = [[[Float]]](
-            repeating: [[Float]](repeating: 0, count: n).duplicated(count: 2), count: 4)
+            repeating: [Float](repeating: 0, count: n).duplicated(count: 2), count: 4)
         var overlapWeight = [Float](repeating: 0, count: n)
         var previous = [Float](repeating: 0, count: n)
 
