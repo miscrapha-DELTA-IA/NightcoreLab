@@ -68,7 +68,7 @@ final class Stage42CatalogAndDownloadTests: XCTestCase {
         let anchor = Track(id: "abcdefghijk", title: "Artist - Song", thumbnailURL: nil)
         let result = await service.collection(anchor: anchor, local: [], mode: .both)
         XCTAssertEqual(result.artistName, "Artist")
-        XCTAssertEqual(result.albumTitle, "Album")
+        XCTAssertEqual(result.albumTitle, "Studio Album")
         XCTAssertEqual(result.albumTracks.count, 3)
         XCTAssertGreaterThanOrEqual(result.playbackTracks.count, 20)
         let catalogTrack = try XCTUnwrap(result.albumTracks.first { $0.id.hasPrefix("itunes-") })
@@ -114,7 +114,7 @@ private final class Stage42CatalogProtocol: URLProtocol {
             let count = url.path == "/search" ? 1 : (id == "100" ? 3 : 25)
             payload = ["results": (1...count).map { i -> [String: Any] in
                 ["trackId": i, "trackName": i == 1 ? "Song" : "Song \(i)",
-                 "artistName": "Artist", "collectionName": i <= 3 ? "Album" : "Other",
+                 "artistName": "Artist", "collectionName": i <= 3 ? "Studio Album" : "Other",
                  "collectionId": i <= 3 ? 100 : 101, "artistId": 200, "trackNumber": i]
             }]
         }
