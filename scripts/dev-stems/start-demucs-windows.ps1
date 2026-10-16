@@ -8,7 +8,11 @@
 param(
     [int]$Port = 8765,
     [ValidateSet("auto", "3.15", "3.11")]
-    [string]$PythonVersion = "auto"
+    [string]$PythonVersion = "auto",
+    [ValidateSet("htdemucs", "mdx_q")]
+    [string]$Model = "htdemucs",
+    [ValidateRange(10, 60)]
+    [int]$TimeoutMinutes = 35
 )
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -152,6 +156,13 @@ try {
     $env:STEMS_DEV_ENABLED = "1"
     $env:STEMS_DEV_TOKEN = [System.IO.File]::ReadAllText($tokenFile).Trim()
     if ($env:STEMS_DEV_TOKEN.Length -lt 16) { throw "Token local invalido." }
+    $env:STEMS_DEV_MODEL = $Model
+    $env:STEMS_DEV_TIMEOUT_SECONDS = [string]($TimeoutMinutes * 60)
+    Write-Host ("Perfil Demucs: {0}; tempo maximo: {1} minutos." -f $Model, $TimeoutMinutes)
+    if ($Model -eq "mdx_q") {
+        Write-Host "Modelo compacto mdx_q: potencialmente mais leve, qualidade diferente do htdemucs." -ForegroundColor Yellow
+        Write-Host "A primeira execucao pode baixar os pesos do modelo; requer Internet."
+    }
 
     # Do not start on a port which already belongs to a different service.
     try {
