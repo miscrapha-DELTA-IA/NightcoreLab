@@ -159,6 +159,6 @@ enum WienerStemSeparator {
 
 private extension Array where Element == Float {
     func duplicated(count: Int) -> [[Float]] {
-        Array(repeating: self, count: count)
+        (0..<count).map { _ in self }
     }
 }
