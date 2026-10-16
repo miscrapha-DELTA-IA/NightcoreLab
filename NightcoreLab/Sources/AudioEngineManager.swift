@@ -1254,8 +1254,10 @@ final class AudioEngineManager {
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // Prepare input capability before a song is scheduled. A first mic
-            // permission grant cannot reset an already playing player node.
+            // Keep the mic-capable graph ready without allowing other apps to
+            // mix: mixing marks us as secondary audio, hiding the iOS Now Playing
+            // player from Lock Screen / Control Center. Do not reconfigure on
+            // Karaoke presentation; recording remains explicitly opt-in.
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
