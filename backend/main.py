@@ -176,6 +176,7 @@ RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
 
 from backend_search import router as music_search_router
+from stems_dev import router as stems_dev_router
 
 app = FastAPI(
     title="Nightcore Lab Bridge",
@@ -186,6 +187,8 @@ app = FastAPI(
 
 # JSON metadata API for the SwiftUI Omnibox; /search NDJSON remains backward compatible.
 app.include_router(music_search_router)
+# Authenticated, disabled-by-default local HTDemucs development endpoint.
+app.include_router(stems_dev_router)
 
 
 class DownloadRequest(BaseModel):
