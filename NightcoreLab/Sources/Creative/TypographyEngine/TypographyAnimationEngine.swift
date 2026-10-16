@@ -16,7 +16,7 @@ enum TypographyAnimationEngine {
     /// and never changing text, font, line layout or the Karaoke transport.
     static func evolve(_ frame: TypographyFrame,
                        cadence: SongSectionCadence) -> TypographyFrame {
-        guard cadence != .neutral, frame.preset.style == .magazineCutout else {
+        guard cadence != .neutral, frame.preset.style.isMagazineClout else {
             return frame
         }
         let scale = 1 + (cadence.textDecoration - 1) * 0.10
@@ -64,7 +64,7 @@ enum TypographyAnimationEngine {
             // remain those produced by the existing TypographyResolver.
             return state(scale: scaled, glow: glowing, intensity: effect)
 
-        case .magazineCutout:
+        case .magazineCutout, .vinylSticker, .dymoTicket, .liquidCapsule:
             // The legacy view treated every word on the active line as active,
             // and upcoming words with more than 10% fill as visually active.
             let tileActive = isActiveLine ||
@@ -85,11 +85,6 @@ enum TypographyAnimationEngine {
                 magazineToneIndex: tileActive ? MagazineCutoutTone.black.rawValue :
                     word.magazine?.toneIndex,
                 magazineFillEnabled: tileActive && word.progress > 0)
-
-        case .vinylSticker, .dymoTicket, .liquidCapsule:
-            // The substrate, tilt and fill come from a stable word seed and
-            // source timestamp. Avoid frame-index noise in preview/export.
-            return state(scale: scaled, glow: glowing, intensity: effect)
 
         case .glitch:
             let magnitude: Double = isActiveWord ? effect : 0

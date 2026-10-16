@@ -437,7 +437,7 @@ private struct StoryLyricLine: View {
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
                     typographyStyle: frame.preset.style,
-                    magazineAppearance: resolved.magazine?.legacy,
+                    magazineAppearance: resolved.magazine?.appearance(for: frame.preset.style),
                     isCurrentLine: frame.status == .active,
                     isPastLine: frame.status == .past,
                     animation: animation,

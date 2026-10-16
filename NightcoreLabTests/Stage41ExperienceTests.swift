@@ -91,21 +91,17 @@ final class Stage41ExperienceTests: XCTestCase {
         XCTAssertEqual(Set(StemKind.allCases), Set([.vocal, .drums, .bass, .instrumental]))
     }
 
-    func testDevDemucsConnectionCanExplicitlyRetryWithoutReplacingAudioGraph() throws {
+    func testStage43InstantStemControlsReplaceDevUploadAndPreparation() throws {
         let mixer = try String(contentsOf: sourceRoot
             .appendingPathComponent("StemMixerControls.swift"))
         let audio = try String(contentsOf: sourceRoot
             .appendingPathComponent("AudioEngineManager.swift"))
-        let backend = try String(contentsOf: sourceRoot
-            .appendingPathComponent("DevStemBackend.swift"))
-        XCTAssertTrue(mixer.contains("stem.retryPreparation"))
-        XCTAssertTrue(mixer.contains("audio.retryStemPreparation()"))
-        XCTAssertTrue(mixer.contains("stem.preparationError"))
-        XCTAssertTrue(audio.contains("func retryStemPreparation()"))
-        XCTAssertTrue(audio.contains("if stemMixEnabled { setStemMixerEnabled(false) }"))
-        XCTAssertTrue(backend.contains("for _ in 0..<300"))
-        XCTAssertTrue(backend.contains("StemServerFailure.failed"))
-        XCTAssertFalse(mixer.contains("audio.retryStemPreparation()\n        .onChange"))
+        XCTAssertTrue(mixer.contains("stem.reset"))
+        XCTAssertTrue(mixer.contains("in: 0...2"))
+        XCTAssertFalse(mixer.contains("Preparar stems"))
+        XCTAssertFalse(mixer.contains("Demucs"))
+        XCTAssertTrue(audio.contains("stemMaskNode.auAudioUnit.scheduleParameterBlock"))
+        XCTAssertFalse(audio.contains("StemSplitterEngine.prepare"))
     }
 
     func testStoryUsesFullWidthKaraokeHeaderAndRetainsStage40ShaderContracts() throws {

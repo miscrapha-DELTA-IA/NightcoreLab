@@ -603,7 +603,7 @@ private struct KaraokeLineView: View {
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
                     typographyStyle: typographyStyle,
-                    magazineAppearance: resolved.magazine?.legacy,
+                    magazineAppearance: resolved.magazine?.appearance(for: typographyStyle),
                     isCurrentLine: status == .active,
                     isPastLine: status == .past,
                     animation: frame.animation(for: resolved.id),
@@ -774,13 +774,8 @@ struct KaraokeWordView: View {
     }
 
     @ViewBuilder var body: some View {
-        if typographyStyle == .magazineCutout, let magazineAppearance {
+        if typographyStyle.isMagazineClout, let magazineAppearance {
             cutout(appearance: magazineAppearance)
-        } else if let appearance = ObjectWordStyleResolver.resolve(
-            style: typographyStyle,
-            seed: wordSeed ?? TypographyResolver.stableSeed(lineID: 0, word: word),
-            progress: fill) {
-            objectWord(appearance: appearance)
         } else if let animation, !animation.isTransformNeutral {
             // Generic transform output can render future Glitch/Kinetic/Minimal
             // without adding temporal equations or timers to the view.
@@ -860,47 +855,28 @@ struct KaraokeWordView: View {
 
     private func tile(appearance: MagazineWordAppearance,
                       tone: MagazineCutoutTone) -> some View {
-        Text(word.text)
-            .font(appearance.font.font(size: fontSize))
+        Text(appearance.displayText(word.text))
+            .font(appearance.font.font(size: fontSize, style: appearance.pack))
+            .tracking(appearance.pack == .vinylSticker ? -0.8 : 0)
             .lineLimit(1)
             .minimumScaleFactor(minimumScaleFactor)
-            .foregroundStyle(tone.text)
+            .foregroundStyle(appearance.ink(for: tone))
             .padding(.horizontal, 7)
             .padding(.vertical, 5)
             .frame(maxWidth: maxWordWidth)
             .background {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(tone.background(theme: theme))
+                    .fill(appearance.background(tone: tone, theme: theme))
             }
-    }
-
-    private func objectWord(appearance: ObjectWordAppearance) -> some View {
-        let tile = ObjectWordTile(
-            text: word.text, appearance: appearance, accent: fillColor,
-            fontSize: fontSize, maxWordWidth: maxWordWidth,
-            minimumScaleFactor: minimumScaleFactor, filled: false)
-        return tile
-            .overlay(alignment: .leading) {
-                if appearance.fill > 0 {
-                    ObjectWordTile(
-                        text: word.text, appearance: appearance, accent: fillColor,
-                        fontSize: fontSize, maxWordWidth: maxWordWidth,
-                        minimumScaleFactor: minimumScaleFactor, filled: true)
-                    .mask(alignment: .leading) {
-                        if estimatedTiming {
-                            estimatedMask(appearance.fill)
-                        } else {
-                            GeometryReader { geometry in
-                                Rectangle().frame(width: geometry.size.width * appearance.fill)
-                            }
-                        }
-                    }
+            .overlay {
+                if appearance.pack == .dymoTicket {
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(Color.white.opacity(0.68), lineWidth: 1)
+                } else if appearance.pack == .liquidCapsule {
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(Color.black.opacity(0.75), lineWidth: 1.5)
                 }
             }
-            .rotationEffect(.degrees(appearance.rotation))
-            .scaleEffect((animation?.scale ?? 1) *
-                         (1 + 0.07 * sin(.pi * appearance.fill)))
-            .opacity(isPastLine ? 0.55 : (isCurrentLine ? 1 : 0.72))
     }
 }
 

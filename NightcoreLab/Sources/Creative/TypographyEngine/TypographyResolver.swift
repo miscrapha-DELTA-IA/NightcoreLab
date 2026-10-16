@@ -12,13 +12,17 @@ struct TypographyPreparedLine: Sendable {
         self.line = line
         var seeds: [Int: UInt64] = [:]
         var looks: [Int: TypographyMagazineAppearance] = [:]
-        for word in line.words {
+        for (index, word) in line.words.enumerated() {
             let hash = TypographyResolver.stableSeed(lineID: line.id, word: word)
             let fraction = Double(hash & 0x00ff_ffff) / Double(0x00ff_ffff)
             seeds[word.id] = hash
             looks[word.id] = TypographyMagazineAppearance(
                 rotation: -4 + 8 * fraction,
-                fontIndex: Int((hash >> 24) % 3),
+                // Four-word verses receive a deterministic four-font cycle;
+                // short legacy verses keep their established tile identity.
+                fontIndex: line.words.count >= 4
+                    ? (index + Int(UInt64(bitPattern: Int64(line.id)) % 4)) % 4
+                    : Int((hash >> 24) % 3),
                 toneIndex: Int((hash >> 32) % 3))
         }
         self.seeds = seeds
@@ -65,7 +69,7 @@ enum TypographyResolver {
             case .active:
                 if state.line.precision == .word || state.line.precision == .estimated {
                     fill = word.progressFill(at: now)
-                } else if preset.style.isObjectModel {
+                } else if preset.style.isMagazineClout {
                     let length = max(0.001, state.line.end - state.line.start)
                     let lineProgress = min(1, max(0, (now - state.line.start) / length))
                     fill = min(1, max(0, lineProgress * Double(state.line.words.count) - Double(index)))
@@ -75,7 +79,7 @@ enum TypographyResolver {
             }
 
             let magazine: TypographyMagazineAppearance?
-            if preset.style == .magazineCutout {
+            if preset.style.isMagazineClout {
                 magazine = available?.appearances[word.id]
             } else {
                 magazine = nil

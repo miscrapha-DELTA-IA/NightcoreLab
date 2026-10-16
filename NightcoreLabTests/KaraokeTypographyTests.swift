@@ -188,6 +188,31 @@ final class KaraokeTypographyTests: XCTestCase {
         XCTAssertTrue(variants.allSatisfy { (-4.0...4.0).contains($0.rotation) })
     }
 
+    func testAllFourCloutPacksShareMagazineBlocksAndCycleFontsPerVerse() throws {
+        let line = TimedLyricLine(id: 42, start: 2, end: 6, words: [
+            WordSync(id: 10, text: "MAKE", start: 2, end: 3, spaceAfter: true),
+            WordSync(id: 20, text: "EVERY", start: 3, end: 4, spaceAfter: true),
+            WordSync(id: 30, text: "WORD", start: 4, end: 5, spaceAfter: true),
+            WordSync(id: 40, text: "COUNT", start: 5, end: 6, spaceAfter: false)
+        ], precision: .word)
+        let state = LyricsState(line: line, status: .active)
+        for style in TypographyStyle.storyObjectModels {
+            let preset = TypographyPreset(style: style)
+            let live = TypographyResolver.resolve(state, at: 4.5,
+                features: nil, preset: preset)
+            let exported = TypographyLayer(state: state, preset: preset)
+                .resolve(at: 4.5, features: nil)
+            XCTAssertEqual(live, exported)
+            let blocks = try live.words.map {
+                try XCTUnwrap($0.magazine?.appearance(for: style))
+            }
+            XCTAssertTrue(blocks.allSatisfy(\.hasSolidCutoutBlock))
+            XCTAssertEqual(Set(blocks.map(\.fontDescriptor)).count, 4)
+            XCTAssertEqual(live.words[2].progress, 0.5, accuracy: 0.001)
+            XCTAssertEqual(live.words[3].progress, 0)
+        }
+    }
+
     private func luminance(_ color: Color) -> Double {
         let uiColor = UIColor(color)
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0

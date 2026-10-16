@@ -101,13 +101,6 @@ enum StemSplitterEngine {
             let result = try await model.separate(source: source, destination: cacheFolder)
             return StemAsset(urls: result.urls, source: .demucs)
         }
-        if DevStemBackend.enabled {
-            guard let server = DevStemBackend.endpoint() else {
-                throw URLError(.badURL)
-            }
-            return try await DevStemBackend.separate(source: source,
-                cacheFolder: cacheFolder, server: server)
-        }
         return try await StemPreparationCoordinator.shared.prepare(
             source: source, cacheFolder: cacheFolder)
     }

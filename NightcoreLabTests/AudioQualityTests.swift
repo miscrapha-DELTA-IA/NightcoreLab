@@ -5,6 +5,46 @@ import AVFoundation
 final class AudioQualityTests: XCTestCase {
     private var folder: URL!
 
+    func testInstantStemMaskingPreservesStereoPhaseAndDirectBypass() {
+        let count = 256
+        let original = (0..<count).map { index in
+            Float(0.3 * sin(2 * Double.pi * 440 * Double(index) / 48_000))
+        }
+        var left = original
+        var right = original.map { $0 * 0.7 }
+        let masker = InstantStemMasker(sampleRate: 48_000)
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in
+                masker.process(left: l.baseAddress!, right: r.baseAddress!, frames: count)
+            }
+        }
+        XCTAssertEqual(left, original, "All 100% must be bit-transparent")
+        XCTAssertEqual(right, original.map { $0 * 0.7 })
+
+        for kind in StemKind.allCases { masker.set(kind, level: 0) }
+        var durations: [Double] = []
+        for _ in 0..<32 {
+            left = original
+            right = original.map { $0 * 0.7 }
+            let start = ProcessInfo.processInfo.systemUptime
+            left.withUnsafeMutableBufferPointer { l in
+                right.withUnsafeMutableBufferPointer { r in
+                    masker.process(left: l.baseAddress!, right: r.baseAddress!, frames: count)
+                }
+            }
+            durations.append(ProcessInfo.processInfo.systemUptime - start)
+            for index in 0..<count where abs(original[index]) > 0.00001 {
+                let gainL = left[index] / original[index]
+                let gainR = right[index] / (original[index] * 0.7)
+                XCTAssertGreaterThanOrEqual(gainL, 0)
+                XCTAssertEqual(gainL, gainR, accuracy: 0.0001)
+            }
+        }
+        XCTAssertLessThan(durations.sorted()[durations.count / 2], 0.005)
+        XCTAssertLessThanOrEqual(InstantStemMasker.gain(
+            levels: [2, 2, 2, 2], bass: 0.6, drums: 0.5, vocal: 0.9), 2)
+    }
+
     override func setUpWithError() throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
