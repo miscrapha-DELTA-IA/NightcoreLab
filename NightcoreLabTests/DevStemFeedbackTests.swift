@@ -2,6 +2,12 @@ import XCTest
 @testable import NightcoreLab
 
 final class DevStemFeedbackTests: XCTestCase {
+    func testPastedTokenWhitespaceIsNormalizedWithoutChangingCharacters() {
+        let token = "abcdef0123456789"
+        XCTAssertEqual(StemDevCredentials.normalized("  \n" + token + "\r\n  "), token)
+        XCTAssertEqual(StemDevCredentials.normalized(token), token)
+    }
+
     func testDemucsHTTPFailuresHaveActionableExplanations() {
         XCTAssertTrue(DevStemBackend.diagnostic(for: 401).contains("Token"))
         XCTAssertTrue(DevStemBackend.diagnostic(for: 429).contains("ocupado"))
