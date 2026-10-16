@@ -52,9 +52,9 @@ function Install-Python311 {
     }
 }
 
-function Invoke-Pip([string]$interpreter, [string[]]$args, [string]$step) {
+function Invoke-Pip([string]$interpreter, [string[]]$pipArgs, [string]$step) {
     Write-Host $step
-    & $interpreter -m pip @args
+    & $interpreter -m pip @pipArgs
     if ($LASTEXITCODE -ne 0) {
         throw "$step falhou (codigo $LASTEXITCODE)."
     }
