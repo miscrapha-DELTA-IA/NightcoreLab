@@ -3,6 +3,9 @@ import Foundation
 
 /// The index lives alongside the audio in Caches. Missing/evicted files are never cache hits.
 struct TrackAudioCache {
+    static let maxCachedTracks = 20
+    static let maxDiskBytes: Int64 = 100 * 1024 * 1024
+    static let aacBitRate = 144_000
     static var stemCacheFolder: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("NightcoreAudio", isDirectory: true)
@@ -20,6 +23,56 @@ struct TrackAudioCache {
     let folder: URL
     private(set) var entries: [String: Entry] = [:]
     private(set) var pinnedIDs = Set<String>()
+
+    var totalDiskBytes: Int64 {
+        entries.values.reduce(Int64(0)) { total, entry in
+            let file = folder.appendingPathComponent(entry.relativePath)
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return total + Int64(size)
+        }
+    }
+    var cacheBadge: String {
+        "Offline (\(entries.count)/\(Self.maxCachedTracks) • ~\(totalDiskBytes / 1_000_000) MB)"
+    }
+
+    /// Always decode and re-encode the actual source format. Renaming a WAV
+    /// response to .m4a is not a valid audio cache conversion.
+    static func transcodeAAC(from source: URL) throws -> URL {
+        let input = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32,
+                                    interleaved: false)
+        let format = input.processingFormat
+        guard input.length > 0, format.sampleRate > 0,
+              (1...2).contains(format.channelCount) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: Int(format.channelCount),
+            AVEncoderBitRateKey: aacBitRate
+        ]
+        do {
+            let writer = try AVAudioFile(forWriting: destination, settings: settings,
+                                         commonFormat: .pcmFormatFloat32,
+                                         interleaved: false)
+            guard let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            while true {
+                try Task.checkCancellation()
+                try input.read(into: pcm)
+                guard pcm.frameLength > 0 else { break }
+                try writer.write(from: pcm)
+            }
+            return destination
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+    }
+
 
     init(folder: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("NightcoreAudio", isDirectory: true)) {
@@ -80,14 +133,14 @@ struct TrackAudioCache {
     }
 
     mutating func trim(protecting ids: Set<String>) {
-        // Keep at most 30 tracks / 512 MB, without evicting the playing track or current queue.
+        // Enforce a 20-track / 100 MiB disposable quota without evicting pinned offline audio.
         let sizes = entries.mapValues { entry -> Int in
             let values = try? folder.appendingPathComponent(entry.relativePath).resourceValues(forKeys: [.fileSizeKey])
             return values?.fileSize ?? 0
         }
         var bytes = sizes.values.reduce(0, +)
         for (id, entry) in entries.sorted(by: { $0.value.accessedAt < $1.value.accessedAt }) {
-            guard entries.count > 30 || bytes > 512 * 1024 * 1024 else { break }
+            guard entries.count > Self.maxCachedTracks || Int64(bytes) > Self.maxDiskBytes else { break }
             guard !ids.contains(id), !pinnedIDs.contains(id) else { continue }
             try? FileManager.default.removeItem(at: folder.appendingPathComponent(entry.relativePath).deletingLastPathComponent())
             entries[id] = nil
