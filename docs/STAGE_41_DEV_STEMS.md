@@ -63,3 +63,22 @@ available in the STEMS panel.
   into the already running free Render service.
 - The GitHub/Render connector cannot install a local PowerShell/Python process,
   so one Windows execution of the launcher is required.
+
+### Python 3.15 compatibility (Windows)
+
+The Windows launcher now **tries installed Python 3.15 first** in
+`backend/.venv-demucs-3.15/` using the official PyTorch CPU nightly wheel
+index and Demucs 4.1.0. This is an experimental combination and is **not
+claimed to be validated on a physical Windows machine**. It performs both
+an import test and `python -m demucs --help` before starting the server.
+
+If the Python 3.15 build or any dependency fails, the `auto` mode invokes
+`py install 3.11` automatically, creates a separate
+`backend/.venv-demucs-3.11/`, and installs the stable torch/torchaudio
+2.6 CPU + Demucs 4.0.1 compatibility stack. No system-default Python change
+is performed and the already installed 3.15 can stay installed.
+
+Choose the version explicitly with `-PythonVersion 3.15` or
+`-PythonVersion 3.11` when troubleshooting. The default `auto` attempts
+3.15 and then a 3.11 fallback. Python/PyTorch dependencies can take several
+GB. Windows long-path settings may need a reboot before installation.
