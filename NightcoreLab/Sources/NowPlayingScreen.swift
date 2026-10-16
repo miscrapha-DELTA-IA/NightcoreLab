@@ -1001,7 +1001,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                     snapshot: lyricsStore.scoring.snapshot,
                     mode: lyricsStore.scoring.mode) : nil)
             )
-            let frozenAudio = try includeAudio ? audio.storyAudioSource() : nil
+            let frozenAudio = try audio.storyAudioSource()
             // Preview and export share the exact same immutable snapshot,
             // artwork and frame-rate profile. No video work starts until
             // the user approves the visual preview.

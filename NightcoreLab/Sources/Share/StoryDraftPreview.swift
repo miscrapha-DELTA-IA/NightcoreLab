@@ -165,8 +165,9 @@ struct StoryDraftPreview: View {
                 if position.isFinite {
                     if position >= end - 0.02 {
                         player.pause()
-                        player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
-                                    toleranceBefore: .zero, toleranceAfter: .zero)
+                        await player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
+                                          toleranceBefore: .zero, toleranceAfter: .zero)
+                        guard !Task.isCancelled else { break }
                         player.playImmediately(atRate: rate)
                         elapsed = 0
                     } else {
