@@ -17,11 +17,16 @@ enum DevStemBackend {
         let id: String
         let status: String
         let message: String?
+        let elapsed_seconds: Int?
+        let timeout_seconds: Int?
+        let model: String?
     }
 
     private struct Health: Decodable {
         let status: String
         let enabled: Bool
+        let model: String?
+        let timeout_seconds: Int?
     }
 
     /// The server returns HTTP errors before a model job exists. Keep failures
@@ -155,10 +160,11 @@ enum DevStemBackend {
         }
         let jobURL = server.appendingPathComponent("api/stems").appendingPathComponent(job.id)
         var ready = false
-        // HTDemucs may take up to 12 minutes on a CPU-only developer laptop.
-        // Allow 15 minutes so the server can return a real error/ready status.
+        // The Windows worker can run for up to 35-60 minutes on slow CPUs.
+        // Poll for up to 60 minutes, preserving the server's error message.
+        // Do not manufacture a percentage without measured model progress.
         await onStatus?("Áudio recebido. Separando voz, bateria, baixo e instrumentos no computador…")
-        for attempt in 0..<300 {
+        for attempt in 0..<1200 {
             try Task.checkCancellation()
             var polling = URLRequest(url: jobURL)
             polling.timeoutInterval = 20
@@ -173,12 +179,16 @@ enum DevStemBackend {
                 throw StemServerFailure.failed(result.message ?? "O processamento falhou no servidor.")
             }
             if attempt % 5 == 0 {
-                await onStatus?("Demucs processando no computador · \(attempt * 3)s decorridos. Pode levar vários minutos.")
+                let elapsed = max(0, result.elapsed_seconds ?? attempt * 3)
+                let model = result.model ?? health.model ?? "Demucs"
+                let configuredLimit = result.timeout_seconds ?? health.timeout_seconds
+                let limitText = configuredLimit.map { " · limite \($0 / 60) min" } ?? ""
+                await onStatus?("\(model) no PC · \(elapsed / 60)m \(elapsed % 60)s decorridos\(limitText). A música continua tocando.")
             }
             try await Task.sleep(for: .seconds(3))
         }
         guard ready else {
-            throw StemServerFailure.failed("A separação ultrapassou o tempo limite. Confira o servidor no PowerShell.")
+            throw StemServerFailure.failed("O aplicativo aguardou uma hora sem resposta final. Confira os logs do Demucs no PC.")
         }
         await onStatus?("Separação concluída. Baixando quatro stems…")
         let folder = cacheFolder.appendingPathComponent("demucs-" + job.id, isDirectory: true)
