@@ -26,7 +26,7 @@ final class SearchAndCacheTests: XCTestCase {
         let data = Data(tracks.map { "{\"id\":\"\($0.id)\",\"title\":\"\($0.title)\"}" }.joined(separator: "\n").utf8)
         XCTAssertEqual(try YouTubeSearchService.decode(data).count, 15)
         let next = AudioDownloadManager.nextTracks([tracks[0], tracks[1]] + tracks, excluding: tracks[0].id)
-        XCTAssertEqual(next.map(\.id), Array(tracks[1...2]).map(\.id))
+        XCTAssertEqual(next.map(\.id), Array(tracks[1...3]).map(\.id))
     }
 
     func testCanonicalTrackIdentityAcrossLinkFormats() {
@@ -68,7 +68,8 @@ final class SearchAndCacheTests: XCTestCase {
             _ = try cache.store(Track(id: String(format: "%011d", index), title: "Track", thumbnailURL: nil), from: input)
         }
         cache.trim(protecting: [protected])
-        XCTAssertEqual(cache.entries.count, 30)
+        XCTAssertEqual(cache.entries.count, TrackAudioCache.maxCachedTracks)
+        XCTAssertLessThanOrEqual(cache.totalDiskBytes, TrackAudioCache.maxDiskBytes)
         XCTAssertNotNil(cache.localURL(for: protected))
     }
 
