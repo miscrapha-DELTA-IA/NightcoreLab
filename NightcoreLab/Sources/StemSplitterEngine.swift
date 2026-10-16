@@ -100,11 +100,11 @@ enum StemSplitterEngine {
 
     fileprivate static func prepareNative(source: URL, cacheFolder: URL) throws -> StemAsset {
         let fingerprint = try source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let identity = "\(source.path)|\(fingerprint.fileSize ?? 0)|\(fingerprint.contentModificationDate?.timeIntervalSince1970 ?? 0)|v2-stft2048-75pct"
+        let identity = "\(source.path)|\(fingerprint.fileSize ?? 0)|\(fingerprint.contentModificationDate?.timeIntervalSince1970 ?? 0)|v3-stft2048-aac"
         let key = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         let folder = cacheFolder.appendingPathComponent("stems-" + key, isDirectory: true)
         let urls = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
-            ($0, folder.appendingPathComponent($0.rawValue + ".caf"))
+            ($0, folder.appendingPathComponent($0.rawValue + ".m4a"))
         })
         if urls.values.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) {
             return StemAsset(urls: urls)
