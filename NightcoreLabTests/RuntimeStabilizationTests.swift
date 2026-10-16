@@ -1351,8 +1351,10 @@ final class Stage36RuntimePerformanceTests: XCTestCase {
         XCTAssertFalse(karaoke.contains("KaraokeScrollCamera("))
         XCTAssertFalse(karaoke.contains("cameraTargetY(at:"))
         XCTAssertTrue(karaoke.contains("reason: .automatic"))
-        XCTAssertTrue(karaoke.contains(".easeOut(duration: 0.28)"))
-        XCTAssertTrue(karaoke.contains("else if status == .active"))
+        XCTAssertTrue(karaoke.contains(".easeOut(duration: decision.duration)"))
+        XCTAssertTrue(karaoke.contains("paused: status != .active || !isPlaying"))
+        XCTAssertFalse(karaoke.contains("else if status == .active"))
+        XCTAssertFalse(karaoke.contains(".drawingGroup()"))
         XCTAssertTrue(hud.contains("if session.isPresented"))
         XCTAssertTrue(hud.contains("karaoke.liveMicLevel"))
         let lyricContainer = try String(contentsOf: root.appendingPathComponent("LyricsView.swift"),
