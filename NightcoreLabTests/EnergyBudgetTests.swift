@@ -18,7 +18,7 @@ final class EnergyBudgetTests: XCTestCase {
         for (state, fps, analysis, motion, export) in [
             (EnergyBudget.Thermal.nominal, 60.0, true, true, true),
             (.fair, 30, true, true, true),
-            (.serious, 15, false, false, true),
+            (.serious, 15, false, true, true),
             (.critical, 1, false, false, false)
         ] {
             let budget = EnergyBudget(thermal: state)

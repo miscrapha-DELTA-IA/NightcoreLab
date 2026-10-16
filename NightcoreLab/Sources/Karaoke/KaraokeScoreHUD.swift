@@ -105,13 +105,15 @@ struct KaraokeScoringControls: View {
             }
             Text("Use fones para evitar captar a música no microfone.")
         } label: {
-            Image(systemName: store.scoring.mode == .off ? "trophy" : "trophy.fill")
-                .font(.system(size: 16, weight: .semibold))
+            Label(store.scoring.mode == .off ? "Cantar" : "Canto ativo",
+                  systemImage: store.scoring.mode == .off ? "mic.badge.plus" : "mic.fill")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(accent)
-                .frame(width: 42, height: 42)
-                .background(.ultraThinMaterial, in: Circle())
+                .padding(.horizontal, 13)
+                .frame(height: 36)
+                .background(.ultraThinMaterial, in: Capsule())
         }
-        .accessibilityLabel("Pontuação do karaokê")
+        .accessibilityLabel("Acompanhamento do canto")
         .alert("Microfone indisponível", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {

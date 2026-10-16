@@ -145,6 +145,16 @@ final class LyricsStore {
         }
     }
 
+    /// An AI upgrade may arrive while the user is singing. Keep the current
+    /// scoring timeline intact; the prefetch cache applies the new LRC on the
+    /// next playback instead of ending the live run.
+    @discardableResult
+    func loadGenerated(trackID: String, rawLRC: String) -> Bool {
+        guard self.trackID == trackID, scoring.mode == .off else { return false }
+        load(trackID: trackID, rawLRC: rawLRC, needsReview: true, force: true)
+        return true
+    }
+
     func clear() {
         loadTask?.cancel()
         scoring.resetForTrack()

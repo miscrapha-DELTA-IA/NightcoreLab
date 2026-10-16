@@ -179,6 +179,10 @@ struct LyricsView: View {
                 if inline { LyricsFadeMask() }
                 else { Rectangle() }
             }
+            .overlay(alignment: .top) {
+                // Keep the singing HUD outside the fading lyric mask.
+                KaraokeScoreHUD(session: lyricStore.scoring, accent: lyricAccent)
+            }
     }
 
     var body: some View {
@@ -191,6 +195,8 @@ struct LyricsView: View {
             VStack(spacing: inline ? 10 : 18) {
                 if inline {
                     HStack {
+                        KaraokeScoringControls(store: lyricStore, audio: audio,
+                                               clock: audio.lyricsClock, accent: lyricAccent)
                         Spacer(minLength: 0)
                         Button {
                             showLyricsControlCenter = true
@@ -358,9 +364,11 @@ struct LyricsView: View {
         .onAppear {
             lyricStore.attach(clock: audio.lyricsClock)
             lyricStore.seekHandler = { position in audio.seek(to: position) }
+            lyricStore.startTracking()
         }
         .onDisappear {
             lyricStore.seekHandler = nil
+            lyricStore.stopTracking()
         }
         .task(id: track.id) {
             artworkTint = nil
@@ -371,7 +379,9 @@ struct LyricsView: View {
             }
         }
         .task(id: track.id) {
-            loading = true
+            // The prefetcher may already have a usable LRC while Whisper is
+            // still improving it. Keep singing and scrolling available.
+            loading = lyricStore.trackID != track.id || lyricStore.lines.isEmpty
             errorMessage = nil
             record = nil
             candidates = []

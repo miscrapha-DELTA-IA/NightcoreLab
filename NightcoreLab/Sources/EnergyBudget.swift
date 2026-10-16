@@ -21,7 +21,10 @@ struct EnergyBudget: Equatable, Sendable {
         appState == .active && !lowPower && thermal.rawValue < Thermal.serious.rawValue
     }
     var allowsDecorativeMotion: Bool {
-        appState == .active && !reduceMotion && thermal.rawValue < Thermal.serious.rawValue
+        // Serious heat already limits the shader to 15 fps. Keep the visible
+        // background moving; reserve a full pause for critical heat or the
+        // user's Reduce Motion preference.
+        appState == .active && !reduceMotion && thermal != .critical
     }
     /// Admission only. Explicit exports remain available in Low Power Mode.
     var allowsExport: Bool { appState == .active && thermal != .critical }

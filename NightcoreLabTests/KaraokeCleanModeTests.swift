@@ -85,4 +85,20 @@ final class KaraokeCleanModeTests: XCTestCase {
         XCTAssertEqual(store.sourceTimelineOffset(for: FixedSpeedClock()),
                        0.4, accuracy: 0.0001)
     }
+
+    @MainActor
+    func testLateAIAlignmentDoesNotEndAnActiveSingingRun() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = LyricsStore(offsetDefaults: defaults)
+        store.beginLoading(trackID: "track")
+        store.scoring.present(true)
+        store.scoring.start(mode: .simulation, lines: [], at: 0)
+
+        XCTAssertFalse(store.loadGenerated(
+            trackID: "track", rawLRC: "[00:01.00] <00:01.00> Palavra <00:01.30>"))
+        XCTAssertEqual(store.scoring.mode, .simulation)
+        XCTAssertTrue(store.scoring.isHUDVisible)
+    }
 }

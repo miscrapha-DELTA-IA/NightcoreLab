@@ -188,7 +188,9 @@ struct ContentView: View {
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
-            playerBackgroundStyle: bgStyle,
+            playerBackgroundStyle: Binding(
+                get: { bgStyle },
+                set: { bgStyleRaw = $0.rawValue }),
             onPlayPause: { playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID) },
             onPrevious: { goToPreviousTrack() },
             onNext: { goToNextTrack() },

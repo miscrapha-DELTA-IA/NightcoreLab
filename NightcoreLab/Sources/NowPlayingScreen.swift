@@ -81,7 +81,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @Binding var isKaraokeMode: Bool
     @Binding var lyricsCleanMode: Bool
     @Binding var backgroundStyle: BackgroundStyle
-    let playerBackgroundStyle: PlayerBackgroundStyle
+    @Binding var playerBackgroundStyle: PlayerBackgroundStyle
     let onPlayPause: () -> Void
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -118,6 +118,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     @State private var storyPreview: StoryVideoPayload?
     @State private var storyDraft: StoryVideoDraft?
     @State private var storyTask: Task<Void, Never>?
+    @State private var showingVisualStyles = false
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
@@ -243,7 +244,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         .overlay(alignment: .top) {
             if isTrackLoaded {
                 Button {
-                    applySuggestedSongProfile()
+                    showingVisualStyles = true
                 } label: {
                     Label("Criar", systemImage: "wand.and.stars")
                         .font(.caption.weight(.semibold))
@@ -252,14 +253,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                         .background(.regularMaterial, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("songCreativeProfile.apply")
-                .contextMenu {
-                    ForEach(CreativePresetCatalog.selectableExperiences) { experience in
-                        Button(experience.name) {
-                            applySuggestedSongProfile(experienceID: experience.id)
-                        }
-                    }
-                }
+                .accessibilityIdentifier("creative.openVisualStyles")
+                .accessibilityHint("Abre os estilos visuais e de letras")
                 .padding(.top, 18)
             }
         }
@@ -282,10 +277,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
                             shareVideo(mode: mode, includeAudio: includeAudio)
                         }
                     )
-                    if showsKaraoke {
-                        KaraokeScoringControls(store: lyricsStore, audio: audio,
-                                               clock: clock, accent: appTheme.accent)
-                    }
                     if canShowKaraoke {
                         micButton
                     }
@@ -296,6 +287,18 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         }
         .sheet(item: $shareResult) { payload in
             ShareExportService(image: payload.image)
+        }
+        .sheet(isPresented: $showingVisualStyles) {
+            CreativeStyleGallery(
+                selectedID: creativePresetID,
+                selectedTypography: karaokeTypography,
+                onSelectPreset: { id in
+                    applySuggestedSongProfile(styleID: id)
+                    showingVisualStyles = false
+                },
+                onSelectTypography: chooseTypographyStyle,
+                onClose: { showingVisualStyles = false }
+            )
         }
         .sheet(item: $storyDraft) { draft in
             StoryDraftPreview(
@@ -412,21 +415,38 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
     /// A single user action swaps existing observable visual/pad metadata
     /// and one live reverb parameter. No AVAudioEngine rebuild, seek or clock
     /// reset; the prepared Performance PadKit remains the original kit.
-    private func applySuggestedSongProfile(experienceID: String? = nil) {
+    private func applySuggestedSongProfile(styleID: String? = nil) {
         let base = suggestedSongProfile ??
             SongCreativeProfileResolver.suggest(
                 assetID: track.id, sourceRevision: "not-analyzed",
                 analysis: nil, expression: nil)
         let profile: SongCreativeProfile
-        if let experienceID,
-           let selected = CreativePresetCatalog.selectedExperience(id: experienceID) {
+        if let styleID,
+           let selected = CreativePresetCatalog.selectedExperience(id: styleID) {
+            let authored = selected.typographyPreset
             profile = SongCreativeProfile(
                 assetID: base.assetID, sourceRevision: base.sourceRevision,
                 visualPresetID: selected.id, materialID: selected.visualMaterial.id,
-                typographyPreset: selected.typographyPreset,
+                typographyPreset: TypographyPreset(
+                    style: authored.style, audioReaction: authored.audioReaction,
+                    effectIntensity: authored.effectIntensity,
+                    audioMapping: authored.audioMapping,
+                    deterministicSeed: authored.deterministicSeed,
+                    font: storyTypography),
                 padMapping: base.padMapping,
                 vocalAndAudioFXMacro: base.vocalAndAudioFXMacro,
-                reactionProfile: base.reactionProfile)
+                reactionProfile: selected.composition.program.preset.audioReaction)
+        } else if let styleID,
+                  let selected = CreativePresetCatalog.all.first(where: { $0.id == styleID }) {
+            profile = SongCreativeProfile(
+                assetID: base.assetID, sourceRevision: base.sourceRevision,
+                visualPresetID: selected.id,
+                materialID: CreativePresetCatalog.material(selection: selected.id).id,
+                typographyPreset: TypographyPreset(
+                    style: selected.preset.typographyStyle, font: storyTypography),
+                padMapping: base.padMapping,
+                vocalAndAudioFXMacro: base.vocalAndAudioFXMacro,
+                reactionProfile: selected.preset.audioReaction)
         } else {
             profile = base
         }
@@ -434,15 +454,46 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, Extras: View, LyricsC
         // Existing AppStorage keys are the source of truth for visual and
         // typography consumers, including frozen Story requests.
         creativePresetID = profile.visualPresetID
-        appTheme = CreativePresetCatalog.recipe(for: profile.visualPresetID).preset.theme
         karaokeTypography = profile.typographyPreset.style
         storyTypography = profile.typographyPreset.font
         reactionMode = profile.reactionProfile
-        audio.setReverb(Float(profile.vocalAndAudioFXMacro * 35))
+        if styleID != nil {
+            // A selected material needs the animated canvas to be visible.
+            playerBackgroundStyle = .turbulent
+            backgroundStyle = .marble
+        }
+        if styleID == nil {
+            audio.setReverb(Float(profile.vocalAndAudioFXMacro * 35))
+        }
         activeSongProfile = profile
         try? CreatorPresetStore.save(
             SongCreativeProfileResolver.creatorPreset(for: profile))
         Task { try? await songProfileStore.saveSongProfile(profile) }
+    }
+
+    private func chooseTypographyStyle(_ style: TypographyStyle) {
+        karaokeTypography = style
+        guard let previous = activeSongProfile else { return }
+        let old = previous.typographyPreset
+        let sameStyle = old.style == style
+        let typography = TypographyPreset(
+            style: style,
+            audioReaction: sameStyle ? old.audioReaction : .off,
+            effectIntensity: sameStyle ? old.effectIntensity : nil,
+            audioMapping: sameStyle ? old.audioMapping : nil,
+            deterministicSeed: sameStyle ? old.deterministicSeed : 0,
+            font: storyTypography)
+        let updated = SongCreativeProfile(
+            assetID: previous.assetID, sourceRevision: previous.sourceRevision,
+            visualPresetID: previous.visualPresetID, materialID: previous.materialID,
+            typographyPreset: typography, padKitID: previous.padKitID,
+            padMapping: previous.padMapping,
+            vocalAndAudioFXMacro: previous.vocalAndAudioFXMacro,
+            reactionProfile: previous.reactionProfile)
+        activeSongProfile = updated
+        try? CreatorPresetStore.save(
+            SongCreativeProfileResolver.creatorPreset(for: updated))
+        Task { try? await songProfileStore.saveSongProfile(updated) }
     }
 
     /// A antiga janela Reprodução agora é a metade inferior deste cartão.
@@ -762,6 +813,124 @@ private struct CoverArt: View {
 }
 
 // MARK: - Fundo (alternável)
+
+/// Every authored look is reachable with one tap on Criar. The previews use
+/// static palette swatches so opening the gallery does not launch many shaders.
+struct CreativeStyleGallery: View {
+    let selectedID: String
+    let selectedTypography: TypographyStyle
+    let onSelectPreset: (String) -> Void
+    let onSelectTypography: (TypographyStyle) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    Text("Escolha um visual para a música. Os fundos animados aparecem no player e no karaokê.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Text("Experiências")
+                        .font(.headline)
+                        .padding(.top, 8)
+                    ForEach(CreativePresetCatalog.selectableExperiences) { experience in
+                        CreativeStyleRow(
+                            id: experience.id, name: experience.name,
+                            material: experience.visualMaterial.name,
+                            typography: experience.typographyPreset.style,
+                            theme: experience.composition.program.preset.theme,
+                            selected: selectedID == experience.id,
+                            action: { onSelectPreset(experience.id) })
+                    }
+
+                    Text("Receitas clássicas")
+                        .font(.headline)
+                        .padding(.top, 12)
+                    ForEach(CreativePresetCatalog.all) { program in
+                        CreativeStyleRow(
+                            id: program.id, name: program.preset.name,
+                            material: CreativePresetCatalog.material(selection: program.id).name,
+                            typography: program.preset.typographyStyle,
+                            theme: program.preset.theme,
+                            selected: selectedID == program.id,
+                            action: { onSelectPreset(program.id) })
+                    }
+
+                    Text("Estilo das letras")
+                        .font(.headline)
+                        .padding(.top, 12)
+                    ForEach(TypographyStyle.allCases) { style in
+                        Button {
+                            onSelectTypography(style)
+                        } label: {
+                            HStack {
+                                Text(style.title)
+                                Spacer()
+                                if selectedTypography == style {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                            }
+                            .padding(14)
+                            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("creative.typography.\(style.rawValue)")
+                    }
+                }
+                .padding(18)
+            }
+            .background(Color.black)
+            .navigationTitle("Estilos visuais")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Fechar", action: onClose)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .presentationDetents([.large])
+        .accessibilityIdentifier("creative.visualStyles")
+    }
+}
+
+private struct CreativeStyleRow: View {
+    let id: String
+    let name: String
+    let material: String
+    let typography: TypographyStyle
+    let theme: AppTheme
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let palette = MarbleTheme(appTheme: theme).palette
+        Button(action: action) {
+            HStack(spacing: 13) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(LinearGradient(
+                        colors: [palette.deep, palette.body, palette.glow],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 56, height: 56)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name).font(.subheadline.weight(.semibold))
+                    Text("\(material) · \(typography.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                if selected { Image(systemName: "checkmark.circle.fill") }
+            }
+            .padding(10)
+            .background(.white.opacity(selected ? 0.16 : 0.08),
+                        in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("creative.style.\(id)")
+    }
+}
 
 private struct BackgroundLayer: View {
     let style: BackgroundStyle

@@ -110,8 +110,7 @@ actor LyricsPrefetcher {
                   await store.trackID == videoID else { return }
             c.generatedLRC = generated
             cache.save(c, id: videoID)
-            await store.load(trackID: videoID, rawLRC: generated,
-                             needsReview: true, force: true)
+            await store.loadGenerated(trackID: videoID, rawLRC: generated)
         } else if record.syncedLyrics == nil {
             await store.markUnavailable(trackID: videoID)
         }
@@ -177,8 +176,7 @@ actor LyricsPrefetcher {
             var updated = c
             updated.generatedLRC = generated
             cache.save(updated, id: m.videoID)
-            await store.load(trackID: m.videoID, rawLRC: generated,
-                             needsReview: true, force: true)
+            await store.loadGenerated(trackID: m.videoID, rawLRC: generated)
         } else if c.generatedLRC == nil && c.selected?.syncedLyrics == nil {
             await store.markUnavailable(trackID: m.videoID)
         }
