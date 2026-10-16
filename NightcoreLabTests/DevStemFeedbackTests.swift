@@ -8,6 +8,35 @@ final class DevStemFeedbackTests: XCTestCase {
         XCTAssertEqual(StemDevCredentials.normalized(token), token)
     }
 
+    func testLockScreenMediaControlsKeepPrimaryAudioSession() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let audio = try String(contentsOf: root.appendingPathComponent("AudioEngineManager.swift"),
+                               encoding: .utf8)
+        let content = try String(contentsOf: root.appendingPathComponent("ContentView.swift"),
+                                 encoding: .utf8)
+        XCTAssertTrue(audio.contains("MPNowPlayingInfoCenter.default()"))
+        XCTAssertTrue(audio.contains("MPRemoteCommandCenter.shared()"))
+        XCTAssertFalse(audio.contains(".mixWithOthers"))
+        XCTAssertTrue(content.contains("audio.setupNowPlaying()"))
+        XCTAssertTrue(content.contains("synchronizeRemoteAvailability()"))
+    }
+
+    func testOnDeviceConnectionCheckDoesNotSendTrackAudio() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let backend = try String(contentsOf: root.appendingPathComponent("DevStemBackend.swift"),
+                                 encoding: .utf8)
+        let panel = try String(contentsOf: root.appendingPathComponent("StemMixerControls.swift"),
+                               encoding: .utf8)
+        XCTAssertTrue(backend.contains("static func verifyConfiguration()"))
+        XCTAssertTrue(backend.contains("probe.httpBody = Data()"))
+        XCTAssertTrue(backend.contains("case 400: return"))
+        XCTAssertTrue(panel.contains("stem.testConnection"))
+        XCTAssertTrue(panel.contains("stem.connectionResult"))
+        XCTAssertTrue(panel.contains("sem enviar música"))
+    }
+
     func testDemucsHTTPFailuresHaveActionableExplanations() {
         XCTAssertTrue(DevStemBackend.diagnostic(for: 401).contains("Token"))
         XCTAssertTrue(DevStemBackend.diagnostic(for: 429).contains("ocupado"))
