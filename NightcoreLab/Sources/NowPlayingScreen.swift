@@ -414,8 +414,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         theme: MarbleTheme(appTheme: appTheme),
                         speed: 0.6,
                         maxFPS: 60,
-                        isPaused: searchDrawer.isOpen || creatorRoute.isPresented ||
-                            storyDraft != nil || storyPreview != nil || shareResult != nil,
+                        isPaused: false,
                         frozenTime: frozenShareMarblePhase,
                         startedAt: marbleStartedAt,
                         reactiveDistortion: distortion,
@@ -914,7 +913,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         style: effectivePlayerBackgroundStyle,
                         imageURL: track.coverURL, theme: appTheme,
                         frozenTime: frozenShareMarblePhase,
-                        isPaused: searchDrawer.isOpen,
+                        isPaused: false,
                         reactiveDistortion: distortion,
                         pulseDriver: pulse, material: selectedVisualMaterial,
                         liveMeter: audio.liveVisualMeter,
@@ -1152,6 +1151,7 @@ struct LyricsFadeMask: View {
 
 private struct SearchDrawerHandle: View {
     @Binding var state: SearchDrawerState
+    @GestureState private var dragTranslation: CGFloat = 0
     let accent: Color
     @Environment(PanelStore.self) private var panels
 
@@ -1192,6 +1192,14 @@ private struct SearchDrawerHandle: View {
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(accent.opacity(0.55), lineWidth: 1))
         .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+        .offset(y: max(-24, min(24, dragTranslation)))
+        .simultaneousGesture(DragGesture(minimumDistance: 12)
+            .updating($dragTranslation) { value, translation, _ in translation = value.translation.height }
+            .onEnded { value in
+                guard abs(value.translation.height) > 24 else { return }
+                if value.translation.height < 0 { state.openForSearch() }
+                else { state.close() }
+            })
         .frame(maxWidth: .infinity)
     }
 }

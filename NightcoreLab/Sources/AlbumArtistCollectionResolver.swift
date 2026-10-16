@@ -5,7 +5,7 @@ enum AlbumArtistMode: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
-struct AlbumArtistCollection {
+struct AlbumArtistCollection: Sendable {
     let anchor: Track
     let mode: AlbumArtistMode
     let albumTitle: String?
@@ -24,7 +24,7 @@ struct AlbumArtistCollection {
 /// Pure, local and deterministic: never accesses the network or transport.
 enum AlbumArtistCollectionResolver {
     private static let emptyLabels: Set<String> = [
-        "unknown", "unknown album", "unknown artist", "single", "singles",
+        "nao identificado", "artista nao identificado", "nao informado", "unknown", "unknown album", "unknown artist", "single", "singles",
         "album", "untitled", "n a", "na", "none", "various", "various artists"
     ]
 
@@ -47,7 +47,7 @@ enum AlbumArtistCollectionResolver {
 
     static func artistName(for track: Track) -> String? {
         if normalize(track.cleanArtist) != nil {
-            return track.cleanArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return track.cleanArtist?.replacingOccurrences(of: "(?i)\\s*(-\\s*topic|official artist channel|official|vevo)$", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         // Generic YouTube and old ID3 data often embed Artist - Title.
         for separator in [" - ", " – ", " — "] {
@@ -91,6 +91,13 @@ enum AlbumArtistCollectionResolver {
                 positions[candidate.id] = tracks.count
                 tracks.append(candidate)
             }
+        }
+        // Prefer local identities when the same recording is in a catalog.
+        var recordings = Set<String>()
+        tracks = tracks.filter { track in
+            let artist = artistKey(track) ?? track.id
+            let title = normalize(track.cleanTitle ?? track.title) ?? track.id
+            return recordings.insert(artist + "|" + title).inserted
         }
         let anchor = tracks[0]
         let album = albumTitle(for: anchor)

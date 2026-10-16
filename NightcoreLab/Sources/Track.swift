@@ -15,7 +15,12 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     /// Optional ID3 track number; old cached records decode without this field.
     var trackNumber: Int? = nil
 
-    var url: URL { URL(string: "https://www.youtube.com/watch?v=\(id)")! }
+    var catalogProvider: String? = nil
+    var collectionID: String? = nil
+    var artistID: String? = nil
+    var streamVideoID: String? = nil
+
+    var url: URL { URL(string: "https://www.youtube.com/watch?v=\(streamVideoID ?? id)")! }
 
     static func from(url: String) -> Track? {
         guard let canonical = AudioDownloadManager.youtubeVideoURL(from: url),
