@@ -1005,13 +1005,10 @@ final class AudioEngineManager {
     }
 
     private func applyLiveStemEQ() {
-        let proxy = stemMixEnabled && !stemsAvailable
-        stemEQ.bands[0].gain = proxy ? Self.stemGainDB(for: stemLevels[.vocal] ?? 1) : 0
-        stemEQ.bands[1].gain = proxy ? Self.stemGainDB(for: stemLevels[.instrumental] ?? 1) : 0
-        let drums = proxy ? Self.stemGainDB(for: stemLevels[.drums] ?? 1) : 0
-        stemEQ.bands[2].gain = drums
-        stemEQ.bands[3].gain = drums
-        stemEQ.bands[4].gain = proxy ? Self.stemGainDB(for: stemLevels[.bass] ?? 1) : 0
+        // Do not fake source isolation with a live EQ while the asynchronous
+        // four-buffer STFT separator is still preparing. The original track
+        // continues unchanged until independent sources are actually ready.
+        for band in stemEQ.bands { band.gain = 0 }
     }
 
     func setStemMixerEnabled(_ enabled: Bool) {
