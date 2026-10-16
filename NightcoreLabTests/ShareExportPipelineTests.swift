@@ -341,8 +341,9 @@ final class ShareExportPipelineTests: XCTestCase {
         let ui = try String(contentsOf: root.appendingPathComponent("Share/StoryDraftPreview.swift"),
                              encoding: .utf8)
         for title in ["Fundo & Movimento", "Estilo da Legenda", "Exibir no Card",
-                      "Desligado", "Fluido", "Reativo", "Magazine", "Sticker",
-                      "Dymo", "Cristal ⚡", "Sem Legenda", "Capa & Música",
+                      "Desligado", "Fluido", "Reativo", "Magazine Clout",
+                      "Brand Logo Clout", "Gothic & Chicano", "Acid Zine Clout",
+                      "Sem Legenda", "Capa & Música",
                       "Placar Karaokê", "Marca Nightcore Lab",
                       "Exportar Vídeo (.mp4)", "Salvar Imagem"] {
             XCTAssertTrue(ui.contains(title), "Missing direct export control \(title)")
