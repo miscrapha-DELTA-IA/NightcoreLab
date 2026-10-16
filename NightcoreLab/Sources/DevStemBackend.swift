@@ -5,6 +5,14 @@ import Foundation
 /// authenticated htdemucs worker, then download its four independent WAVs.
 /// Disabled by default. The production app never uploads audio automatically.
 enum DevStemBackend {
+    private enum StemServerFailure: LocalizedError {
+        case failed(String)
+        var errorDescription: String? {
+            switch self {
+            case .failed(let reason): return "Demucs: " + reason
+            }
+        }
+    }
     private struct Job: Decodable {
         let id: String
         let status: String
@@ -15,7 +23,8 @@ enum DevStemBackend {
 
     static func endpoint() -> URL? {
         guard enabled,
-              let raw = UserDefaults.standard.string(forKey: "stems.devBackendURL"),
+              let raw = UserDefaults.standard.string(forKey: "stems.devBackendURL")?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
               let url = URL(string: raw), let host = url.host,
               url.scheme == "https" || (url.scheme == "http" &&
                      ["localhost", "127.0.0.1"].contains(host)),
@@ -45,7 +54,9 @@ enum DevStemBackend {
         }
         let jobURL = server.appendingPathComponent("api/stems").appendingPathComponent(job.id)
         var ready = false
-        for _ in 0..<120 {
+        // HTDemucs may take up to 12 minutes on a CPU-only developer laptop.
+        // Allow 15 minutes so the server can return a real error/ready status.
+        for _ in 0..<300 {
             try Task.checkCancellation()
             var polling = URLRequest(url: jobURL)
             polling.timeoutInterval = 20
@@ -56,7 +67,9 @@ enum DevStemBackend {
             }
             let result = try JSONDecoder().decode(Job.self, from: data)
             if result.status == "ready" { ready = true; break }
-            if result.status == "failed" { throw URLError(.cannotDecodeContentData) }
+            if result.status == "failed" {
+                throw StemServerFailure.failed(result.message ?? "O processamento falhou no servidor.")
+            }
             try await Task.sleep(for: .seconds(3))
         }
         guard ready else { throw URLError(.timedOut) }
