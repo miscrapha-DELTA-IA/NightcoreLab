@@ -451,7 +451,7 @@ final class AudioEngineManager {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
             // Inspect input only AFTER activating the recording session.
             guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
@@ -530,7 +530,7 @@ final class AudioEngineManager {
             // message is NEVER derived from route/format/session exceptions.
             if session.category != .playAndRecord {
                 try session.setCategory(.playAndRecord, mode: .default,
-                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             }
             try session.setActive(true)
             guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
@@ -1464,10 +1464,12 @@ final class AudioEngineManager {
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // Prepare input capability before a song is scheduled. A first mic
-            // permission grant cannot reset an already playing player node.
+            // Keep the mic-capable graph ready without allowing other apps to
+            // mix: mixing marks us as secondary audio, hiding the iOS Now Playing
+            // player from Lock Screen / Control Center. Do not reconfigure on
+            // Karaoke presentation; recording remains explicitly opt-in.
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
         } catch {
             #if DEBUG
