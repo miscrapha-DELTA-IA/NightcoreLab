@@ -1,0 +1,5 @@
+# Isolated Windows/desktop development worker. Do not append these packages
+# to the production Render download/search service requirements.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+demucs==4.0.1
