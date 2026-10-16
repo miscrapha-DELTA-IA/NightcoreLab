@@ -1049,29 +1049,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
     }
 
+    /// Opening lyrics is a presentation-only transition. Microphone scoring
+    /// remains explicitly opt-in via KaraokeScoringControls in Legenda.
+    /// Never reconfigure AVAudioSession or the live audio graph from here.
     private func updateKaraokePresentation(_ shown: Bool) {
         lyricsStore.scoring.setKaraokePresented(shown, lines: lyricsStore.lines,
             at: clock.lyricTime + lyricsStore.userOffset,
             trackEnergy: { [weak audio] in audio?.liveVisualMeter.snapshot().rms ?? 0 })
-        guard shown, lyricsStore.status == .ready, !lyricsStore.lines.isEmpty else { return }
-        let revision = audio.playbackSourceRevision
-        Task { @MainActor in
-            let active = await audio.beginKaraokeMicrophone()
-            guard lyricsStore.scoring.isPresented,
-                  audio.playbackSourceRevision == revision else {
-                audio.endKaraokeMicrophone(); return
-            }
-            guard active else {
-                lyricsStore.scoring.stop(message: "Ative o microfone para pontuar.")
-                return
-            }
-            lyricsStore.scoring.start(mode: .microphone, lines: lyricsStore.lines,
-                                     at: clock.lyricTime + lyricsStore.userOffset)
-            lyricsStore.scoring.microphoneFrame = { [weak audio] _ in
-                audio?.karaokeVoiceFrame() ?? .silence
-            }
-            audio.karaokeCompletion = { [weak session = lyricsStore.scoring] in session?.finish() }
-        }
     }
 
     private var micButton: some View {
