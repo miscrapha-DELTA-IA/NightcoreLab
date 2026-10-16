@@ -9,11 +9,39 @@ final class InstantStemMasker {
     static let rampSeconds = 0.05
     static let maximumFrames = 4_096
 
+    /// Two identical 2nd-order Butterworth low-pass sections form an LR4
+    /// 145 Hz analysis band. Its filtered signal never reaches the output.
+    private struct BassBiquad {
+        let b0: Float, b1: Float, b2: Float, a1: Float, a2: Float
+        var z1: Float = 0, z2: Float = 0
+
+        init(rate: Double) {
+            let k = Float(tan(.pi * 145 / rate))
+            let root2 = Float(2).squareRoot()
+            let normalizer = 1 / (1 + root2 * k + k * k)
+            b0 = k * k * normalizer
+            b1 = 2 * b0
+            b2 = b0
+            a1 = 2 * (k * k - 1) * normalizer
+            a2 = (1 - root2 * k + k * k) * normalizer
+        }
+
+        mutating func process(_ sample: Float) -> Float {
+            let output = b0 * sample + z1
+            z1 = b1 * sample - a1 * output + z2
+            z2 = b2 * sample - a2 * output
+            return output
+        }
+    }
+
     private(set) var sampleRate: Double
     private var current: [Float] = [1, 1, 1, 1]
     private var target: [Float] = [1, 1, 1, 1]
-    private var bassL = [Float](repeating: 0, count: 4)
-    private var bassR = [Float](repeating: 0, count: 4)
+    private var bassL1 = BassBiquad(rate: 44_100)
+    private var bassL2 = BassBiquad(rate: 44_100)
+    private var bassR1 = BassBiquad(rate: 44_100)
+    private var bassR2 = BassBiquad(rate: 44_100)
+    private var sub20L: Float = 0, sub20R: Float = 0
     private var low220L: Float = 0, low220R: Float = 0
     private var low3800L: Float = 0, low3800R: Float = 0
     private var low2500L: Float = 0, low2500R: Float = 0
@@ -21,10 +49,20 @@ final class InstantStemMasker {
     private let absL = UnsafeMutablePointer<Float>.allocate(capacity: maximumFrames)
     private let absR = UnsafeMutablePointer<Float>.allocate(capacity: maximumFrames)
 
-    init(sampleRate: Double) { self.sampleRate = max(8_000, sampleRate) }
+    init(sampleRate: Double) {
+        self.sampleRate = max(8_000, sampleRate)
+        configure(sampleRate: self.sampleRate)
+    }
     deinit { absL.deallocate(); absR.deallocate() }
 
-    func configure(sampleRate: Double) { self.sampleRate = max(8_000, sampleRate) }
+    func configure(sampleRate: Double) {
+        self.sampleRate = max(8_000, sampleRate)
+        bassL1 = BassBiquad(rate: self.sampleRate)
+        bassL2 = BassBiquad(rate: self.sampleRate)
+        bassR1 = BassBiquad(rate: self.sampleRate)
+        bassR2 = BassBiquad(rate: self.sampleRate)
+        sub20L = 0; sub20R = 0
+    }
 
     func set(_ kind: StemKind, level: Float) {
         target[Self.index(kind)] = min(2, max(0, level.isFinite ? level : 1))
@@ -63,7 +101,7 @@ final class InstantStemMasker {
         vDSP_vabs(right, 1, absR, 1, vDSP_Length(count))
 
         let rate = Float(sampleRate)
-        let a145 = 1 - exp(-2 * Float.pi * 145 / rate)
+        let a20 = 1 - exp(-2 * Float.pi * 20 / rate)
         let a220 = 1 - exp(-2 * Float.pi * 220 / rate)
         let a2500 = 1 - exp(-2 * Float.pi * 2_500 / rate)
         let a3800 = 1 - exp(-2 * Float.pi * 3_800 / rate)
@@ -79,10 +117,12 @@ final class InstantStemMasker {
             }
             let l = left[n], r = right[n]
             let amplitude = 0.5 * (absL[n] + absR[n])
-            for k in 0..<4 {
-                bassL[k] += a145 * ((k == 0 ? l : bassL[k - 1]) - bassL[k])
-                bassR[k] += a145 * ((k == 0 ? r : bassR[k - 1]) - bassR[k])
-            }
+            let bassStageL = bassL1.process(l)
+            let bassStageR = bassR1.process(r)
+            let bassSampleL = bassL2.process(bassStageL)
+            let bassSampleR = bassR2.process(bassStageR)
+            sub20L += a20 * (bassSampleL - sub20L)
+            sub20R += a20 * (bassSampleR - sub20R)
             low220L += a220 * (l - low220L)
             low220R += a220 * (r - low220R)
             low3800L += a3800 * (l - low3800L)
@@ -99,7 +139,8 @@ final class InstantStemMasker {
             coherence += aPan * (instantC - coherence)
             let denominator = amplitude + 1e-5
             let bassWeight = min(0.92, max(0,
-                (abs(bassL[3]) + abs(bassR[3])) * 0.5 / denominator))
+                (abs(bassSampleL - sub20L) + abs(bassSampleR - sub20R)) *
+                    0.5 / denominator))
             let highEnergy = (abs(l - low2500L) + abs(r - low2500R)) * 0.5
             let transient = max(0, (fast - slow) / (fast + 1e-5))
             let drumWeight = min(0.82, transient *
