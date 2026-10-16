@@ -117,4 +117,22 @@ final class AudioQualityTests: XCTestCase {
         let (_, audio) = try samples(render(url))
         XCTAssertGreaterThan(audio.map { abs($0) }.max() ?? 0, 0.01)
     }
+
+    func testStage39VisualMeterPublishesAtThirtyHertzWithoutUIWork() throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 48_000, channels: 1))
+        // Allocations for the fixture happen outside the live audio callback.
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480))
+        pcm.frameLength = 480
+        let samples = try XCTUnwrap(pcm.floatChannelData?[0])
+        for i in 0..<480 { samples[i] = 0.2 }
+        let meter = AudioVisualLiveMeter()
+        for _ in 0..<3 { meter.consume(pcm) } // 30 ms: not yet 30 Hz
+        XCTAssertEqual(meter.snapshot(), .silence)
+        meter.consume(pcm) // 40 ms: one published frame
+        XCTAssertGreaterThan(meter.snapshot().rms, 0)
+        meter.reset()
+        XCTAssertEqual(meter.snapshot(), .silence)
+    }
+
 }

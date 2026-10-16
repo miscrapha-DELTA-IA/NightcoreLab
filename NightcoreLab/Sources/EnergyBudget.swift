@@ -17,6 +17,17 @@ struct EnergyBudget: Equatable, Sendable {
         if thermal == .serious { return 15 }
         return lowPower || thermal == .fair ? 30 : 60
     }
+    /// Background-only cadence. Audio callbacks and karaoke remain on their
+    /// own clocks; this policy never throttles their execution.
+    var shaderFPS: Double { maxVisualFPS }
+    var secondaryShaderQuality: Float {
+        if thermal.rawValue >= Thermal.serious.rawValue { return 0 }
+        if lowPower || thermal == .fair { return 0.25 }
+        return 1
+    }
+    var pausesShader: Bool {
+        appState != .active || reduceMotion || thermal == .critical
+    }
     var allowsNewAnalysis: Bool {
         appState == .active && !lowPower && thermal.rawValue < Thermal.serious.rawValue
     }

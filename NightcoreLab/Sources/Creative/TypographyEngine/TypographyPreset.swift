@@ -6,19 +6,37 @@ import Foundation
 /// selections and encoded CreativePreset payloads keep decoding.
 enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     case neon, magazineCutout, glitch, kinetic, minimal
+    case vinylSticker, dymoTicket, liquidCapsule
 
     /// Existing preference key; unchanged so the user's choice survives.
     static let storageKey = "karaokeTypography"
+
+    static let storyObjectModels: [TypographyStyle] = [
+        .magazineCutout, .vinylSticker, .dymoTicket, .liquidCapsule
+    ]
+
+    var shortObjectTitle: String {
+        switch self {
+        case .magazineCutout: return "Recorte"
+        case .vinylSticker: return "Adesivo"
+        case .dymoTicket: return "Fita"
+        case .liquidCapsule: return "Cristal ⚡"
+        default: return title
+        }
+    }
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .neon: return "Neon"
-        case .magazineCutout: return "Magazine Cutout"
+        case .magazineCutout: return "Magazine Cutout (Recorte Clássico)"
         case .glitch: return "Glitch"
         case .kinetic: return "Kinetic"
         case .minimal: return "Minimal"
+        case .vinylSticker: return "Vinyl Sticker (Adesivo Street)"
+        case .dymoTicket: return "Dymo Ticket (Fita / Ingresso Brutalista)"
+        case .liquidCapsule: return "Liquid Capsule (Cristal ⚡)"
         }
     }
 
@@ -26,6 +44,10 @@ enum TypographyStyle: String, Codable, CaseIterable, Identifiable, Sendable {
     /// it recorded every other style as `.neon` in their CreativePreset.
     var predatesExtendedStyles: Bool {
         self == .neon || self == .magazineCutout
+    }
+
+    var isObjectModel: Bool {
+        self == .vinylSticker || self == .dymoTicket || self == .liquidCapsule
     }
 }
 

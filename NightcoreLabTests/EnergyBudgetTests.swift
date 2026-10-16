@@ -57,6 +57,16 @@ final class EnergyBudgetTests: XCTestCase {
         }
     }
 
+    func testBackgroundShaderBudgetNeverThrottlesAudioOrExportQuality() {
+        let serious = EnergyBudget(thermal: .serious)
+        XCTAssertEqual(serious.shaderFPS, 15)
+        XCTAssertFalse(serious.pausesShader)
+        XCTAssertEqual(serious.secondaryShaderQuality, 0)
+        XCTAssertEqual(EnergyBudget(lowPower: true).secondaryShaderQuality, 0.25)
+        XCTAssertTrue(EnergyBudget(thermal: .critical).pausesShader)
+        XCTAssertEqual(EnergyBudget().secondaryShaderQuality, 1)
+    }
+
     func testDisallowedAnalysisDoesNotOpenSource() async throws {
         let engine = AudioFeatureEngine()
         let missing = URL(fileURLWithPath: "/missing/energy-budget-test.wav")

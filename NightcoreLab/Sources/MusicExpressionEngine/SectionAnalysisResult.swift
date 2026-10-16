@@ -3,7 +3,7 @@ import Foundation
 /// Unknown and instrumental are valid outcomes; no chorus label is fabricated
 /// from a change in energy alone.
 enum MusicSectionLabel: String, Codable, Sendable {
-    case unknown, intro, verse, chorus, bridge, buildup, instrumental, outro
+    case unknown, intro, verse, preChorus, chorus, drop, bridge, buildup, instrumental, outro
 }
 
 struct MusicSection: Codable, Equatable, Sendable {

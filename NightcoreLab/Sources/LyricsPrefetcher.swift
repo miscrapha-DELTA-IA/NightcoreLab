@@ -7,6 +7,7 @@ struct CachedLyricsChoice: Codable, Sendable {
     var score: Double
     var needsReview: Bool
     var pinned: Bool                     // escolha manual do usuário: nunca sobrescrever
+    var offlinePinned: Bool? = nil        // download explícito: manter letra além do TTL
     var alternatives: [LRCLIBRecord]     // top candidatos p/ "trocar letra" sem rede
     var savedAt: Date
 }
@@ -26,7 +27,7 @@ struct LyricsDiskCache: Sendable {
         guard let data = try? Data(contentsOf: url(id)),
               let c = try? JSONDecoder().decode(CachedLyricsChoice.self, from: data) else { return nil }
         let age = Date().timeIntervalSince(c.savedAt)
-        if c.pinned { return c }
+        if c.pinned || c.offlinePinned == true { return c }
         return age < (c.selected == nil ? Self.negativeTTL : Self.positiveTTL) ? c : nil
     }
 
@@ -53,30 +54,61 @@ actor LyricsPrefetcher {
     private let cache = LyricsDiskCache()
     private let store: LyricsStore
     private var task: Task<Void, Never>?
+    private var warmTask: Task<Void, Never>?
     private var activeID: String?
     private var warmedID: String?
+    private var activeSourceURL: URL?
+    private var activeDuration: TimeInterval = 0
 
     init(store: LyricsStore) { self.store = store }
 
     /// Chame quando a reprodução COMEÇA (não quando a aba/modo de letras abre).
-    func start(_ meta: TrackMetadata) {
+    func start(_ meta: TrackMetadata, sourceURL: URL? = nil) async {
+        // The player commits the source and resets LyricsStore synchronously.
+        // A delayed launch from an older selection must never take ownership.
+        guard await store.trackID == meta.videoID else { return }
         task?.cancel()
+        warmTask?.cancel()
         activeID = meta.videoID
+        activeSourceURL = sourceURL
+        activeDuration = meta.duration ?? 0
         warmedID = nil
-        task = Task(priority: .utility) { [weak self] in await self?.run(meta, apply: true) }
+        task = Task(priority: .userInitiated) { [weak self] in await self?.run(meta, apply: true) }
     }
 
     /// Aquece o cache da próxima faixa da fila (ex.: quando a atual passa de 70%). Não toca no store.
     func warm(_ meta: TrackMetadata) {
         guard meta.videoID != activeID, meta.videoID != warmedID else { return }
         warmedID = meta.videoID
-        Task(priority: .background) { [weak self] in await self?.run(meta, apply: false) }
+        warmTask = Task(priority: .background) { [weak self] in
+            await self?.run(meta, apply: false)
+        }
     }
 
-    func cancel() { task?.cancel(); activeID = nil; warmedID = nil }
+    func cancel() {
+        task?.cancel(); warmTask?.cancel()
+        activeID = nil; warmedID = nil
+        activeSourceURL = nil
+    }
 
     /// A tela de letras consulta a seleção persistida sem chamar a rede.
     func cachedChoice(for videoID: String) -> CachedLyricsChoice? { cache.load(videoID) }
+
+    /// Offline preparation never replaces the current Karaoke lyrics in LyricsStore.
+    func ensureSyncedLyrics(_ meta: TrackMetadata) async -> Bool {
+        if var cached = cache.load(meta.videoID),
+           cached.selected?.syncedLyrics?.isEmpty == false {
+            cached.offlinePinned = true
+            cache.save(cached, id: meta.videoID)
+            return true
+        }
+        await run(meta, apply: false)
+        guard var choice = cache.load(meta.videoID),
+              choice.selected?.syncedLyrics?.isEmpty == false else { return false }
+        choice.offlinePinned = true
+        cache.save(choice, id: meta.videoID)
+        return true
+    }
 
     /// A tela pode aguardar o trabalho já em curso, em vez de iniciar um segundo
     /// fluxo de até 3 requisições quando o usuário abre o karaokê rapidamente.
@@ -94,6 +126,10 @@ actor LyricsPrefetcher {
         cache.save(c, id: videoID)
         if let lrc = record.syncedLyrics {
             await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
+        } else if let sourceURL = activeSourceURL {
+            await store.loadFallback(trackID: videoID, plainText: record.plainLyrics,
+                                     sourceURL: sourceURL, duration: activeDuration,
+                                     force: true)
         }
     }
 
@@ -102,7 +138,7 @@ actor LyricsPrefetcher {
     // MARK: -
 
     private func run(_ m: TrackMetadata, apply: Bool) async {
-        if apply { await store.beginLoading(trackID: m.videoID) }
+        guard !Task.isCancelled, !apply || activeID == m.videoID else { return }
 
         if let cached = cache.load(m.videoID) { await finish(cached, m, apply); return }
 
@@ -148,6 +184,10 @@ actor LyricsPrefetcher {
         if let lrc = c.selected?.syncedLyrics {
             await store.load(trackID: m.videoID, rawLRC: lrc,
                              needsReview: c.needsReview, force: c.pinned)
+        } else if let sourceURL = activeSourceURL {
+            await store.loadFallback(trackID: m.videoID,
+                                     plainText: c.selected?.plainLyrics,
+                                     sourceURL: sourceURL, duration: activeDuration)
         } else {
             await store.markUnavailable(trackID: m.videoID)
         }

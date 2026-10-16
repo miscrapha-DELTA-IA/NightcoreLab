@@ -12,10 +12,14 @@ struct SharePackage: Identifiable {
     let metadata: ShareMetadata
 
     var files: [URL] { [videoURL, thumbnailURL, metadataURL] }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: videoURL.deletingLastPathComponent())
+    }
 }
 
 struct ShareMetadata: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     let schemaVersion: Int
     let title: String
     let artist: String
@@ -32,6 +36,14 @@ struct ShareMetadata: Codable, Equatable, Sendable {
     let thumbnailFrameIndex: Int
     let thumbnailElapsed: Double
     let exportedAt: Date
+    var lightningTheme: String? = nil
+    var reactionMode: String? = nil
+    var karaokeGrade: String? = nil
+    var karaokeScore: Int? = nil
+    var karaokeAccuracy: Int? = nil
+    var karaokeMode: String? = nil
+    var padEventCount: Int? = nil
+    var sectionVisualIntensity: Double? = nil
 }
 
 enum SharePackageError: LocalizedError {
@@ -47,11 +59,18 @@ enum SharePackageError: LocalizedError {
 /// Product orchestration ABOVE the stable StoryVideoExporter.
 @MainActor
 enum SharePackageBuilder {
-    /// No cleanup on share-sheet dismissal: the system may still be reading
-    /// URLs asynchronously. Collect abandoned packages only after 24 hours.
+    /// The finished package lives in Caches while the share sheet may still
+    /// read its URLs. Intermediate writer/mux files remain in Temporary and
+    /// are removed as soon as packaging finishes or cancellation is observed.
+    private static var packageRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ??
+            FileManager.default.temporaryDirectory
+    }
+
+    /// Collect abandoned completed packages after 24 hours.
     private static func pruneExpiredPackages() {
         let manager = FileManager.default
-        let root = manager.temporaryDirectory
+        let root = packageRoot
         guard let contents = try? manager.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]) else { return }
@@ -80,7 +99,7 @@ enum SharePackageBuilder {
                 profile: encoding, mode: request.mode)
         }
         let timeline = StoryRenderTimeline(request: request, profile: encoding)
-        let folder = FileManager.default.temporaryDirectory
+        let folder = packageRoot
             .appendingPathComponent("NightcoreShare-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: folder, withIntermediateDirectories: true)
@@ -131,11 +150,10 @@ enum SharePackageBuilder {
             progress(0.97)
             try Task.checkCancellation()
 
-            let metadata = ShareMetadata(
+            var metadata = ShareMetadata(
                 schemaVersion: ShareMetadata.currentSchemaVersion,
                 title: request.title, artist: request.artist,
-                presetID: request.renderRuntime?.composition.program.id ??
-                    request.reactiveProgram?.id ?? CreativePresetCatalog.defaultID,
+                presetID: request.experienceID,
                 materialID: request.renderRuntime?.material.id ?? VisualMaterial.legacyMarble.id,
                 duration: CMTimeGetSeconds(videoDuration),
                 width: encoding.width, height: encoding.height, fps: encoding.fps,
@@ -145,6 +163,17 @@ enum SharePackageBuilder {
                 thumbnailFrameIndex: thumbIndex,
                 thumbnailElapsed: thumbFrame.elapsed,
                 exportedAt: Date())
+            metadata.lightningTheme = request.theme.rawValue
+            metadata.reactionMode = request.reactionMode.rawValue
+            metadata.karaokeGrade = request.scoreStamp?.grade
+            metadata.karaokeScore = request.scoreStamp?.score
+            metadata.karaokeAccuracy = request.scoreStamp?.accuracy
+            metadata.karaokeMode = request.scoreStamp?.label
+            metadata.padEventCount = request.padPerformance?.events.count
+            metadata.sectionVisualIntensity = request.songDNA.map {
+                request.reactionMode == .off ? 1 :
+                    SongSectionCadence.at(sourceTime: request.playbackTime, dna: $0).visual
+            }
             let metadataURL = folder.appendingPathComponent("metadata.json")
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

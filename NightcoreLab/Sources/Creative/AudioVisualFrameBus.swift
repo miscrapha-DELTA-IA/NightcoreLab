@@ -23,6 +23,14 @@ actor AudioVisualFrameBus {
 
     init(capacity: Int = 4) {
         self.capacity = max(1, capacity)
+        queue.reserveCapacity(self.capacity)
+    }
+
+    /// Volatile frames only. Persistent SongDNA / audio disk files are separate.
+    func discardUnderMemoryPressure() {
+        queue.removeAll(keepingCapacity: false)
+        lastTimestamp = nil
+        beatSequence = 0
     }
 
     /// Discard stale values after a seek / restart before publishing again.

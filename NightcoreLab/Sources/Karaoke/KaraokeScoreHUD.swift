@@ -1,17 +1,29 @@
 import SwiftUI
 
+enum KaraokeHapticMoment {
+    static func celebrates(previousMultiplier: Int,
+                           snapshot: KaraokeScoreSnapshot) -> Bool {
+        (snapshot.multiplier > previousMultiplier &&
+         (2...4).contains(snapshot.multiplier)) ||
+            snapshot.lastVerseRating == .perfect
+    }
+}
+
 /// All frequent reads live here, outside the lyrics' scroll/typography tree.
 struct KaraokeScoreHUD: View {
     let session: KaraokeScoringSession
     var accent: Color = .cyan
+    var onResult: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var lastCelebratedVerse = 0
+    @State private var lastMultiplier = 1
 
     var body: some View {
-        if session.isHUDVisible {
+        if session.isPresented {
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")
+                        Text(session.mode == .off ? "MICROFONE INATIVO" : (session.mode == .passive ? "RITMO DA FAIXA · SEM MICROFONE" : (session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")))
                             .font(.system(size: 9, weight: .bold))
                         Text(session.snapshot.totalScore, format: .number)
                             .font(.title3.bold().monospacedDigit())
@@ -19,6 +31,20 @@ struct KaraokeScoreHUD: View {
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
+                        HStack(spacing: 5) {
+                                Image(systemName: "mic.fill")
+                                GeometryReader { size in
+                                    Capsule().fill(.white.opacity(0.16))
+                                        .overlay(alignment: .leading) {
+                                            Capsule().fill(accent)
+                                                .frame(width: size.size.width * session.liveMicLevel)
+                                        }
+                                }
+                                .frame(width: 40, height: 5)
+                            }
+                            .accessibilityLabel("Nível do microfone")
+                            .accessibilityValue("\(Int(session.liveMicLevel * 100)) por cento")
+                            .accessibilityIdentifier("karaoke.liveMicLevel")
                         Text("\(session.snapshot.multiplier)x · \(session.snapshot.streakCombo) combo")
                             .font(.caption.bold().monospacedDigit())
                             .padding(.horizontal, 9).padding(.vertical, 5)
@@ -28,12 +54,26 @@ struct KaraokeScoreHUD: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if session.mode == .off {
+                    Text(session.message ?? "Ative o microfone para pontuar sua voz.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 ProgressView(value: session.snapshot.vocalAccuracy)
                     .tint(accent)
-                    .accessibilityLabel("Precisão vocal")
+                    .accessibilityLabel(session.mode == .passive ? "Sincronia da faixa" : "Precisão vocal")
                     .accessibilityValue("\(Int(session.snapshot.vocalAccuracy * 100)) por cento")
+                if session.snapshot.judgedVerses > 0, let onResult {
+                    Button(action: onResult) {
+                        Label("Ver Resultado", systemImage: "trophy.fill")
+                            .font(.caption.weight(.semibold))
+                            .frame(minHeight: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(accent)
+                    .accessibilityIdentifier("karaoke.showResult")
+                }
                 if session.snapshot.isFinished {
-                    KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode == .simulation)
+                    KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode != .microphone)
                 }
             }
             .padding(12)
@@ -41,18 +81,36 @@ struct KaraokeScoreHUD: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.3)))
             .shadow(color: accent.opacity(session.snapshot.vocalAccuracy * 0.15), radius: 8)
-            .overlay(alignment: .bottom) {
-                Text(session.judgmentVisible ? session.snapshot.lastVerseRating?.rawValue ?? "" : "")
+            .safeAreaInset(edge: .bottom, spacing: 4) {
+                Text(session.judgmentVisible ?
+                     (session.mode == .microphone && session.snapshot.lastVerseWasSilent ?
+                        "Cante no mic 🎤" : session.snapshot.lastVerseRating?.rawValue ?? "") : "")
                     .font(.caption.bold())
                     .foregroundStyle(accent)
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.black.opacity(session.judgmentVisible ? 0.7 : 0), in: Capsule())
-                    .offset(y: 34)
                     .allowsHitTesting(false)
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.snapshot.totalScore)
             .padding(.horizontal, 18).padding(.top, 4)
             .accessibilityIdentifier("karaoke.scoreHUD")
+            .onChange(of: session.snapshot.judgedVerses) { _, verses in
+                guard verses > lastCelebratedVerse else {
+                    if verses == 0 {
+                        lastCelebratedVerse = 0
+                        lastMultiplier = 1
+                    }
+                    return
+                }
+                lastCelebratedVerse = verses
+                let shouldCelebrate = KaraokeHapticMoment.celebrates(
+                    previousMultiplier: lastMultiplier, snapshot: session.snapshot)
+                lastMultiplier = session.snapshot.multiplier
+                if shouldCelebrate {
+                    CreativeHaptics.success(
+                        microphoneActive: session.mode == .microphone)
+                }
+            }
         }
     }
 }
@@ -112,7 +170,7 @@ struct KaraokeScoringControls: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .accessibilityLabel("Pontuação do karaokê")
-        .alert("Microfone indisponível", isPresented: $showsError) {
+        .alert("Permissão do microfone desativada", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Autorize o microfone nos Ajustes ou escolha Experimentar simulação. Nenhum resultado simulado é apresentado como canto real.")
@@ -126,7 +184,7 @@ struct KaraokeScoringControls: View {
             if mode == .off { audio.endKaraokeMicrophone() }
         }
         .onDisappear {
-            request?.cancel(); audio.endKaraokeMicrophone()
+            request?.cancel()
         }
     }
 
@@ -141,11 +199,26 @@ struct KaraokeScoringControls: View {
             guard store.scoring.isPresented, audio.playbackSourceRevision == revision else {
                 audio.endKaraokeMicrophone(); return
             }
-            guard allowed else { showsError = true; return }
+            guard allowed else { showsError = audio.microphonePermissionDenied; return }
             store.scoring.start(mode: .microphone, lines: store.lines,
                                 at: clock.lyricTime + store.userOffset)
             store.scoring.microphoneFrame = { [weak audio] _ in audio?.karaokeVoiceFrame() ?? .silence }
             audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
         }
+    }
+}
+
+
+/// Offline, text-only share contract. Never represents simulated scores as
+/// a recorded microphone performance.
+enum KaraokeScoreShareComposer {
+    static func text(_ snapshot: KaraokeScoreSnapshot, simulation: Bool) -> String {
+        let mode = simulation ? "SIMULAÇÃO de karaokê" : "Canto ao vivo"
+        return [
+            "Nightcore Lab · \(mode)",
+            "Nota \(snapshot.rank) · \(Int(snapshot.accuracyPercentage.rounded()))%",
+            "\(snapshot.totalScore) pontos · maior combo \(snapshot.bestCombo)x",
+            snapshot.hasHarmonicReference ? "Ritmo e afinação" : "Avaliação rítmica"
+        ].joined(separator: "\n")
     }
 }

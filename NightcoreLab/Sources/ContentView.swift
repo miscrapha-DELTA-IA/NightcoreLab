@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import SDWebImageSwiftUI
 
@@ -20,6 +21,13 @@ final class PlaybackQueue: ObservableObject {
 
     func contains(_ track: Track) -> Bool {
         upNextQueue.contains(where: { $0.id == track.id })
+    }
+
+    @discardableResult
+    func remove(_ track: Track) -> Bool {
+        guard let index = upNextQueue.firstIndex(where: { $0.id == track.id }) else { return false }
+        upNextQueue.remove(at: index)
+        return true
     }
 
     /// Smart Queue: preserve all other items, including items before the one
@@ -67,6 +75,10 @@ final class PlaybackQueue: ObservableObject {
     func clear() { upNextQueue.removeAll() }
 }
 
+private enum MusicControlPage: String, CaseIterable {
+    case speedPitch, stems
+}
+
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
 
@@ -74,6 +86,7 @@ struct ContentView: View {
     @State private var reverb: Float = 0
     @State private var bass: Float = 0
     @State private var keepOriginalPitch = false
+    @State private var musicControlPage: MusicControlPage = .speedPitch
     @State private var isVertical = false
     @State private var isAdjustingSlider = false
     @State private var isDraggingTime = false
@@ -100,6 +113,7 @@ struct ContentView: View {
 
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
+    @StateObject private var offlineLibrary = OfflineLibrary()
     @StateObject private var playbackQueue = PlaybackQueue()
     @StateObject private var playbackTransition = PlaybackCoordinator()
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
@@ -132,7 +146,12 @@ struct ContentView: View {
     @AppStorage("lyricsCleanMode") private var lyricsCleanMode = true
     @AppStorage(KaraokePrefs.background) private var karaokeBackgroundStyle: BackgroundStyle = .marble
     @AppStorage("showDiscover") private var isDiscoverExpanded = true
-    @AppStorage("showMusicWorkspace") private var isMusicWorkspaceExpanded = true
+    @State private var searchDrawer = SearchDrawerState()
+    @State private var albumFocusTrack: Track?
+    @State private var albumFocusRequest = 0
+    @State private var drawerToast: String?
+    @State private var pendingMix: [Track]?
+    @State private var karaokeSummary: KaraokeSummary?
     @AppStorage("showAudioWorkspace") private var isAudioWorkspaceExpanded = true
     @AppStorage("showQueue") private var isQueueExpanded = true
     @AppStorage("showExport") private var isExportExpanded = true
@@ -148,9 +167,6 @@ struct ContentView: View {
     private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
 
     private var hasTrack: Bool { audio.fileName != nil }
-    private var hasMusicPanels: Bool {
-        PanelID.discoveryPanels.contains { panels.isVisible($0) }
-    }
     private var hasAudioPanels: Bool {
         PanelID.audioPanels.contains { panels.isVisible($0) }
     }
@@ -188,12 +204,16 @@ struct ContentView: View {
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
             backgroundStyle: $karaokeBackgroundStyle,
+            searchDrawer: $searchDrawer,
+            karaokeSummary: $karaokeSummary,
             playerBackgroundStyle: bgStyle,
             onPlayPause: { playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID) },
             onPrevious: { goToPreviousTrack() },
             onNext: { goToNextTrack() },
+            onReplayKaraoke: { replayKaraoke() },
             header: { header },
             playerDetails: { integratedPlaybackBar },
+            searchDrawerContent: { focusRequest in musicWorkspace(focusRequest: focusRequest) },
             normalExtras: { mainScrollContent },
             karaokeContent: {
                 if let currentTrack {
@@ -205,7 +225,8 @@ struct ContentView: View {
                         lyricsCleanMode: $lyricsCleanMode,
                         dismiss: { withAnimation { showLyrics = false } },
                         inline: true,
-                        prefetcher: lyricsPrefetcher
+                        prefetcher: lyricsPrefetcher,
+                        onShowResult: { showKaraokeResult() }
                     )
                     .id(currentTrack.id)
                 }
@@ -215,9 +236,34 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
     }
 
-    private var playerLifecycle: some View {
+    private var offlineAwareCanvas: some View {
         playerCanvas
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    lyricsStore.discardVolatileLyricCache()
+            }
+            .onChange(of: searchDrawer.isOpen) { _, open in
+                if open, let lyricsPrefetcher {
+                    offlineLibrary.refresh(downloader.allCachedTracks,
+                        downloader: downloader, lyrics: lyricsPrefetcher)
+                }
+            }
+            .onChange(of: downloader.cachedIDs) { _, _ in
+                if searchDrawer.isOpen, let lyricsPrefetcher {
+                    offlineLibrary.refresh(downloader.allCachedTracks,
+                        downloader: downloader, lyrics: lyricsPrefetcher)
+                }
+            }
+    }
+
+    private var playerLifecycle: some View {
+        offlineAwareCanvas
         .onAppear {
+            let saved = CreativeSessionPreferences.load()
+            currentTheme = saved.theme
+            creativeReactionMode = saved.reactionMode
+            selectedCreativePresetID = CreativePresetCatalog.liveSelection(saved.experienceID)
+            karaokeTypographyStyle = saved.lyricModel
             restoreDiscoverExpansionPreference()
             if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
@@ -256,10 +302,11 @@ struct ContentView: View {
         .task(id: relatedRequestID) { await loadRelatedVideos() }
         .task { discoveryEvents = await discoveryLog.snapshot() }
         .onChange(of: audio.playbackCompletionCount) { _, _ in
+            if showLyrics { showKaraokeResult() }
             if let playingTrackID { playbackTransition.didEnd(trackID: playingTrackID) }
             finishDiscovery(reason: .completed)
             if let currentTrack { playHistory.completePlayback(trackID: currentTrack.id) }
-            advanceQueue()
+            if karaokeSummary == nil { advanceQueue() }
         }
         .onChange(of: audio.isPlaying) { _, playing in
             playbackTransition.confirmPlayback(isPlaying: playing, trackID: playingTrackID)
@@ -317,11 +364,28 @@ struct ContentView: View {
             }
             if phase == .active { downloader.warmUp() }   // acorda o Render ao voltar para o app
         }
-        .task { downloader.warmUp() }
+        .task {
+            selectedCreativePresetID = CreativePresetCatalog.liveSelection(selectedCreativePresetID)
+            downloader.warmUp()
+        }
     }
 
     private var playerPresentations: some View {
         playerLifecycle
+        .overlay(alignment: .top) {
+            if let drawerToast {
+                Label(drawerToast, systemImage: "wifi.exclamationmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 66)
+                    .accessibilityIdentifier("searchDrawer.errorToast")
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: drawerToast)
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
@@ -351,42 +415,70 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: DS.Spacing.s) {
-            AppIconView(theme: currentTheme, showsBackground: false, isPlaying: audio.isPlaying)
-                .frame(width: 38, height: 38)
-
             VStack(alignment: .leading, spacing: 1) {
-                Text("Nightcore Lab")
-                    .font(DS.Typography.display)
-                    .foregroundStyle(DS.Ink.primary)
-                Text(currentTheme.displayName.uppercased())
+                NightcoreBrandLockup(theme: currentTheme)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
+                Text("v40 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
             }
             .lineLimit(1)
-            .minimumScaleFactor(0.5)
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
 
             Spacer(minLength: 0)
 
-            GlassGroup(spacing: 8) {
-                HStack(spacing: 8) {
-                    headerButton("square.grid.3x3.fill", label: "Abrir Performance Mode") {
+            // Keep the legacy one-tap actions on wider phones; never let them
+            // squeeze the nontruncating Nightcore Lab brand on compact devices.
+            ViewThatFits(in: .horizontal) {
+                GlassGroup(spacing: 8) {
+                    HStack(spacing: 8) {
+                        headerButton("square.grid.3x3.fill", label: "Abrir Performance Mode") {
+                            showPerformanceMode = true
+                        }
+                        headerButton("heart.fill", label: "Apoiar o projeto") {
+                            openURL(donationURL)
+                        }
+                        headerButton(isVertical ? "slider.horizontal.3" : "slider.vertical.3",
+                                     label: isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)") {
+                            withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                                isVertical.toggle()
+                            }
+                        }
+                        .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
+                        importButton
+                    }
+                }
+                Menu {
+                    Button("Abrir Performance Mode", systemImage: "square.grid.3x3.fill") {
                         showPerformanceMode = true
                     }
-                    headerButton("heart.fill", label: "Apoiar o projeto") {
+                    Button("Apoiar o projeto", systemImage: "heart.fill") {
                         openURL(donationURL)
                     }
-
-                    // Mostra o ícone do modo para o qual o botão vai trocar
-                    headerButton(isVertical ? "slider.horizontal.3" : "slider.vertical.3",
-                                 label: isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)") {
-                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) { isVertical.toggle() }
+                    Button(isVertical ? "Sliders horizontais" : "Sliders verticais",
+                           systemImage: "slider.vertical.3") {
+                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                            isVertical.toggle()
+                        }
                     }
-                    .sensoryFeedback(.impact(weight: .medium), trigger: isVertical)
-
-                    importButton
+                    Button("Importar música", systemImage: "plus") {
+                        showImporter = true
+                    }
+                    .disabled(audio.isExporting || downloader.isDownloading)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(currentTheme.accent)
+                        .frame(width: 40, height: 40)
+                        .glassSurface(Circle(), theme: currentTheme, depth: 0.4)
                 }
+                .accessibilityLabel("Ações do cabeçalho")
             }
+            .layoutPriority(0)
         }
     }
 
@@ -424,7 +516,7 @@ struct ContentView: View {
     // Pull the long list out of body, keeping the view hierarchy unchanged.
     private var mainScrollContent: some View {
                 VStack(spacing: DS.Spacing.l) {
-                    musicWorkspace
+                    if !hasTrack { musicWorkspace(focusRequest: 0) }
                     resumeSection
                     if downloader.isDownloading {
                         Text(downloadStatusText)
@@ -454,30 +546,8 @@ struct ContentView: View {
 
     /// Uma superfície única para busca, descoberta e próximas faixas.
     /// Mantém a SearchView montada mesmo recolhida para preservar busca e cache.
-    private var musicWorkspace: some View {
+    private func musicWorkspace(focusRequest: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button {
-                withAnimation(.smooth(duration: 0.32)) {
-                    isMusicWorkspaceExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "square.stack.3d.up")
-                    Text("MÚSICAS")
-                        .font(.caption.bold())
-                        .tracking(1.3)
-                    Spacer()
-                    Image(systemName: isMusicWorkspaceExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2.weight(.bold))
-                }
-                .foregroundStyle(currentTheme.accent)
-                .frame(minHeight: 30)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Área de busca, descoberta e fila")
-            .accessibilityValue(isMusicWorkspaceExpanded ? "Expandida" : "Recolhida")
-
             VStack(alignment: .leading, spacing: 10) {
                 SearchView(
                     downloader: downloader, theme: currentTheme,
@@ -487,35 +557,101 @@ struct ContentView: View {
                     isLoadingSuggestions: isLoadingRelated,
                     canRefreshSuggestions: currentTrack != nil,
                     onRefreshSuggestions: { startRadio() },
-                    onSelect: { track, _ in playTrack(track) },
+                    onSelect: { track, _ in selectFromDrawer(track) },
                     onLink: { link in startDownload(link) },
                     onServerSettings: { showServerSettings = true },
                     isDiscoverExpanded: $isDiscoverExpanded,
-                    isPresented: !(hasTrack && currentTrack != nil && showLyrics),
-                    integrated: true
+                    isPresented: !hasTrack || searchDrawer.isOpen,
+                    focusRequest: focusRequest,
+                    integrated: true,
+                    recentTracks: quickLibraryTracks,
+                    activeTrack: currentTrack,
+                    requestedAlbumTrack: albumFocusTrack,
+                    requestedAlbumFocus: albumFocusRequest,
+                    queuedTracks: playbackQueue.upNextQueue,
+                    pendingTrackID: searchDrawer.pendingTrackID,
+                    offline: offlineLibrary,
+                    onPlayMix: { tracks in playMix(tracks) },
+                    onPlayOffline: { tracks in playMix(tracks) },
+                    onSaveOffline: { track in saveOffline(track) },
+                    onSaveMixOffline: { tracks in
+                        guard let lyricsPrefetcher else { return }
+                        offlineLibrary.saveMix(tracks, downloader: downloader,
+                                               lyrics: lyricsPrefetcher)
+                    },
+                    onPlayQueue: { track in selectFromDrawer(track) },
+                    onRemoveQueue: { track in _ = playbackQueue.remove(track) }
                 )
                 relatedSection.hideablePanel(.queue)
             }
-            .frame(height: isMusicWorkspaceExpanded ? nil : 0, alignment: .top)
-            .opacity(isMusicWorkspaceExpanded ? 1 : 0)
-            .clipped()
-            .allowsHitTesting(isMusicWorkspaceExpanded)
-            .accessibilityHidden(!isMusicWorkspaceExpanded)
         }
-        .padding(14)
-        .background(.ultraThinMaterial,
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                .allowsHitTesting(false)
+    }
+
+    private var quickLibraryTracks: [Track] {
+        let recent = playHistory.entries.values
+            .sorted { $0.lastPlayed > $1.lastPlayed }
+            .prefix(8)
+            .map { downloader.cachedTrack($0.hit.asTrack) }
+        return DrawerQuickAccess.recents(recent: recent,
+            cached: downloader.quickLibraryTracks, current: currentTrack)
+    }
+
+    private func selectFromDrawer(_ track: Track) {
+        guard !audio.isExporting else { return }
+        if pendingMix?.first?.id != track.id { pendingMix = nil }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        searchDrawer.beginSelection(trackID: track.id)
+        drawerToast = nil
+        playTrack(track)
+    }
+
+    private func playMix(_ tracks: [Track]) {
+        guard tracks.count == 15 || !tracks.isEmpty,
+              let first = tracks.first else { return }
+        pendingMix = tracks
+        selectFromDrawer(first)
+    }
+
+    private func saveOffline(_ track: Track) {
+        guard let lyricsPrefetcher else { return }
+        offlineLibrary.save(track, downloader: downloader, lyrics: lyricsPrefetcher)
+    }
+
+    private func finishDrawerSelection(_ trackID: String) {
+        guard searchDrawer.pendingTrackID == trackID else { return }
+        CreativeHaptics.selection(microphoneActive: audio.karaokeMicrophoneActive)
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            searchDrawer.confirmPlayback(trackID: trackID)
         }
-        // Hide the whole workspace without unmounting the omnibox and its state.
-        .frame(height: hasMusicPanels ? nil : 0, alignment: .top)
-        .opacity(hasMusicPanels ? 1 : 0)
-        .clipped()
-        .allowsHitTesting(hasMusicPanels)
-        .accessibilityHidden(!hasMusicPanels)
+    }
+
+    private func failDrawerSelection(_ trackID: String, message: String) -> Bool {
+        guard searchDrawer.selectionFailed(trackID: trackID) else { return false }
+        if pendingMix?.first?.id == trackID { pendingMix = nil }
+        drawerToast = message
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if drawerToast == message { drawerToast = nil }
+        }
+        return true
+    }
+
+    private func showKaraokeResult() {
+        lyricsStore.scoring.finish()
+        guard let currentTrack else { return }
+        let info = TrackInfo(track: currentTrack, fileName: audio.fileName,
+                             coverURL: coverURL)
+        karaokeSummary = KaraokeSummary(track: info,
+            snapshot: lyricsStore.scoring.snapshot, mode: lyricsStore.scoring.mode)
+    }
+
+    private func replayKaraoke() {
+        karaokeSummary = nil
+        guard currentTrack != nil else { return }
+        lyricsStore.scoring.stop()
+        audio.seek(to: 0)
+        audio.play()
     }
 
     /// Presets e controles vivem num único cartão de vidro. O olho ainda
@@ -529,7 +665,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "dial.high")
-                    Text("ÁUDIO")
+                    Text("MÚSICA")
                         .font(.caption.bold())
                         .tracking(1.3)
                     Spacer()
@@ -556,7 +692,7 @@ struct ContentView: View {
                     .hideablePanel(.presets)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("CONTROLES", systemImage: "dial.high")
+                        Label("MÚSICA · AJUSTES", systemImage: "dial.high")
                             .font(.caption.bold())
                             .tracking(1.3)
                             .foregroundStyle(currentTheme.accent)
@@ -770,6 +906,7 @@ struct ContentView: View {
                 ForEach(Array(playbackQueue.upNextQueue.prefix(3).indices), id: \.self) { index in
                     let track = playbackQueue.upNextQueue[index]
                     let status = downloader.status(for: track)
+                    HStack(spacing: 8) {
                     Button {
                         playFromQueue(track)
                     } label: {
@@ -799,6 +936,16 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(audio.isExporting)
+                    Button("💿") {
+                        albumFocusTrack = track
+                        albumFocusRequest += 1
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(currentTheme.accent)
+                    .disabled(audio.isExporting)
+                    .accessibilityLabel("Álbum e artista de \(track.title)")
+                    }
                 }
             }
             }
@@ -852,8 +999,18 @@ struct ContentView: View {
 
     private var controls: some View {
         VStack(spacing: DS.Spacing.l) {
-            pitchToggle
-            sliders
+            Picker("Modo da Música", selection: $musicControlPage) {
+                Text("⚡ Speed & Pitch").tag(MusicControlPage.speedPitch)
+                Text("🎚️ Stems").tag(MusicControlPage.stems)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("music.controlMode")
+            if musicControlPage == .speedPitch {
+                pitchToggle
+                sliders
+            } else {
+                StemMixerControls(audio: audio)
+            }
             creativeReactionControl
         }
         .disabled(!hasTrack)
@@ -873,7 +1030,7 @@ struct ContentView: View {
             }
             Picker("Ritmo visual", selection: $creativeReactionMode) {
                 Text("Desligado").tag(CreativePreset.AudioReaction.off)
-                Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                Text("Fluido").tag(CreativePreset.AudioReaction.subtle)
                 Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
             }
             .pickerStyle(.segmented)
@@ -899,8 +1056,10 @@ struct ContentView: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("creative.presetPicker")
                 .onChange(of: selectedCreativePresetID) { _, id in
+                    let liveID = CreativePresetCatalog.liveSelection(id)
+                    if id != liveID { selectedCreativePresetID = liveID; return }
                     karaokeTypographyStyle = CreativePresetCatalog.typographyStyle(
-                        afterSelecting: id, current: karaokeTypographyStyle)
+                        afterSelecting: liveID, current: karaokeTypographyStyle)
                 }
             }
             if let experience = CreativePresetCatalog.selectedExperience(id: selectedCreativePresetID) {
@@ -1091,10 +1250,12 @@ struct ContentView: View {
         guard !audio.isExporting else { return }
         guard let track = Track.from(url: link.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             downloader.errorMessage = "Cole um link válido de vídeo do YouTube."
+            if searchDrawer.isOpen { drawerToast = "Confira o link do vídeo e tente novamente." }
             return
         }
         downloader.errorMessage = nil
-        playTrack(track)
+        if searchDrawer.isOpen { selectFromDrawer(track) }
+        else { playTrack(track) }
     }
 
     private func playFromQueue(_ track: Track, automatic: Bool = false) {
@@ -1150,21 +1311,33 @@ struct ContentView: View {
                 audio.play()
                 guard audio.isPlaying else {
                     if playbackTransition.didFail(token, trackID: track.id) {
-                        errorMessage = "Não foi possível iniciar a reprodução. A fila foi preservada."
+                        let message = "Não foi possível iniciar a música. Tente novamente."
+                        if !failDrawerSelection(track.id, message: message) { errorMessage = message }
                         if resumingPrevious { resumeTrack = track }
                     }
                     return
                 }
                 guard playbackTransition.didStart(token, trackID: track.id) else { return }
+                let wasMixStart = pendingMix?.first?.id == track.id
                 // History changes only after a successful start, never at
                 // download selection time. Back/forward leave Up Next intact.
                 let priorTrack = currentTrack
                 let committedTrack = downloader.cachedTrack(track)
+                if priorTrack?.id != committedTrack.id {
+                    lyricsStore.beginLoading(trackID: committedTrack.id)
+                    karaokeSummary = nil
+                }
                 playbackTransition.commitStarted(committedTrack, replacing: priorTrack,
                     direction: navigation, queue: playbackQueue, navigation: navigationHistory)
+                if wasMixStart, let pendingMix {
+                    playbackQueue.replace(with: Array(pendingMix.dropFirst()),
+                                          excluding: track.id)
+                    self.pendingMix = nil
+                }
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
+                finishDrawerSelection(track.id)
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
                     let isManualSkip = !automaticAdvance && navigation == .regular &&
@@ -1173,7 +1346,7 @@ struct ContentView: View {
                                     (automaticAdvance ? .completed : .nextButton))
                     discoveryTracker.start(currentTrack.id, duration: audio.duration,
                                            speed: Double(speed))
-                    if isManualSkip {
+                    if isManualSkip && !wasMixStart {
                         let recentIDs = playHistory.entries.values.sorted {
                             $0.lastPlayed > $1.lastPlayed
                         }.prefix(10).map { $0.hit.id }
@@ -1193,12 +1366,17 @@ struct ContentView: View {
                 }
             } catch {
                 guard playbackTransition.didFail(token, trackID: track.id) else { return }
-                errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                let message = "Não foi possível abrir a música. Verifique o arquivo ou a conexão."
+                if !failDrawerSelection(track.id, message: message) {
+                    errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                }
                 if resumingPrevious { resumeTrack = track }
             }
         }, onFailure: { message in
             guard playbackTransition.didFail(token, trackID: track.id) else { return }
-            errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+            if !failDrawerSelection(track.id, message: "Não foi possível carregar a música. Confira a conexão e tente novamente.") {
+                errorMessage = message + " A fila foi preservada; toque novamente para tentar."
+            }
             if resumingPrevious { resumeTrack = track }
         })
     }
@@ -1240,7 +1418,10 @@ struct ContentView: View {
         let service = lyricsPrefetcher ?? LyricsPrefetcher(store: lyricsStore)
         lyricsPrefetcher = service
         let metadata = lyricsMetadata(for: track, duration: audio.duration)
-        Task { await service.start(metadata) }
+        let sourceURL = audio.visualAnalysisURL
+        Task(priority: .userInitiated) {
+            await service.start(metadata, sourceURL: sourceURL)
+        }
     }
 
     private func prefetchUpcoming() {

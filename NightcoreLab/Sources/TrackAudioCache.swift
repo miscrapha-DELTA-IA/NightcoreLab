@@ -3,6 +3,15 @@ import Foundation
 
 /// The index lives alongside the audio in Caches. Missing/evicted files are never cache hits.
 struct TrackAudioCache {
+    static var stemCacheFolder: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("NightcoreAudio", isDirectory: true)
+    }
+    static func stemDirectory(for source: URL) -> URL {
+        let root = stemCacheFolder.standardizedFileURL.path + "/"
+        let parent = source.deletingLastPathComponent().standardizedFileURL
+        return parent.path.hasPrefix(root) ? parent : stemCacheFolder
+    }
     struct Entry: Codable {
         var track: Track
         let relativePath: String
@@ -10,15 +19,28 @@ struct TrackAudioCache {
     }
     let folder: URL
     private(set) var entries: [String: Entry] = [:]
+    private(set) var pinnedIDs = Set<String>()
 
     init(folder: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("NightcoreAudio", isDirectory: true)) {
         self.folder = folder
+        if let data = try? Data(contentsOf: folder.appendingPathComponent("offline-pins.json")),
+           let pins = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            pinnedIDs = pins
+        }
         if let data = try? Data(contentsOf: folder.appendingPathComponent("index.json")),
            let index = try? JSONDecoder().decode([String: Entry].self, from: data) {
             entries = index.filter { _, entry in
                 FileManager.default.fileExists(atPath: folder.appendingPathComponent(entry.relativePath).path)
             }
+        }
+    }
+
+    mutating func pin(_ id: String) {
+        pinnedIDs.insert(id)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(pinnedIDs) {
+            try? data.write(to: folder.appendingPathComponent("offline-pins.json"), options: .atomic)
         }
     }
 
@@ -66,10 +88,22 @@ struct TrackAudioCache {
         var bytes = sizes.values.reduce(0, +)
         for (id, entry) in entries.sorted(by: { $0.value.accessedAt < $1.value.accessedAt }) {
             guard entries.count > 30 || bytes > 512 * 1024 * 1024 else { break }
-            guard !ids.contains(id) else { continue }
+            guard !ids.contains(id), !pinnedIDs.contains(id) else { continue }
             try? FileManager.default.removeItem(at: folder.appendingPathComponent(entry.relativePath).deletingLastPathComponent())
             entries[id] = nil
             bytes -= sizes[id] ?? 0
+        }
+        try? persist()
+    }
+
+    /// Reclaim disposable downloaded tracks on memory pressure while retaining
+    /// the playing, selected and in-flight queue members. Never touches an
+    /// AVAudioPlayerNode buffer or the current song file.
+    mutating func evictUnprotected(protecting ids: Set<String>) {
+        for (id, entry) in entries where !ids.contains(id) && !pinnedIDs.contains(id) {
+            let url = folder.appendingPathComponent(entry.relativePath)
+            try? FileManager.default.removeItem(at: url)
+            entries[id] = nil
         }
         try? persist()
     }

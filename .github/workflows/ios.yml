@@ -55,7 +55,6 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             build-for-testing
-      # Reuse the compiled test bundle; no rendering/pixel tests in the fast lane.
       - name: Run smoke suites and fast visual catalog contract
         shell: bash
         run: |
@@ -76,9 +75,12 @@ jobs:
   build:
     name: build
     # Manual dispatch can force the entire delivery gate on any branch.
-    # Release/final PRs and pushes to main also retain the original pipeline.
+    # Explicit Stage 20B.1 recovery push also runs the full iPhoneOS IPA gate,
+    # rather than hiding it behind the exploration-only fast lane.
+    # Remove this one-branch recovery opt-in after PR #70 is merged.
+    # Release/final PRs and pushes to main retain the original pipeline.
     if: >-
-      ${{ (github.event_name == 'workflow_dispatch' || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
+      ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_name == 'stage-20b-vocal-fx-loops-experiments') || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
     runs-on: macos-latest
     timeout-minutes: 30
 
@@ -114,6 +116,46 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # Stage 40 GPU regression gate: run the 14 historically red tests FIRST.
+      # No exclusions/relaxations: the unfiltered full XCTest job runs immediately
+      # afterwards, and Release IPA remains gated on both test passes.
+      - name: Stage 40 targeted Metal render and preview/export parity regressions
+        run: |
+          set -o pipefail
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for devices in d["devices"].values() for v in devices if v["name"].startswith("iPhone")))')
+          xcodebuild test \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -destination "platform=iOS Simulator,id=$device_id" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath Stage40-Targeted.xcresult \
+            -only-testing:NightcoreLabTests/AdaptiveCompositionLayoutTests/testPortraitOriginalPixelParity \
+            -only-testing:NightcoreLabTests/AdaptiveCompositionLayoutTests/testSquareAndLandscapePreviewExportExactPixelsAndViewport \
+            -only-testing:NightcoreLabTests/CompositionRuntimeTests/testExistingStoryFrameRendererReceivesCompatibleValues \
+            -only-testing:NightcoreLabTests/CreativeMarbleRenderingTests/testMetalFrameRasterSizesUnchangedWhenReactive \
+            -only-testing:NightcoreLabTests/CreatorControlTests/testControlledPreviewAndExportUseIdenticalFrame \
+            -only-testing:NightcoreLabTests/PlayerBackgroundStyleTests/testStage40ExportUsesEveryLivePaletteAndNativeResolution \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testDefaultPortraitPreviewAndEncoderShareExactPixels \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testFourLyricModelsFreezeIntoShareAndRenderDistinctStoryFrames \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testSharedCanvasRendersThreeRatiosWithoutChangingSceneSource \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testSharePackageContainsValidatedVideoThumbnailAndMetadata \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testStage40RealMetalContrastPaletteAndContinuousFrames \
+            -only-testing:NightcoreLabTests/StoryRenderTimelineTests/testExportFrameUsesSameVisualSceneAsScrubPreview \
+            -only-testing:NightcoreLabTests/StoryRenderTimelineTests/testStage37ConsecutiveThirtyFPSFramesHaveLinearPhaseAndDistinctPixels \
+            -only-testing:NightcoreLabTests/StoryRenderTimelineTests/testThreeBeatAndSectionFramesMatchPreviewAndEncoderState \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee stage40-targeted-test.log
+
+      - name: Save targeted Stage 40 regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stage40-Targeted-Tests
+          path: |
+            stage40-targeted-test.log
+            Stage40-Targeted.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Validar busca, cache e qualidade de áudio no simulador
         run: |
           set -o pipefail
@@ -125,6 +167,27 @@ jobs:
             -parallel-testing-enabled NO \
             -resultBundlePath AudioQuality.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-test.log
+
+      - name: Collect compact visual and test evidence
+        if: always()
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          log = Path('xcodebuild-test.log')
+          lines = log.read_text(errors='replace').splitlines() if log.exists() else []
+          selected = [line for line in lines if any(marker in line for marker in (
+              'Stage40 pixels:', 'error:', 'Test Suite ', 'Executed ',
+              'testStage40', 'TEST SUCCEEDED', 'TEST FAILED'))]
+          Path('stage40-validation.txt').write_text('\n'.join(selected) + '\n')
+          PYCODE
+
+      - name: Save visual and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stage40-Validation
+          path: stage40-validation.txt
+          retention-days: 7
 
       - name: Resumo de falhas como anotações
         if: failure()

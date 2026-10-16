@@ -23,7 +23,21 @@ struct SearchView: View {
     let onServerSettings: () -> Void
     @Binding var isDiscoverExpanded: Bool
     let isPresented: Bool
+    var focusRequest: Int = 0
     var integrated: Bool = false
+    var recentTracks: [Track] = []
+    var activeTrack: Track? = nil
+    var requestedAlbumTrack: Track? = nil
+    var requestedAlbumFocus: Int = 0
+    var queuedTracks: [Track] = []
+    var pendingTrackID: String? = nil
+    @ObservedObject var offline: OfflineLibrary
+    var onPlayMix: ([Track]) -> Void = { _ in }
+    var onPlayOffline: ([Track]) -> Void = { _ in }
+    var onSaveOffline: (Track) -> Void = { _ in }
+    var onSaveMixOffline: ([Track]) -> Void = { _ in }
+    var onPlayQueue: (Track) -> Void = { _ in }
+    var onRemoveQueue: (Track) -> Void = { _ in }
     @Environment(PanelStore.self) private var panels
     @Environment(PlayHistoryStore.self) private var playHistory
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -39,6 +53,10 @@ struct SearchView: View {
     @State private var hasSearched = false
     @State private var submittedQuery: String?
     @State private var searchRequestID = UUID()
+    @State private var hubTab: DrawerHubTab = .mix
+    @State private var collectionAnchor: Track?
+    @State private var collectionMode: AlbumArtistMode = .both
+    @State private var shuffleSeed = 0
     @FocusState private var isFocused: Bool
 
     private var typedText: String? {
@@ -46,6 +64,41 @@ struct SearchView: View {
         return nil
     }
     private var isSearchMode: Bool { submittedQuery != nil || typedText != nil }
+    private var showsQuickAccess: Bool {
+        DrawerQuickAccess.shouldShow(query: query, submittedQuery: submittedQuery)
+    }
+    private var mixTracks: [Track] {
+        let base = DrawerSmartMix.resolve(history: Array(playHistory.entries.values),
+            cached: downloader.allCachedTracks, discovery: suggestedTracks,
+            current: recentTracks.first)
+        guard shuffleSeed > 0 else { return base }
+        // A stable rotation changes order without fetching or replacing songs.
+        return Array(base.enumerated().sorted {
+            ($0.offset * 7 + shuffleSeed * 3) % 15 <
+                ($1.offset * 7 + shuffleSeed * 3) % 15
+        }.map { $0.element })
+    }
+    private var offlineTracks: [Track] {
+        downloader.allCachedTracks.filter { offline.readyIDs.contains($0.id) }
+    }
+    /// Local library, offline cache, recent history, bundled catalog and search cache.
+    private var collectionCandidates: [Track] {
+        let history = playHistory.entries.values.sorted { $0.lastPlayed > $1.lastPlayed }
+            .map { $0.hit.asTrack }
+        return recentTracks + downloader.allCachedTracks + history + queuedTracks +
+            suggestedTracks + searchResults + omnibox.results.map(\.asTrack) + mixTracks
+    }
+    private var collectionResult: AlbumArtistCollection? {
+        guard let anchor = collectionAnchor ?? activeTrack ?? recentTracks.first else { return nil }
+        return AlbumArtistCollectionResolver.resolve(
+            anchor: anchor, candidates: collectionCandidates, mode: collectionMode)
+    }
+    private func focusAlbumArtist(_ track: Track) {
+        collectionAnchor = downloader.cachedTrack(track)
+        collectionMode = .both
+        hubTab = .albumArtist
+        isFocused = false
+    }
     private var isDiscoverVisible: Bool {
         PanelPresentation.showsDiscover(hidden: panels.hidden, isZen: panels.isZen,
                                         searchActive: isSearchMode)
@@ -71,9 +124,9 @@ struct SearchView: View {
                                             searchResults: searchResults, suggestions: suggestedTracks)
     }
 
-    private func showSuggestions() {
+    private func showSuggestions(preserveSavedQuery: Bool = false) {
         searchExpansionOverride = nil
-        lastSearchQuery = ""
+        if !preserveSavedQuery { lastSearchQuery = "" }
         query = ""
         omnibox.queryChanged("")
         searchResults = []
@@ -120,6 +173,291 @@ struct SearchView: View {
         }
     }
 
+    private var quickAccess: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("TOCADAS RECENTEMENTE · BIBLIOTECA RÁPIDA")
+                .font(.caption2.weight(.heavy)).tracking(0.8)
+                .foregroundStyle(theme.accent)
+            if recentTracks.isEmpty {
+                Text("Suas músicas aparecerão aqui após a primeira reprodução.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 9) {
+                        ForEach(recentTracks) { track in
+                            VStack(spacing: 4) {
+                            Button {
+                                isFocused = false
+                                onSelect(track, [])
+                            } label: {
+                                HStack(spacing: 7) {
+                                    WebImage(url: track.thumbnailURL)
+                                        .resizable().scaledToFill()
+                                        .frame(width: 38, height: 38)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    Text(track.title)
+                                        .font(.caption.weight(.semibold))
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: 118, alignment: .leading)
+                                    if pendingTrackID == track.id {
+                                        ProgressView().tint(theme.accent)
+                                    }
+                                }
+                                .padding(6)
+                                .background(.white.opacity(0.08),
+                                            in: RoundedRectangle(cornerRadius: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!isEnabled)
+                            .accessibilityIdentifier("searchDrawer.recent.\(track.id)")
+                            offlineControl(track)
+                            Button("💿") { focusAlbumArtist(track) }
+                                .font(.caption2)
+                                .accessibilityLabel("Álbum e artista de \(track.title)")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text("FILA A SEGUIR")
+                .font(.caption2.weight(.heavy)).tracking(0.8)
+                .foregroundStyle(theme.accent)
+            if queuedTracks.isEmpty {
+                HStack {
+                    Text("A fila está vazia.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    if canRefreshSuggestions {
+                        Button("Iniciar Rádio", action: onRefreshSuggestions)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(theme.accent)
+                    }
+                }
+            } else {
+                ForEach(queuedTracks.prefix(3)) { track in
+                    HStack(spacing: 8) {
+                        WebImage(url: track.thumbnailURL)
+                            .resizable().scaledToFill()
+                            .frame(width: 34, height: 34)
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                        Text(track.title)
+                            .font(.caption.weight(.semibold)).lineLimit(1)
+                        Spacer(minLength: 2)
+                        if pendingTrackID == track.id {
+                            ProgressView().tint(theme.accent)
+                        } else {
+                            Button("Tocar Agora") { onPlayQueue(track) }
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(theme.accent)
+                                .accessibilityIdentifier("searchDrawer.playQueue.\(track.id)")
+                        }
+                        offlineControl(track)
+                        Button("💿") { focusAlbumArtist(track) }
+                            .accessibilityLabel("Álbum e artista de \(track.title)")
+                        Button(role: .destructive) { onRemoveQueue(track) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .disabled(pendingTrackID == track.id)
+                        .accessibilityLabel("Remover \(track.title) da fila")
+                        .accessibilityIdentifier("searchDrawer.removeQueue.\(track.id)")
+                    }
+                    .padding(7)
+                    .background(.white.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+        .padding(11)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityIdentifier("searchDrawer.quickAccess")
+    }
+
+    private var quickHub: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    hubPill(.mix, "⚡ Mix 15")
+                    hubPill(.offline, "📥 Offline (\(offlineTracks.count))")
+                    hubPill(.queue, "🎵 Fila")
+                    hubPill(.albumArtist, "💿 Álbum & Artista")
+                }
+            }
+            .accessibilityIdentifier("searchDrawer.hubTabs")
+            switch hubTab {
+            case .mix:
+                HStack {
+                    Button("▶ Tocar Mix (15)") { onPlayMix(mixTracks) }
+                        .accessibilityIdentifier("searchDrawer.playMix")
+                    Spacer(minLength: 4)
+                    Button("🔀 Aleatório") { shuffleSeed += 1 }
+                        .accessibilityIdentifier("searchDrawer.shuffleMix")
+                }
+                .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                ForEach(mixTracks) { track in hubTrackRow(track) }
+            case .offline:
+                HStack {
+                    Button("▶ Tocar Offline") { onPlayOffline(offlineTracks) }
+                        .disabled(offlineTracks.isEmpty)
+                    Spacer(minLength: 4)
+                    Button("📥 Salvar Mix 15 Offline") { onSaveMixOffline(mixTracks) }
+                }
+                .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                if offlineTracks.isEmpty {
+                    Text("Nenhuma música completa offline. Salve seu Mix 15 aqui.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(offlineTracks) { track in hubTrackRow(track) }
+            case .queue:
+                quickAccess
+            case .albumArtist:
+                albumArtistHub
+            }
+        }
+        .padding(11)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityIdentifier("searchDrawer.quickHub")
+    }
+
+    @ViewBuilder
+    private var albumArtistHub: some View {
+        if let result = collectionResult {
+            HStack(spacing: 10) {
+                WebImage(url: result.anchor.thumbnailURL)
+                    .resizable().scaledToFill().frame(width: 52, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(result.artistName ?? "Artista não identificado")
+                        .font(.subheadline.weight(.bold)).lineLimit(1)
+                    Text(result.albumTitle ?? "Álbum não informado")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+            }
+            Picker("Organizar músicas por", selection: $collectionMode) {
+                Text("💿 Álbum").tag(AlbumArtistMode.album)
+                Text("🎤 Artista").tag(AlbumArtistMode.artist)
+                Text("✨ Ambos").tag(AlbumArtistMode.both)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("searchDrawer.albumArtistMode")
+            if let notice = result.fallbackNotice {
+                Text(notice).font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(.white.opacity(0.09), in: Capsule())
+                    .accessibilityIdentifier("searchDrawer.albumFallback")
+            }
+            HStack(spacing: 7) {
+                Button("▶ Tocar Tudo") { onPlayMix(result.playbackTracks) }
+                    .accessibilityIdentifier("searchDrawer.albumPlayAll")
+                Spacer(minLength: 0)
+                Button("🔀 Aleatório") { onPlayMix(result.playbackTracks.shuffled()) }
+                    .accessibilityIdentifier("searchDrawer.albumShuffle")
+                Spacer(minLength: 0)
+                Button("📥 Salvar Tudo Offline") {
+                    onSaveMixOffline(result.playbackTracks)
+                }
+                .accessibilityIdentifier("searchDrawer.albumSaveAll")
+            }
+            .font(.caption2.weight(.bold)).foregroundStyle(theme.accent)
+            .disabled(!isEnabled || result.playbackTracks.isEmpty)
+            if !result.albumTracks.isEmpty {
+                Text("💿 Do Álbum: \(result.albumTitle ?? "Álbum")")
+                    .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                ForEach(result.albumTracks) { track in hubTrackRow(track) }
+            }
+            if !result.artistTracks.isEmpty {
+                Text("🎤 Mais de \(result.artistName ?? "este artista")")
+                    .font(.caption.weight(.bold)).foregroundStyle(theme.accent)
+                ForEach(result.artistTracks) { track in hubTrackRow(track) }
+            }
+            if result.playbackTracks.isEmpty {
+                Text("Nenhuma faixa encontrada na biblioteca e no cache atual.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } else {
+            Text("Toque uma música para explorar o álbum ou outras faixas do artista.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func hubPill(_ tab: DrawerHubTab, _ title: String) -> some View {
+        Button { hubTab = tab } label: {
+            Text(title).font(.caption2.weight(.bold)).lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .fixedSize(horizontal: true, vertical: false)
+                .background(hubTab == tab ? theme.accent.opacity(0.23) : .white.opacity(0.07),
+                            in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(hubTab == tab ? .isSelected : [])
+        .accessibilityIdentifier("searchDrawer.tab.\(tab.rawValue)")
+    }
+
+    private func hubTrackRow(_ track: Track) -> some View {
+        HStack(spacing: 8) {
+            Button { onSelect(track, []) } label: {
+                HStack(spacing: 8) {
+                    WebImage(url: track.thumbnailURL)
+                        .resizable().scaledToFill().frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.cleanTitle ?? track.title)
+                            .font(.caption.weight(.semibold)).lineLimit(1)
+                        Text(AlbumArtistCollectionResolver.artistName(for: track) ?? "Música")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        if offline.lyricsReadyIDs.contains(track.id) {
+                            Text("🎤 Letra").font(.caption2).foregroundStyle(theme.accent)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+            Button("💿") { focusAlbumArtist(track) }
+                .font(.caption2)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Álbum e artista de \(track.title)")
+                .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
+            offlineControl(track)
+        }
+        .padding(7)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func offlineControl(_ track: Track) -> some View {
+        Group {
+            if offline.readyIDs.contains(track.id) {
+                Text("✓ Offline").font(.caption2.weight(.bold))
+                    .foregroundStyle(.green)
+            } else if offline.savingIDs.contains(track.id) {
+                ProgressView(value: offlineProgress(for: track))
+                    .frame(width: 42)
+                    .accessibilityLabel(offline.phases[track.id] ?? "Salvando offline")
+            } else {
+                Button(offline.failedIDs.contains(track.id) ? "Tentar novamente" : "↓ Offline") {
+                    onSaveOffline(track)
+                }
+                .font(.caption2.weight(.bold)).foregroundStyle(theme.accent)
+                .disabled(!isEnabled)
+                .accessibilityIdentifier("searchDrawer.saveOffline.\(track.id)")
+            }
+        }
+    }
+
+    private func offlineProgress(for track: Track) -> Double {
+        switch offline.phases[track.id] {
+        case "Baixando áudio":
+            return 0.7 * (downloader.offlineDownloadProgress[track.id] ?? 0)
+        case "Salvando letra": return 0.8
+        case "Analisando música": return 0.9
+        default: return 0
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 12) {
@@ -147,6 +485,34 @@ struct SearchView: View {
                 }
                 .padding(14)
                 .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
+
+                if let pendingTrackID {
+                    HStack(spacing: 9) {
+                        ProgressView().tint(theme.accent)
+                        Text(downloader.isDownloading ? "Preparando música…" : "Iniciando reprodução…")
+                            .font(.caption.weight(.semibold))
+                        Spacer(minLength: 0)
+                        if downloader.isDownloading {
+                            Text("\(Int(downloader.downloadProgress * 100))%")
+                                .monospacedDigit().font(.caption2)
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(theme.accent.opacity(0.14), in: Capsule())
+                    .accessibilityIdentifier("searchDrawer.loading.\(pendingTrackID)")
+                    if downloader.isDownloading {
+                        ProgressView(value: downloader.downloadProgress)
+                            .tint(theme.accent)
+                    }
+                } else if isSearching || omnibox.isSearching {
+                    Label("Buscando músicas…", systemImage: "magnifyingglass")
+                        .font(.caption).foregroundStyle(theme.accent)
+                        .accessibilityIdentifier("searchDrawer.searching")
+                }
+
+                if showsQuickAccess || hubTab == .albumArtist {
+                    quickHub
+                }
 
                 if typedText != nil && omnibox.isShowingStaleCache {
                     Text("Resultados salvos · tentando atualizar")
@@ -231,6 +597,7 @@ struct SearchView: View {
                                 ForEach(displayedTracks) { result in
                                     let track = downloader.cachedTrack(result)
                                     let status = downloader.status(for: result)
+                                    VStack(alignment: .leading, spacing: 5) {
                                     Button {
                                         isFocused = false
                                         // History counts only after the audio engine confirms playback.
@@ -250,8 +617,12 @@ struct SearchView: View {
                                                 .multilineTextAlignment(.leading)
                                                 .frame(height: 34, alignment: .topLeading)
                                             HStack(spacing: 5) {
-                                                TrackStatusIndicator(status: status, accent: theme.accent)
-                                                Text(status.shortDescription)
+                                                if pendingTrackID == track.id {
+                                                    ProgressView().tint(theme.accent)
+                                                } else {
+                                                    TrackStatusIndicator(status: status, accent: theme.accent)
+                                                }
+                                                Text(pendingTrackID == track.id ? "Preparando…" : status.shortDescription)
                                                     .font(.caption2)
                                                     .foregroundStyle(status == .downloaded
                                                         ? Color.green.opacity(0.85) : theme.accent)
@@ -269,6 +640,14 @@ struct SearchView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(!isEnabled)
+                                    HStack(spacing: 8) {
+                                        Button("💿") { focusAlbumArtist(track) }
+                                            .accessibilityLabel("Álbum e artista de \(track.title)")
+                                            .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
+                                        offlineControl(track)
+                                    }
+                                    }
+                                    .frame(width: 152)
                                 }
                             }
                             .padding(.vertical, 3)
@@ -285,6 +664,10 @@ struct SearchView: View {
             if let base = URL(string: AudioDownloadManager.apiBaseURL) { omnibox.useServer(base) }
             guard !hasRestoredQuery else { return }
             hasRestoredQuery = true
+            if integrated {
+                showSuggestions(preserveSavedQuery: true)
+                return
+            }
             guard !panels.isHidden(.omnibox) else {
                 showSuggestions()
                 return
@@ -310,7 +693,20 @@ struct SearchView: View {
             if zen { isFocused = false }
         }
         .onChange(of: isPresented) { _, presented in
-            if !presented { isFocused = false }
+            if !presented { showSuggestions(preserveSavedQuery: true) }
+            else if showsQuickAccess {
+                collectionAnchor = nil
+                hubTab = .mix
+            }
+        }
+        .onChange(of: activeTrack?.id) { _, _ in
+            collectionAnchor = nil
+        }
+        .onChange(of: requestedAlbumFocus) { _, _ in
+            if let track = requestedAlbumTrack { focusAlbumArtist(track) }
+        }
+        .onChange(of: focusRequest) { _, _ in
+            if isPresented { isFocused = true }
         }
         .onChange(of: query) { _, value in
             searchExpansionOverride = nil

@@ -6,6 +6,31 @@ enum StoryMode: String, Sendable {
     case player, lyrics
 }
 
+/// Small immutable result badge. Passive and simulated runs are clearly named.
+struct KaraokePerformanceStamp: Equatable, Sendable {
+    let grade: String
+    let score: Int
+    let accuracy: Int
+    let mode: KaraokeScoringSession.Mode
+
+    init?(snapshot: KaraokeScoreSnapshot, mode: KaraokeScoringSession.Mode) {
+        guard mode != .off, snapshot.judgedVerses > 0 else { return nil }
+        grade = snapshot.rank
+        score = snapshot.totalScore
+        accuracy = Int(snapshot.accuracyPercentage.rounded())
+        self.mode = mode
+    }
+
+    var label: String {
+        switch mode {
+        case .microphone: return "CANTO AO VIVO"
+        case .simulation: return "SIMULAÇÃO"
+        case .passive: return "RITMO DA FAIXA"
+        case .off: return ""
+        }
+    }
+}
+
 struct StoryVideoRequest: Sendable {
     static let maxSeconds: TimeInterval = 15
     static let size = CGSize(width: 540, height: 960)
@@ -16,7 +41,7 @@ struct StoryVideoRequest: Sendable {
     let title: String
     let artist: String
     let artworkURL: URL?
-    let theme: AppTheme
+    var theme: AppTheme
     let playerStyle: PlayerBackgroundStyle
     let karaokeBackground: BackgroundStyle
     let marblePhase: Float
@@ -48,6 +73,21 @@ struct StoryVideoRequest: Sendable {
     /// Frozen once per editor selection; shared by preview and export.
     var layoutPolicy: CompositionLayoutPolicy? = nil
     var creatorParameters: CreatorParameterSet = .neutral
+    /// Frozen source-time pad take, including the optional magnetic grid.
+    /// Copy-on-write immutable value used by preview and offline exporter.
+    var padPerformance: PerformanceTimeline? = nil
+    /// Frozen live selection and source-matched musical intelligence.
+    var experienceID: String = CreativePresetCatalog.defaultID
+    var reactionMode: CreativePreset.AudioReaction = .off
+    /// Explicit live-screen capture opts into the Stage 26 PCM response.
+    /// Legacy program-only requests retain their established material contract.
+    var liveVisualResponseEnabled = false
+    var songDNA: SongDNA? = nil
+    var scoreStamp: KaraokePerformanceStamp? = nil
+    var showsScoreStamp = true
+    var showsTrackCard = true
+    var showsBrand = true
+    var showsLyrics = true
 
     /// The active line's typography layer at a lyric time. The ONE builder
     /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).
@@ -81,10 +121,33 @@ struct StoryVideoRequest: Sendable {
                        audioTimeline: AudioFeatureTimeline?,
                        rhythm: RhythmAnalysisResult?,
                        runtime: CompositionRuntime? = nil) -> ResolvedCompositionFrame? {
-        (runtime ?? renderRuntime)?.frame(
+        let resolved = (runtime ?? renderRuntime)?.frame(
             at: frame.elapsed, audioTimeline: audioTimeline,
             typography: typographyLayer(atLyricTime: frame.lyricTime),
-            rhythmAnalysis: rhythm)
+            rhythmAnalysis: rhythm, performance: padPerformance,
+            padAccent: frame.padAccent)
+        guard var resolved else { return nil }
+        let cadence = !liveVisualResponseEnabled || reactionMode == .off
+            ? SongSectionCadence.neutral :
+            SongSectionCadence.at(sourceTime: frame.sourceTime, dna: songDNA)
+        if let typography = resolved.typographyFrame {
+            resolved = resolved.withTypography(
+                TypographyAnimationEngine.evolve(typography, cadence: cadence))
+        }
+        if let material = resolved.materialFrame,
+           liveVisualResponseEnabled, reactionMode != .off {
+            let features = CompositionAudioSampler.sample(audioTimeline, at: frame.sourceTime)
+            let pulse = max(material.parameters.beatPulse,
+                            StoryBeatEnvelope.at(sourceTime: frame.sourceTime, dna: songDNA))
+            let levels = LiveAudioLevels(
+                rms: features?.energy ?? 0, bass: features?.bass ?? 0,
+                onset: 0, beatPulse: pulse,
+                songEnergy: features?.energy ?? 0)
+            let reactive = MarbleLiveResponse.apply(material, levels: levels, mode: reactionMode)
+            resolved = resolved.withMaterial(SongSectionCadence.apply(
+                reactive, cadence: cadence))
+        }
+        return resolved
     }
 
     /// Source-compatible view of the frozen composition.
@@ -102,7 +165,7 @@ struct StoryVideoRequest: Sendable {
         sourceTime(at: elapsed) + lyricOffset
     }
     func marbleTime(at elapsed: TimeInterval) -> Float {
-        marblePhase + Float(elapsed) * marbleSpeed
+        StoryExportMotion.phase(at: elapsed, start: marblePhase, speed: marbleSpeed)
     }
     func activeLine(at elapsed: TimeInterval) -> TimedLyricLine? {
         let t = lyricTime(at: elapsed)
@@ -133,7 +196,11 @@ enum StoryRequestBuilder {
                      includeAudio: Bool,
                      reactiveProgram: CreativeVisualProgram? = nil,
                      reactiveSourceURL: URL? = nil,
-                     creativePresetID: String = CreativePresetCatalog.defaultID) throws -> StoryVideoRequest {
+                     creativePresetID: String = CreativePresetCatalog.defaultID,
+                     padPerformance: PerformanceTimeline? = nil,
+                     reactionMode: CreativePreset.AudioReaction? = nil,
+                     songDNA: SongDNA? = nil,
+                     scoreStamp: KaraokePerformanceStamp? = nil) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
         let safeSpeed = max(Double(speed), 0.1)
         let start = min(max(playbackTime, 0), sourceDuration)
@@ -141,7 +208,8 @@ enum StoryRequestBuilder {
         guard seconds > 0.05 else { throw StoryRequestError.noRemainingAudio }
         // Typography reacts to audio only when the visuals do (same gate as
         // the live karaoke, which only gets features while reacting).
-        let reacts = reactiveProgram != nil
+        let activeReaction = reactionMode ?? reactiveProgram?.preset.audioReaction ?? .off
+        let reacts = activeReaction != .off
         var request = StoryVideoRequest(
             mode: mode, trackID: track.id, title: track.title, artist: track.artist,
             artworkURL: track.coverURL, theme: theme, playerStyle: playerStyle,
@@ -156,6 +224,15 @@ enum StoryRequestBuilder {
             reactiveProgram: reactiveProgram,
             reactiveSourceURL: reactiveSourceURL
         )
+        // A sound/visual pad take is frozen with this request. No capture
+        // or cache read is performed during preview and export frame loops.
+        request.padPerformance = padPerformance?.isValid == true
+            ? padPerformance : nil
+        request.experienceID = creativePresetID
+        request.reactionMode = activeReaction
+        request.liveVisualResponseEnabled = reactionMode != nil
+        request.songDNA = songDNA?.isValid == true ? songDNA : nil
+        request.scoreStamp = scoreStamp
         // One immutable source of truth for preview and the StoryFrameRenderer
         // scene. Do not rebuild from a potentially changed preset during export.
         // Always freeze a composition (ported from Stage 10A): with audio

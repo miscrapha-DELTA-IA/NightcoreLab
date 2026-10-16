@@ -74,6 +74,17 @@ struct StorySceneView: View {
 
     var reactiveDistortion: Double { materialFrame.parameters.distortion }
 
+    /// Only the off-screen visual surface is stabilized. Preserve the existing
+    /// composition/material result so Stage 36 previews, exported typography,
+    /// and integration consumers resolve exactly the same audio frame.
+    var exportMaterialFrame: MaterialFrame {
+        let stableBase = MaterialResolver.resolve(marbleMaterial,
+            timestamp: frame.sourceTime, reactionGain: 0)
+        return StoryExportMotion.material(base: stableBase,
+            mode: request.reactionMode, sourceTime: frame.sourceTime,
+            dna: request.songDNA)
+    }
+
     private var elapsed: TimeInterval { frame.elapsed }
     private var phase: Float { frame.marblePhase }
     private var sourceTime: TimeInterval { frame.sourceTime }
@@ -94,25 +105,35 @@ struct StorySceneView: View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
-            Color.black.opacity(0.40)
+            edgeVignette
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             VStack(spacing: 0) {
                 HStack {
-                    Text("NIGHTCORELAB")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .tracking(2.0)
+                    if request.showsBrand {
+                        NightcoreBrandLockup(theme: request.theme,
+                                             iconSize: 27, titleSize: 17)
+                    }
+                    Spacer()
+                    if request.showsTrackCard {
+                        TrackIdentityPill(title: request.title, artist: request.artist,
+                                          artwork: artwork, thumbnailSize: 32, titleLineLimit: 2)
+                            .frame(width: 205)
+                    }
                     Spacer()
                     Text(request.theme.displayName.uppercased())
                         .font(.system(size: 13, weight: .bold))
+                        .lineLimit(1).minimumScaleFactor(0.55)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(.black.opacity(0.45), in: Capsule())
                 }
                 .padding(.top, 50)
 
-                if request.mode == .player {
+                scoreBadge
+
+                if request.mode == .player || !request.showsLyrics {
                     Spacer(minLength: 25)
-                    playerCard
+                    if request.showsTrackCard { playerCard }
                     Spacer(minLength: 45)
                 } else {
                     Spacer(minLength: 70)
@@ -145,26 +166,40 @@ struct StorySceneView: View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
-            Color.black.opacity(0.40)
+            edgeVignette
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             HStack {
-                Text("NIGHTCORELAB")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .tracking(2)
+                if request.showsBrand {
+                    NightcoreBrandLockup(theme: request.theme,
+                                         iconSize: 24, titleSize: 15)
+                }
+                Spacer()
+                if request.showsTrackCard {
+                    TrackIdentityPill(title: request.title, artist: request.artist,
+                                      artwork: artwork, thumbnailSize: 32, titleLineLimit: 2)
+                        .frame(width: min(205, layout.titleArea.width * 0.43))
+                }
                 Spacer()
                 Text(request.theme.displayName.uppercased())
                     .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1).minimumScaleFactor(0.55)
                     .padding(.horizontal, 10).padding(.vertical, 7)
                     .background(.black.opacity(0.45), in: Capsule())
             }
             .frame(width: layout.titleArea.width, height: layout.titleArea.height)
             .position(x: layout.titleArea.midX, y: layout.titleArea.midY)
 
-            if request.mode == .player {
-                playerCard
-                    .frame(width: layout.mainArea.width)
-                    .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+            scoreBadge
+                .position(x: layout.titleArea.midX,
+                          y: layout.titleArea.maxY + 24)
+
+            if request.mode == .player || !request.showsLyrics {
+                if request.showsTrackCard {
+                    playerCard
+                        .frame(width: layout.mainArea.width)
+                        .position(x: layout.mainArea.midX, y: layout.mainArea.midY)
+                }
             } else {
                 lyricsCard
                     .storyLayer(.typography, frame: resolvedCompositionFrame)
@@ -198,17 +233,26 @@ struct StorySceneView: View {
                 .resizable().scaledToFill()
                 .frame(width: layoutPolicy?.canvasSize.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.canvasSize.height ?? StoryVideoRequest.size.height)
-                .blur(radius: 50)
+
                 .clipped()
         } else {
-            TurbulentMarbleView(theme: MarbleTheme(appTheme: request.theme),
-                                speed: 0, maxFPS: 1, isPaused: true,
-                                extendIntoSafeArea: false, frozenTime: phase,
-                                // The resolved MaterialFrame is the whole contract.
-                                materialFrame: materialFrame)
+            StoryExportMarbleView(theme: request.theme,
+                renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
+                startingPhase: request.marblePhase, materialFrame: exportMaterialFrame)
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }
+    }
+
+    /// Only the header/footer edges are shaded; the center stays untouched.
+    private var edgeVignette: some View {
+        LinearGradient(stops: [
+            .init(color: .black.opacity(0.18), location: 0),
+            .init(color: .clear, location: 0.18),
+            .init(color: .clear, location: 0.82),
+            .init(color: .black.opacity(0.18), location: 1)
+        ], startPoint: .top, endPoint: .bottom)
+        .allowsHitTesting(false)
     }
 
     private var playerCard: some View {
@@ -310,6 +354,19 @@ struct StorySceneView: View {
         .frame(maxWidth: .infinity)
     }
 
+    @ViewBuilder
+    private var scoreBadge: some View {
+        if request.showsScoreStamp, let stamp = request.scoreStamp {
+            Text("\(stamp.label) · \(stamp.grade) · \(stamp.accuracy)%")
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(request.theme.accent.opacity(0.3), in: Capsule())
+                .overlay(Capsule().strokeBorder(request.theme.accent.opacity(0.7)))
+                .accessibilityIdentifier("story.karaokeScoreStamp")
+        }
+    }
+
     @ViewBuilder private var artworkTile: some View {
         if let artwork {
             Image(uiImage: artwork).resizable().scaledToFill()
@@ -361,8 +418,8 @@ private struct StoryLyricLine: View {
                 KaraokeWordView(
                     word: resolved.word,
                     fill: resolved.progress,
-                    fillColor: theme.accent,
-                    glow: (animation?.glow ?? 1) > 0,
+                    fillColor: theme.accent.opacity(frame.precision == .estimated ? 0.86 : 1),
+                    glow: frame.precision != .estimated && (animation?.glow ?? 1) > 0,
                     theme: colors,
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
@@ -371,9 +428,11 @@ private struct StoryLyricLine: View {
                     isCurrentLine: frame.status == .active,
                     isPastLine: frame.status == .past,
                     animation: animation,
+                    wordSeed: resolved.seed,
                     tracking: frame.preset.font.tracking,
                     glowRadius: 7 * glowMultiplier,
-                    minimumScaleFactor: 0.55)
+                    minimumScaleFactor: 0.55,
+                    estimatedTiming: frame.precision == .estimated)
                 .gapAfter(resolved.word.spaceAfter ? 10 : 0)
             }
         }

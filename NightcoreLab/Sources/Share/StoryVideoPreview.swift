@@ -81,7 +81,7 @@ struct StoryVideoPreview: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
-                ShareLink(item: url, preview: SharePreview("NightcoreLab Story")) {
+                ShareLink(item: url, preview: SharePreview("Nightcore Lab Story")) {
                     Label("Compartilhar arquivo MP4", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
@@ -129,11 +129,11 @@ struct StoryVideoPreview: View {
             .onAppear {
                 let prepared = AVPlayer(url: url)
                 player = prepared
-                prepared.play()
             }
             .onDisappear {
                 player?.pause()
                 player = nil
+                package?.cleanup()
             }
             .alert("Salvo em Fotos", isPresented: $showSavedAlert) {
                 Button("OK", role: .cancel) {}

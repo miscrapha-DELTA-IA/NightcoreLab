@@ -75,9 +75,9 @@ struct ExportProfile: Codable, Equatable, Sendable {
         case (.high, .square): size = (1080, 1080)
         case (.high, .landscape): size = (1920, 1080)
         }
-        let fps: Int32 = quality == .economy ? 15 : (quality == .balanced ? 20 : 30)
+        let fps: Int32 = quality == .economy ? 15 : (quality == .balanced ? 30 : 60)
         let bitRate = quality == .economy ? 1_600_000 :
-            (quality == .balanced ? 2_800_000 : 5_500_000)
+            (quality == .balanced ? 4_200_000 : 9_000_000)
         return StoryEncodingProfile(width: size.0, height: size.1,
                                     fps: fps, bitRate: bitRate,
                                     cropPolicy: cropPolicy.resolved(for: mode))

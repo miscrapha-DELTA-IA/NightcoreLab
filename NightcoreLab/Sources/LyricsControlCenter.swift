@@ -14,13 +14,48 @@ struct LyricsControlCenter: View {
     let onChooseLyrics: () -> Void
     let onDismiss: () -> Void
 
+    var audio: AudioEngineManager? = nil
+
     @Environment(LyricsStore.self) private var lyricsStore
     @AppStorage("karaokeTypography") private var typographyStyle: TypographyStyle = .neon
     @AppStorage("karaokeFocusMode") private var focusMode: KaraokeFocusMode = .spotlight
+    @AppStorage(KaraokeGuidePreference.pacing) private var pacingGuide = true
+    @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
+    @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
+    @AppStorage("karaokeChordMode") private var chordMode = false
+    @AppStorage(CreativeHaptics.enabledKey) private var hapticsEnabled = true
 
     var body: some View {
         NavigationStack {
             Form {
+                if let audio {
+                    Section("Vocal FX") {
+                        StemMixerControls(audio: audio)
+                        KaraokeScoringControls(store: lyricsStore, audio: audio,
+                            clock: audio.lyricsClock, accent: theme.accent)
+                        Picker("Efeito vocal", selection: Binding(
+                            get: { audio.vocalSetting.preset },
+                            set: { var value = audio.vocalSetting; value.preset = $0; audio.applyVocalFX(value) })) {
+                            ForEach(VocalFXPreset.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Slider(value: Binding(
+                            get: { Double(audio.vocalSetting.intensity) },
+                            set: { var value = audio.vocalSetting; value.intensity = Float($0); audio.applyVocalFX(value) }), in: 0...1)
+                            .accessibilityLabel("Intensidade Vocal FX")
+                        Toggle("Reduzir Voz da Música (Center-Cut)", isOn: Binding(
+                            get: { audio.centerCutEnabled },
+                            set: { audio.setCenterCutEnabled($0) }))
+                            .disabled(!audio.centerCutAvailable)
+                        if !audio.centerCutAvailable {
+                            Text("Center-Cut requer áudio estéreo; mono segue sem alteração.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Text(audio.vocalMonitoringEnabled ? "Retorno com efeitos nos fones." : "Ative o microfone para pontuar. Retorno com efeitos disponível em fones de baixa latência.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("lyrics.controls.vocalFX")
+                }
+
                 Section {
                     Toggle("Karaokê limpo", isOn: $lyricsCleanMode)
                         .tint(theme.accent)
@@ -29,6 +64,40 @@ struct LyricsControlCenter: View {
                         .foregroundStyle(.secondary)
                 } header: {
                     Label("Experiência", systemImage: "sparkles")
+                }
+
+                Section {
+                    Toggle("Feedback tátil", isOn: $hapticsEnabled)
+                        .tint(theme.accent)
+                    Toggle("Guia de Canto (Acompanhamento)", isOn: $pacingGuide)
+                    Toggle("Contagem Regressiva (3-2-1)", isOn: $entranceCountdown)
+                    Toggle("Prévia do Próximo Verso", isOn: $nextVersePreview)
+                    Text("Acompanhe o verso, veja a entrada após pausas e prepare a próxima frase.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Label("Guia de canto", systemImage: "music.mic")
+                }
+
+                Section {
+                    Toggle("🎸 Modo Cifras (Padrão Cifra Club)", isOn: $chordMode)
+                    Text("Cifras medidas do áudio local aparecem sobre as palavras. Tom, capo e batida ficam no topo da letra.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("Autorizar transcrição local") {
+                        Task {
+                            guard await AutoLyricsTranscriber.requestPermission(),
+                                  let trackID = lyricsStore.trackID,
+                                  let url = audio?.visualAnalysisURL,
+                                  lyricsStore.lines.contains(where: {
+                                      $0.provenance == .rhythmicCue }) else { return }
+                            lyricsStore.loadFallback(trackID: trackID, plainText: nil,
+                                sourceURL: url, duration: audio?.duration ?? 0,
+                                force: true, retryRecognition: true)
+                        }
+                    }
+                    .font(.footnote)
+                } header: {
+                    Label("Cifras e letra automática", systemImage: "guitars.fill")
                 }
 
                 Section {
@@ -162,6 +231,12 @@ struct LyricsControlCenter: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .onChange(of: typographyStyle) { _, _ in
+            CreativeHaptics.selection(microphoneActive: audio?.karaokeMicrophoneActive ?? false)
+        }
+        .onChange(of: theme) { _, _ in
+            CreativeHaptics.selection(microphoneActive: audio?.karaokeMicrophoneActive ?? false)
         }
     }
 }
