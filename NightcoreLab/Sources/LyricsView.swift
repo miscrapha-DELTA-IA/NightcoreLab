@@ -124,8 +124,10 @@ struct LyricsView: View {
 
     private func apply(_ selected: LyricsRecord, pin: Bool = false) {
         record = selected
-        lyricStore.load(trackID: track.id, rawLRC: selected.syncedLyrics ?? "",
-                        needsReview: false, force: true)
+        if let synced = selected.syncedLyrics, !synced.isEmpty {
+            lyricStore.load(trackID: track.id, rawLRC: synced,
+                            needsReview: false, force: true)
+        }
         if pin, let prefetcher {
             let choice = LRCLIBRecord(legacy: selected)
             Task { await prefetcher.pin(choice, for: track.id) }
@@ -381,9 +383,11 @@ struct LyricsView: View {
                     candidates = cached.alternatives.map(\.asLegacyRecord)
                     if let selected = cached.selected {
                         record = selected.asLegacyRecord
-                        lyricStore.load(trackID: track.id,
-                                        rawLRC: selected.syncedLyrics ?? "",
-                                        needsReview: cached.needsReview, force: cached.pinned)
+                        if let lrc = cached.generatedLRC ?? selected.syncedLyrics {
+                            lyricStore.load(trackID: track.id, rawLRC: lrc,
+                                            needsReview: cached.needsReview || cached.generatedLRC != nil,
+                                            force: cached.pinned)
+                        }
                     } else {
                         errorMessage = "Não foi encontrada letra sincronizada com confiança. Pesquise manualmente."
                     }

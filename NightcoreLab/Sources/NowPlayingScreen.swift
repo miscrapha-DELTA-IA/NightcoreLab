@@ -844,11 +844,14 @@ private struct BlurredCover: View {
 private struct KaraokeBottomBar: View {
     @Binding var theme: AppTheme
     @Binding var background: BackgroundStyle
+    @Environment(LyricsStore.self) private var store
     @AppStorage("karaokeTypography") private var typography: TypographyStyle = .neon
+    @State private var showingOffset = false
     @Namespace private var ns
 
     var body: some View {
-        HStack(spacing: 16) {
+        @Bindable var store = store
+        HStack(spacing: 12) {
             // Todos os temas usam rolagem e centralização da seleção.
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -866,7 +869,7 @@ private struct KaraokeBottomBar: View {
                     }
                     .padding(.horizontal, 2)
                 }
-                .frame(maxWidth: 232)
+                .frame(maxWidth: 156)
                 .onAppear { proxy.scrollTo(theme.id, anchor: .center) }
                 .onChange(of: theme) { _, newTheme in
                     withAnimation(.snappy(duration: 0.35)) {
@@ -891,6 +894,30 @@ private struct KaraokeBottomBar: View {
             }
             .accessibilityLabel("Template das letras")
             .accessibilityValue(typography.title)
+
+            Button {
+                showingOffset = true
+            } label: {
+                Image(systemName: "dial.low")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Calibrar atraso da letra")
+            .popover(isPresented: $showingOffset) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Atraso da Letra: \(String(format: "%.1f", store.userOffset))s")
+                        .font(.subheadline.weight(.semibold))
+                    Slider(value: $store.userOffset, in: -1.0...1.0)
+                        .tint(theme.accent)
+                        .accessibilityLabel("Atraso da letra")
+                }
+                .padding(18)
+                .frame(width: 250)
+                .background(.ultraThinMaterial)
+                .presentationCompactAdaptation(.popover)
+            }
 
             Button {
                 withAnimation(.smooth(duration: 0.6)) { background = background.toggled }

@@ -16,6 +16,7 @@ YouTube exige um runtime de JavaScript desde o yt-dlp 2025.11.12: o requirements
 instala "yt-dlp[default]" (traz o yt-dlp-ejs) e o pacote "deno" (binário oficial do Deno).
 
 Variáveis de ambiente opcionais:
+    OPENAI_API_KEY            necessária para POST /align-lyrics (Whisper word timestamps).
     MAX_DURATION_SECONDS      limite fixo de segurança: duração inferior a 600 s (10 min)
     MAX_CONCURRENT_DOWNLOADS  extrações simultâneas (padrão 1, máximo 2; protege 512 MB de RAM)
     COOKIES_FILE              caminho de um cookies.txt (formato Netscape) para contornar a
@@ -50,7 +51,9 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
+
+from lyrics_alignment import AlignmentError, generate_enhanced_lrc
 
 MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
 # A 512 MiB Render container defaults to one extraction; two is the hard cap.
@@ -172,6 +175,7 @@ class InFlightDownload:
 in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
 _search_slots = threading.BoundedSemaphore(1)
+_alignment_slots = threading.BoundedSemaphore(1)
 RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
 
@@ -190,6 +194,40 @@ app.include_router(music_search_router)
 
 class DownloadRequest(BaseModel):
     url: HttpUrl
+
+
+class AlignLyricsRequest(BaseModel):
+    url: HttpUrl
+    lyrics: str = Field(min_length=1, max_length=20_000)
+
+
+@app.post("/align-lyrics")
+async def align_lyrics(request: AlignLyricsRequest):
+    """Reuse the yt-dlp download and return source-checked Enhanced LRC."""
+    _youtube_video_id(str(request.url))
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="Alinhamento de letras indisponível.")
+    if not _alignment_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Alinhamento ocupado. Tente novamente.")
+    background_tasks = BackgroundTasks()
+    try:
+        response = await download(DownloadRequest(url=request.url), background_tasks)
+        try:
+            lrc = await asyncio.to_thread(
+                generate_enhanced_lrc, Path(response.path), request.lyrics
+            )
+        finally:
+            await background_tasks()
+    except AlignmentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        log.exception("falha ao alinhar letra")
+        raise HTTPException(status_code=502, detail="Falha ao alinhar a letra.") from error
+    finally:
+        _alignment_slots.release()
+    return {"lrc": lrc}
 
 
 class RelatedVideo(BaseModel):

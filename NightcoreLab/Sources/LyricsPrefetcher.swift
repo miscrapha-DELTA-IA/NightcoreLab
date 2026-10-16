@@ -9,6 +9,7 @@ struct CachedLyricsChoice: Codable, Sendable {
     var pinned: Bool                     // escolha manual do usuário: nunca sobrescrever
     var alternatives: [LRCLIBRecord]     // top candidatos p/ "trocar letra" sem rede
     var savedAt: Date
+    var generatedLRC: String? = nil
 }
 
 struct LyricsDiskCache: Sendable {
@@ -91,9 +92,28 @@ actor LyricsPrefetcher {
         var c = cache.load(videoID) ?? CachedLyricsChoice(selected: nil, score: 1, needsReview: false,
                                                            pinned: true, alternatives: [], savedAt: Date())
         c.selected = record; c.pinned = true; c.needsReview = false; c.score = 1; c.savedAt = Date()
+        c.generatedLRC = nil
         cache.save(c, id: videoID)
         if let lrc = record.syncedLyrics {
             await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
+        } else {
+            await store.beginLoading(trackID: videoID)
+        }
+        if let plain = record.plainLyrics, !plain.isEmpty {
+            guard let generated = await alignedLRC(videoID: videoID, lyrics: plain) else {
+                if record.syncedLyrics == nil, cache.load(videoID)?.selected == record {
+                    await store.markUnavailable(trackID: videoID)
+                }
+                return
+            }
+            guard !Task.isCancelled, cache.load(videoID)?.selected == record,
+                  await store.trackID == videoID else { return }
+            c.generatedLRC = generated
+            cache.save(c, id: videoID)
+            await store.load(trackID: videoID, rawLRC: generated,
+                             needsReview: true, force: true)
+        } else if record.syncedLyrics == nil {
+            await store.markUnavailable(trackID: videoID)
         }
     }
 
@@ -145,11 +165,54 @@ actor LyricsPrefetcher {
 
     private func finish(_ c: CachedLyricsChoice, _ m: TrackMetadata, _ apply: Bool) async {
         guard apply, !Task.isCancelled, activeID == m.videoID else { return }   // resultado velho de faixa anterior
-        if let lrc = c.selected?.syncedLyrics {
+        if let lrc = c.generatedLRC ?? c.selected?.syncedLyrics {
             await store.load(trackID: m.videoID, rawLRC: lrc,
-                             needsReview: c.needsReview, force: c.pinned)
-        } else {
+                             needsReview: c.needsReview || c.generatedLRC != nil,
+                             force: c.pinned)
+        }
+        if c.generatedLRC == nil, let plain = c.selected?.plainLyrics, !plain.isEmpty,
+           let generated = await alignedLRC(videoID: m.videoID, lyrics: plain) {
+            guard !Task.isCancelled, activeID == m.videoID else { return }
+            var updated = c
+            updated.generatedLRC = generated
+            cache.save(updated, id: m.videoID)
+            await store.load(trackID: m.videoID, rawLRC: generated,
+                             needsReview: true, force: true)
+        } else if c.generatedLRC == nil && c.selected?.syncedLyrics == nil {
             await store.markUnavailable(trackID: m.videoID)
         }
     }
+
+    private func alignedLRC(videoID: String, lyrics: String) async -> String? {
+        let baseURL = await AudioDownloadManager.apiBaseURL
+        guard let base = URL(string: baseURL),
+              let endpoint = URL(string: "align-lyrics", relativeTo: base)?.absoluteURL else {
+            return nil
+        }
+        var request = URLRequest(url: endpoint, timeoutInterval: 160)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload = AlignmentRequest(
+            url: "https://www.youtube.com/watch?v=\(videoID)", lyrics: lyrics)
+        guard let body = try? JSONEncoder().encode(payload) else { return nil }
+        request.httpBody = body
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled,
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            let result = try JSONDecoder().decode(AlignmentResponse.self, from: data)
+            return result.lrc.isEmpty ? nil : result.lrc
+        } catch {
+            return nil
+        }
+    }
+}
+
+private struct AlignmentRequest: Encodable {
+    let url: String
+    let lyrics: String
+}
+
+private struct AlignmentResponse: Decodable {
+    let lrc: String
 }
