@@ -106,6 +106,7 @@ final class AudioEngineManager {
     private(set) var stemLevels: [StemKind: Float] = Dictionary(
         uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
     private(set) var stemsAvailable = false
+    private(set) var stemSource: StemSource?
     @ObservationIgnored private var stemFiles: [StemKind: AVAudioFile] = [:]
     @ObservationIgnored private var stemPrepareTask: Task<Void, Never>?
     @ObservationIgnored private var stemRampTask: Task<Void, Never>?
@@ -277,6 +278,7 @@ final class AudioEngineManager {
         stemFiles = [:]
         stemMixEnabled = false
         stemsAvailable = false
+        stemSource = nil
         stemLevels = Dictionary(uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
         applyLiveStemEQ()
         centerCutPrepareTask?.cancel()
@@ -518,20 +520,44 @@ final class AudioEngineManager {
             (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
         guard allowed, requested == karaokeGeneration, !Task.isCancelled else { return false }
         let session = AVAudioSession.sharedInstance()
-        guard session.isInputAvailable else { return false }
-        let input = engine.inputNode
-        let native = input.outputFormat(forBus: 0)
-        guard native.channelCount > 0, native.sampleRate.isFinite,
-              native.sampleRate > 0 else { return false }
         let capture = KaraokeMicrophoneCapture()
-        let scoringClock = lyricsClock
-        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
-            capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+        do {
+            // Mic permission is independent of SFSpeechRecognizer. A denied
+            // message is NEVER derived from route/format/session exceptions.
+            if session.category != .playAndRecord {
+                try session.setCategory(.playAndRecord, mode: .default,
+                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+            }
+            try session.setActive(true)
+            guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
+            let input = engine.inputNode
+            let hardware = input.inputFormat(forBus: 0)
+            let native = input.outputFormat(forBus: 0)
+            guard native.sampleRate.isFinite, native.sampleRate > 0,
+                  native.channelCount > 0 else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            let tapFormat: AVAudioFormat? = hardware.sampleRate.isFinite &&
+                hardware.sampleRate > 0 && hardware.channelCount > 0 ? hardware : nil
+            if let previous = karaokeInput { previous.removeTap(onBus: 0) }
+            let scoringClock = lyricsClock
+            input.installTap(onBus: 0, bufferSize: 1024,
+                             format: tapFormat) { buffer, _ in
+                capture.capture(buffer, sourceTime: scoringClock.lyricTime)
+            }
+            guard requested == karaokeGeneration, !Task.isCancelled else {
+                input.removeTap(onBus: 0); capture.stop(); return false
+            }
+            karaokeInput = input
+            karaokeCapture = capture
+            karaokeCaptureActive = true
+            return true
+        } catch {
+            capture.stop()
+            // An audio route or format failure must not report permissionDenied.
+            NSLog("Karaoke microphone hardware initialization failed: %@", error.localizedDescription)
+            return false
         }
-        karaokeInput = input
-        karaokeCapture = capture
-        karaokeCaptureActive = true
-        return true
     }
     func endKaraokeMicrophone() {
         karaokeGeneration &+= 1
@@ -912,33 +938,66 @@ final class AudioEngineManager {
 
     // MARK: Four-stem mixer
 
+    private(set) var stemPreparationError: String?
+
     func requestStemPreparation() {
         guard !stemsAvailable, stemPrepareTask == nil, let sourceURL else { return }
         prepareStems(source: sourceURL, revision: playbackSourceRevision)
     }
 
+    /// The DEV URL/token can be configured after spectral stems were prepared.
+    /// Explicit retry is required before uploading the track to a new host.
+    /// Do not alter the single AVAudioEngine graph or ongoing transport clock.
+    func retryStemPreparation() {
+        guard let sourceURL else {
+            stemPreparationError = "Selecione uma música antes de preparar os stems."
+            return
+        }
+        stemPrepareTask?.cancel()
+        stemPrepareTask = nil
+        if stemMixEnabled { setStemMixerEnabled(false) }
+        stemPlayers.values.forEach { $0.stop() }
+        stemFiles = [:]
+        stemsAvailable = false
+        stemPreparationError = nil
+        prepareStems(source: sourceURL, revision: playbackSourceRevision)
+    }
+
     private func prepareStems(source: URL, revision: Int) {
         stemPrepareTask?.cancel()
+        stemPreparationError = nil
         stemPrepareTask = Task { [weak self] in
             let cacheFolder = TrackAudioCache.stemDirectory(for: source)
-            let asset = try? await Task.detached(priority: .background) {
-                try await StemSplitterEngine.prepare(source: source,
-                                                     cacheFolder: cacheFolder)
+            let outcome = await Task.detached(priority: .background) { () async -> (StemAsset?, String?) in
+                do {
+                    return (try await StemSplitterEngine.prepare(source: source,
+                        cacheFolder: cacheFolder), nil)
+                } catch {
+                    return (nil, error.localizedDescription)
+                }
             }.value
             guard let self, !Task.isCancelled,
                   self.playbackSourceRevision == revision else { return }
             self.stemPrepareTask = nil
-            guard let asset else { return } // allow retry on transient cache/separation failure
+            guard let asset = outcome.0 else {
+                self.stemPreparationError = outcome.1 ?? "Falha ao preparar os stems."
+                return
+            }
             var files: [StemKind: AVAudioFile] = [:]
             for kind in StemKind.allCases {
                 guard let url = asset.urls[kind],
                       let file = try? AVAudioFile(forReading: url,
                                                   commonFormat: .pcmFormatFloat32,
-                                                  interleaved: false) else { return }
+                                                  interleaved: false) else {
+                    self.stemPreparationError = "O servidor não retornou quatro faixas de áudio válidas."
+                    return
+                }
                 files[kind] = file
             }
             self.stemFiles = files
+            self.stemSource = asset.source
             self.stemsAvailable = true
+            self.stemPreparationError = nil
             self.applyLiveStemEQ()
             if self.stemMixEnabled {
                 self.scheduleStems(startingAt: self.currentTime)
@@ -981,13 +1040,10 @@ final class AudioEngineManager {
     }
 
     private func applyLiveStemEQ() {
-        let proxy = stemMixEnabled && !stemsAvailable
-        stemEQ.bands[0].gain = proxy ? Self.stemGainDB(for: stemLevels[.vocal] ?? 1) : 0
-        stemEQ.bands[1].gain = proxy ? Self.stemGainDB(for: stemLevels[.instrumental] ?? 1) : 0
-        let drums = proxy ? Self.stemGainDB(for: stemLevels[.drums] ?? 1) : 0
-        stemEQ.bands[2].gain = drums
-        stemEQ.bands[3].gain = drums
-        stemEQ.bands[4].gain = proxy ? Self.stemGainDB(for: stemLevels[.bass] ?? 1) : 0
+        // Do not fake source isolation with a live EQ while the asynchronous
+        // four-buffer STFT separator is still preparing. The original track
+        // continues unchanged until independent sources are actually ready.
+        for band in stemEQ.bands { band.gain = 0 }
     }
 
     func setStemMixerEnabled(_ enabled: Bool) {

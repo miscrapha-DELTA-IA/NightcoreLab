@@ -172,7 +172,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
         XCTAssertTrue(content.contains(".fixedSize(horizontal: true, vertical: false)"))
         XCTAssertTrue(content.contains(".layoutPriority(2)"))
-        XCTAssertTrue(content.contains("v40 · "), "Stage 36 layout remains intact with the v38 unified badge")
+        XCTAssertTrue(content.contains("v41 · "), "Stage 36 full Nightcore Lab lockup is preserved in v41")
         let lockup = try String(contentsOf: root.appendingPathComponent("AppIconView.swift"), encoding: .utf8)
         XCTAssertTrue(lockup.contains("Text(\"Nightcore Lab\")"))
         XCTAssertTrue(lockup.contains(".fixedSize(horizontal: true, vertical: false)"))
@@ -198,10 +198,12 @@ final class NowPlayingScreenTests: XCTestCase {
         for kind in StemKind.allCases {
             audio.setStemLevel(kind, level: 0)
             XCTAssertEqual(audio.stemLevels[kind], 0)
-            XCTAssertEqual(audio.liveStemEQGain(kind), -18, accuracy: 0.01)
+            XCTAssertEqual(audio.liveStemEQGain(kind), 0, accuracy: 0.01)
+            XCTAssertFalse(audio.stemsAvailable, "No fake isolation while four buffers prepare")
             audio.setStemLevel(kind, level: 2)
             XCTAssertEqual(audio.stemLevels[kind], 2)
-            XCTAssertEqual(audio.liveStemEQGain(kind), 9, accuracy: 0.01)
+            XCTAssertEqual(audio.liveStemEQGain(kind), 0, accuracy: 0.01)
+            XCTAssertFalse(audio.stemsAvailable, "Live EQ stays neutral until real buffers exist")
         }
         XCTAssertEqual(audio.scheduleGeneration, generation)
         XCTAssertEqual(audio.isAudioEngineRunning, initialEngine)
@@ -284,7 +286,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(search.contains("onSaveMixOffline(result.playbackTracks)"))
         XCTAssertTrue(search.contains("searchDrawer.focusAlbum."))
         XCTAssertTrue(content.contains("activeTrack: currentTrack"))
-        XCTAssertTrue(content.contains("v40 · "))
+        XCTAssertTrue(content.contains("v41 · "))
     }
 
 }

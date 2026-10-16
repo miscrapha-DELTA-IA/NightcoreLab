@@ -50,11 +50,11 @@ final class AudioDownloadManager: ObservableObject {
         configuration.sessionSendsLaunchEvents = true
         configuration.timeoutIntervalForRequest = 180
         configuration.timeoutIntervalForResource = 900
-        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpMaximumConnectionsPerHost = 6
         transfers = DownloadKit.DownloadManager(sessionConfiguration: configuration)
         transfers.setDelegate(self)
         // Foreground selection + one background prefetch at a time.
-        transfers.setMaxConcurrentDownloads(2)
+        transfers.setMaxConcurrentDownloads(4)
         cachedIDs = Set(cache.entries.keys)
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -95,6 +95,8 @@ final class AudioDownloadManager: ObservableObject {
         cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
             .prefix(8).map { cachedTrack($0.track) }
     }
+
+    var offlineCacheBadge: String { cache.cacheBadge }
 
     var allCachedTracks: [Track] {
         cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
@@ -230,7 +232,7 @@ final class AudioDownloadManager: ObservableObject {
                 guard generation == self.selectionGeneration, !self.isRateLimited else { return }
                 guard self.cache.localURL(for: track.id) == nil,
                       !self.tracks.values.contains(where: { $0.id == track.id }),
-                      speculativeIDs.count < 2 else { continue }
+                      speculativeIDs.count < 3 else { continue }
                 speculativeIDs.insert(track.id)
                 await self.append(track, priority: URLSessionTask.lowPriority)
             }
@@ -240,7 +242,7 @@ final class AudioDownloadManager: ObservableObject {
 
     nonisolated static func nextTracks(_ tracks: [Track], excluding id: String) -> [Track] {
         var seen = Set([id])
-        return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(2))
+        return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(3))
     }
 
     private func activateRateLimit(retryAfter: TimeInterval = 60) {
@@ -522,7 +524,12 @@ extension AudioDownloadManager: DownloadManagerDelegate {
                           thumbnailURL: cover?.scheme == "https" ? cover : track.thumbnailURL)
         }
         do {
-            let local = try cache.store(track, from: location)
+            // Compress off the main actor: never move a WAV/PCM response into
+            // the cache under a misleading .m4a filename.
+            let compact = try await Task.detached(priority: .userInitiated) {
+                try TrackAudioCache.transcodeAAC(from: location)
+            }.value
+            let local = try cache.store(track, from: compact)
             var protected = Set(tracks.values.map(\.id))
             if let playingID { protected.insert(playingID) }
             if let selectedID { protected.insert(selectedID) }

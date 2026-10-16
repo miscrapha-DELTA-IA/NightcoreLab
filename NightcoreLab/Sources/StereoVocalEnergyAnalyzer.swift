@@ -16,7 +16,7 @@ enum StereoVocalEnergyAnalyzer {
               let right = buffer.floatChannelData?[1] else { return [] }
         let lowAlpha = exp(-2 * Double.pi * 250 / rate)
         let highAlpha = exp(-2 * Double.pi * 3500 / rate)
-        let binFrames = max(1, Int(rate * 0.025))
+        let binFrames = max(1, Int(rate * 0.020))
         var low250 = 0.0, low3500 = 0.0
         var sum = 0.0, count = 0, frameIndex = 0
         var result: [(time: TimeInterval, value: Double)] = []

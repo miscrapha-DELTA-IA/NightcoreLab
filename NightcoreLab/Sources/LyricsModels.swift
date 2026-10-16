@@ -10,15 +10,20 @@ struct WordSync: Identifiable, Hashable, Codable, Sendable {
     let spaceAfter: Bool     // false em sílabas coladas: "Hel" + "lo"
     /// ASS \kf paints continuously; \k and \ko switch at the syllable edge.
     var continuousFill: Bool = true
+    /// Monotonic acoustic lookup (0...1) for estimated timing only.
+    /// Exact LRC/ASS word timestamps keep their original linear contract.
+    var vocalEnvelopeCurve: [Double]? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, start, end, spaceAfter, continuousFill
+        case id, text, start, end, spaceAfter, continuousFill, vocalEnvelopeCurve
     }
 
     init(id: Int, text: String, start: TimeInterval, end: TimeInterval,
-         spaceAfter: Bool, continuousFill: Bool = true) {
+         spaceAfter: Bool, continuousFill: Bool = true,
+         vocalEnvelopeCurve: [Double]? = nil) {
         self.id = id; self.text = text; self.start = start; self.end = end
         self.spaceAfter = spaceAfter; self.continuousFill = continuousFill
+        self.vocalEnvelopeCurve = vocalEnvelopeCurve
     }
 
     init(from decoder: Decoder) throws {
@@ -29,11 +34,21 @@ struct WordSync: Identifiable, Hashable, Codable, Sendable {
                   end: try c.decode(TimeInterval.self, forKey: .end),
                   spaceAfter: try c.decode(Bool.self, forKey: .spaceAfter),
                   continuousFill: try c.decodeIfPresent(Bool.self,
-                      forKey: .continuousFill) ?? true)
+                      forKey: .continuousFill) ?? true,
+                  vocalEnvelopeCurve: try c.decodeIfPresent([Double].self,
+                      forKey: .vocalEnvelopeCurve))
     }
 
     func progressFill(at t: TimeInterval) -> Double {
-        continuousFill ? progress(at: t) : (t >= start ? 1 : 0)
+        guard continuousFill else { return t >= start ? 1 : 0 }
+        let linear = progress(at: t)
+        guard let curve = vocalEnvelopeCurve, curve.count >= 2,
+              linear > 0 && linear < 1 else { return linear }
+        let index = linear * Double(curve.count - 1)
+        let lower = min(curve.count - 2, Int(index))
+        let fraction = index - Double(lower)
+        return max(0, min(1, curve[lower] +
+                         (curve[lower + 1] - curve[lower]) * fraction))
     }
 
     /// Progresso 0...1 estritamente por start/end. Sem estimativa.

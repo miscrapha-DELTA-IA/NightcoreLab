@@ -1,0 +1,6 @@
+# Experimental Python 3.15 Windows profile (isolated local HTDemucs worker).
+# PyTorch cp315 CPU comes from the OFFICIAL PyTorch nightly package index.
+# Do not install these packages on the regular NightcoreLab Render service.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+demucs==4.1.0

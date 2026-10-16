@@ -35,4 +35,6 @@ vendor/bundle/
 __pycache__/
 *.pyc
 .venv/
+.venv-demucs/
+.venv-demucs-*/
 venv/

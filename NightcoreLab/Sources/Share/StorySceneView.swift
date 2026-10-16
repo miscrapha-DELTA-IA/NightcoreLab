@@ -115,19 +115,19 @@ struct StorySceneView: View {
                                              iconSize: 27, titleSize: 17)
                     }
                     Spacer()
-                    if request.showsTrackCard {
-                        TrackIdentityPill(title: request.title, artist: request.artist,
-                                          artwork: artwork, thumbnailSize: 32, titleLineLimit: 2)
-                            .frame(width: 205)
-                    }
-                    Spacer()
+
                     Text(request.theme.displayName.uppercased())
                         .font(.system(size: 13, weight: .bold))
                         .lineLimit(1).minimumScaleFactor(0.55)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(.black.opacity(0.45), in: Capsule())
                 }
-                .padding(.top, 50)
+                .padding(.top, 42)
+
+                if request.showsTrackCard {
+                    karaokeStyleTrackHeader
+                        .padding(.top, 15)
+                }
 
                 scoreBadge
 
@@ -175,12 +175,7 @@ struct StorySceneView: View {
                                          iconSize: 24, titleSize: 15)
                 }
                 Spacer()
-                if request.showsTrackCard {
-                    TrackIdentityPill(title: request.title, artist: request.artist,
-                                      artwork: artwork, thumbnailSize: 32, titleLineLimit: 2)
-                        .frame(width: min(205, layout.titleArea.width * 0.43))
-                }
-                Spacer()
+
                 Text(request.theme.displayName.uppercased())
                     .font(.system(size: 12, weight: .bold))
                     .lineLimit(1).minimumScaleFactor(0.55)
@@ -190,9 +185,14 @@ struct StorySceneView: View {
             .frame(width: layout.titleArea.width, height: layout.titleArea.height)
             .position(x: layout.titleArea.midX, y: layout.titleArea.midY)
 
+            if request.showsTrackCard {
+                karaokeStyleTrackHeader
+                    .frame(width: max(1, layout.titleArea.width - 12))
+                    .position(x: layout.titleArea.midX, y: layout.titleArea.maxY + 64)
+            }
             scoreBadge
                 .position(x: layout.titleArea.midX,
-                          y: layout.titleArea.maxY + 24)
+                          y: layout.titleArea.maxY + (request.showsTrackCard ? 128 : 24))
 
             if request.mode == .player || !request.showsLyrics {
                 if request.showsTrackCard {
@@ -253,6 +253,19 @@ struct StorySceneView: View {
             .init(color: .black.opacity(0.18), location: 1)
         ], startPoint: .top, endPoint: .bottom)
         .allowsHitTesting(false)
+    }
+
+    /// Same TrackIdentityPill used on the Karaoke tab, now full-width and
+    /// with a large cover; no cramped 205pt identity chip in exported pixels.
+    private var karaokeStyleTrackHeader: some View {
+        TrackIdentityPill(title: request.title, artist: request.artist,
+                          artwork: artwork, thumbnailSize: 76, titleLineLimit: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 15).padding(.vertical, 12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(.white.opacity(0.20), lineWidth: 1))
+            .accessibilityIdentifier("story.karaokeTrackHeader")
     }
 
     private var playerCard: some View {
