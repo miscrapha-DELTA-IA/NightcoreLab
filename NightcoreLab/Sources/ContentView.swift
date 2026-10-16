@@ -420,7 +420,7 @@ struct ContentView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(2)
-                Text("v41 · " + currentTheme.displayName.uppercased())
+                Text("v42 · " + currentTheme.displayName.uppercased())
                     .font(.caption2.weight(.heavy))
                     .tracking(2.5)
                     .foregroundStyle(currentTheme.accent)
@@ -1302,8 +1302,11 @@ struct ContentView: View {
         let token = playbackTransition.begin(trackID: track.id)
         downloader.select(track, onReady: { localURL, downloadedCoverURL in
             guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
+            Task { @MainActor in
             do {
-                try audio.load(url: localURL)
+                let preparedFile = try await AudioFilePreparation.open(localURL)
+                guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
+                try audio.load(url: localURL, preparedFile: preparedFile)
                 if let resumeAt, resumeAt > 0, resumeAt < audio.duration {
                     audio.seek(to: resumeAt)
                 }
@@ -1368,9 +1371,10 @@ struct ContentView: View {
                 guard playbackTransition.didFail(token, trackID: track.id) else { return }
                 let message = "Não foi possível abrir a música. Verifique o arquivo ou a conexão."
                 if !failDrawerSelection(track.id, message: message) {
-                    errorMessage = "Não foi possível abrir o áudio: \(error.localizedDescription). A fila foi preservada."
+                    errorMessage = DownloadFailureMessage.describe(error)
                 }
                 if resumingPrevious { resumeTrack = track }
+            }
             }
         }, onFailure: { message in
             guard playbackTransition.didFail(token, trackID: track.id) else { return }

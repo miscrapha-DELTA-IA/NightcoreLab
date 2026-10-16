@@ -109,11 +109,8 @@ final class LyricsStore {
                 await self?.installFallback(cached, trackID: trackID)
                 return
             }
-            let folder = TrackAudioCache.stemDirectory(for: sourceURL)
-            let asset = try? await StemSplitterEngine.prepare(source: sourceURL,
-                                                               cacheFolder: folder)
-            guard !Task.isCancelled else { return }
-            let vocalURL = asset?.vocalURL ?? sourceURL
+            // Lyrics fallback must not trigger a full-track STFT or upload.
+            let vocalURL = sourceURL
             let generated: [TimedLyricLine]
             if let plainText, !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let phrases = (try? AutoLyricsTranscriber.rhythmicCues(

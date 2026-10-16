@@ -19,18 +19,16 @@ struct TrackAudioCache {
         var track: Track
         let relativePath: String
         var accessedAt: Date
+        var diskBytes: Int64? = nil
     }
     let folder: URL
     private(set) var entries: [String: Entry] = [:]
     private(set) var pinnedIDs = Set<String>()
 
     var totalDiskBytes: Int64 {
-        entries.values.reduce(Int64(0)) { total, entry in
-            let file = folder.appendingPathComponent(entry.relativePath)
-            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            return total + Int64(size)
-        }
+        entries.values.reduce(0) { $0 + ($1.diskBytes ?? 0) }
     }
+
     var cacheBadge: String {
         "Offline (\(entries.count)/\(Self.maxCachedTracks) • ~\(totalDiskBytes / 1_000_000) MB)"
     }
@@ -74,9 +72,10 @@ struct TrackAudioCache {
     }
 
 
-    init(folder: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    init(loadIndex: Bool = true, folder: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("NightcoreAudio", isDirectory: true)) {
         self.folder = folder
+        guard loadIndex else { return }
         if let data = try? Data(contentsOf: folder.appendingPathComponent("offline-pins.json")),
            let pins = try? JSONDecoder().decode(Set<String>.self, from: data) {
             pinnedIDs = pins
@@ -109,17 +108,12 @@ struct TrackAudioCache {
     }
 
     mutating func store(_ track: Track, from temporaryURL: URL) throws -> URL {
-        // Opening the container rejects empty files and HTML/JSON error bodies served with HTTP 200.
-        let audio = try AVAudioFile(forReading: temporaryURL)
-        guard audio.length > 0, audio.processingFormat.sampleRate > 0,
-              (1...2).contains(audio.processingFormat.channelCount) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
+        let ext = try Self.nativeExtension(for: temporaryURL)
         let directory = folder.appendingPathComponent(track.id, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let safeTitle = track.title.components(separatedBy: CharacterSet(charactersIn: "/\\:\n\r"))
             .joined(separator: " ").prefix(100)
-        let relative = "\(track.id)/\(safeTitle.isEmpty ? track.id : String(safeTitle)).m4a"
+        let relative = "\(track.id)/\(safeTitle.isEmpty ? track.id : String(safeTitle)).\(ext)"
         let destination = folder.appendingPathComponent(relative)
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)
@@ -127,9 +121,30 @@ struct TrackAudioCache {
         try FileManager.default.moveItem(at: temporaryURL, to: destination)
         var cached = track
         cached.isCached = true
-        entries[track.id] = Entry(track: cached, relativePath: relative, accessedAt: Date())
+        let bytes = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        entries[track.id] = Entry(track: cached, relativePath: relative, accessedAt: Date(), diskBytes: Int64(bytes))
         try persist()
         return destination
+    }
+
+    /// Inspect only the header. Decoding or re-encoding must never gate a download.
+    static func nativeExtension(for source: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: source)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: 64) ?? Data()
+        let bytes = Array(data)
+        guard bytes.count >= 12 else { throw CocoaError(.fileReadCorruptFile) }
+        let magic = String(decoding: bytes.prefix(4), as: UTF8.self)
+        if magic == "RIFF" { return "wav" }
+        if magic == "caff" { return "caf" }
+        if String(decoding: bytes[4..<8], as: UTF8.self) == "ftyp" { return "m4a" }
+        if String(decoding: bytes.prefix(3), as: UTF8.self) == "ID3" ||
+            (bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0) { return "mp3" }
+        throw CocoaError(.fileReadCorruptFile)
+    }
+
+    func indexedURL(for id: String) -> URL? {
+        entries[id].map { folder.appendingPathComponent($0.relativePath) }
     }
 
     mutating func trim(protecting ids: Set<String>) {
@@ -164,5 +179,23 @@ struct TrackAudioCache {
     private func persist() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try JSONEncoder().encode(entries).write(to: folder.appendingPathComponent("index.json"), options: .atomic)
+    }
+}
+
+/// All cache mutations and header inspection run on one dedicated I/O queue.
+final class AudioCacheIO: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "nightcore.audio.cache", qos: .utility)
+    private var cache: TrackAudioCache?
+    func perform<T>(_ operation: @escaping (inout TrackAudioCache) throws -> T) async throws -> (T, TrackAudioCache) {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    var value = self.cache ?? TrackAudioCache()
+                    let result = try operation(&value)
+                    self.cache = value
+                    continuation.resume(returning: (result, value))
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
     }
 }

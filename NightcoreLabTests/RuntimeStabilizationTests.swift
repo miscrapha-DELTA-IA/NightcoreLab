@@ -1451,7 +1451,7 @@ final class Stage38UnifiedIntegrationTests: XCTestCase {
         XCTAssertTrue(content.contains("MusicControlPage.stems"))
         XCTAssertTrue(content.contains("StemMixerControls(audio: audio)"))
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
-        XCTAssertTrue(content.contains("v41 · "))
+        XCTAssertTrue(content.contains("v42 · "))
         XCTAssertTrue(share.contains("thumbnailSize: 76"))
         XCTAssertTrue(share.contains("Movimento do Fundo"))
         XCTAssertTrue(share.contains("Text(\"Desligado\")"))
@@ -1487,11 +1487,11 @@ final class Stage39PowerAndMemoryContractTests: XCTestCase {
         let marble = try load("TurbulentMarbleView.swift")
         let background = try load("TurbulentBackgroundView.swift")
         let player = try load("NowPlayingScreen.swift")
-        XCTAssertTrue(marble.contains("scenePhase != .active"))
+        XCTAssertTrue(marble.contains("scenePhase == .background"))
         XCTAssertTrue(marble.contains("shouldPauseLiveShader"))
         XCTAssertTrue(marble.contains("isLowPowerModeEnabled"))
         XCTAssertTrue(background.contains("paused: !animates"))
-        XCTAssertTrue(player.contains("isPaused: searchDrawer.isOpen"))
+        XCTAssertFalse(player.contains("isPaused: searchDrawer.isOpen"))
     }
 
     @MainActor

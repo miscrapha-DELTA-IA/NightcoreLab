@@ -141,7 +141,14 @@ enum StemSplitterEngine {
 
 private actor StemPreparationCoordinator {
     static let shared = StemPreparationCoordinator()
-    func prepare(source: URL, cacheFolder: URL) throws -> StemAsset {
-        try StemSplitterEngine.prepareNative(source: source, cacheFolder: cacheFolder)
+    private let queue = DispatchQueue(label: "nightcore.stems.offline", qos: .utility)
+    func prepare(source: URL, cacheFolder: URL) async throws -> StemAsset {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result {
+                    try StemSplitterEngine.prepareNative(source: source, cacheFolder: cacheFolder)
+                })
+            }
+        }
     }
 }

@@ -56,6 +56,8 @@ struct SearchView: View {
     @State private var hubTab: DrawerHubTab = .mix
     @State private var collectionAnchor: Track?
     @State private var collectionMode: AlbumArtistMode = .both
+    @State private var remoteCollection: AlbumArtistCollection?
+    @State private var catalogLoading = false
     @State private var shuffleSeed = 0
     @FocusState private var isFocused: Bool
 
@@ -90,6 +92,10 @@ struct SearchView: View {
     }
     private var collectionResult: AlbumArtistCollection? {
         guard let anchor = collectionAnchor ?? activeTrack ?? recentTracks.first else { return nil }
+        if let remoteCollection, remoteCollection.anchor.id == anchor.id {
+            return AlbumArtistCollectionResolver.resolve(anchor: remoteCollection.anchor,
+                candidates: collectionCandidates + remoteCollection.playbackTracks, mode: collectionMode)
+        }
         return AlbumArtistCollectionResolver.resolve(
             anchor: anchor, candidates: collectionCandidates, mode: collectionMode)
     }
@@ -328,13 +334,14 @@ struct SearchView: View {
                     .resizable().scaledToFill().frame(width: 52, height: 52)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(result.artistName ?? "Artista não identificado")
+                    Text(result.artistName ?? "Explorar músicas")
                         .font(.subheadline.weight(.bold)).lineLimit(1)
                     Text(result.albumTitle ?? "Álbum não informado")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
             }
+            if catalogLoading { ProgressView("Consultando catálogo…").font(.caption) }
             Picker("Organizar músicas por", selection: $collectionMode) {
                 Text("💿 Álbum").tag(AlbumArtistMode.album)
                 Text("🎤 Artista").tag(AlbumArtistMode.artist)
@@ -701,6 +708,16 @@ struct SearchView: View {
         }
         .onChange(of: activeTrack?.id) { _, _ in
             collectionAnchor = nil
+        }
+        .task(id: "\(isPresented)-\(hubTab == .albumArtist)-\((collectionAnchor ?? activeTrack ?? recentTracks.first)?.id ?? "")") {
+            guard isPresented, hubTab == .albumArtist,
+                  let anchor = collectionAnchor ?? activeTrack ?? recentTracks.first else { return }
+            catalogLoading = true
+            let result = await MusicCatalogService.shared.collection(anchor: anchor,
+                local: collectionCandidates, mode: .both)
+            guard !Task.isCancelled else { return }
+            remoteCollection = result
+            catalogLoading = false
         }
         .onChange(of: requestedAlbumFocus) { _, _ in
             if let track = requestedAlbumTrack { focusAlbumArtist(track) }

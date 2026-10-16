@@ -19,11 +19,10 @@ struct StemMixerControls: View {
                  ? (audio.stemSource == .demucs
                     ? "4 fontes Demucs isoladas · ajuste ao vivo"
                     : "4 faixas STFT aproximadas · ajuste ao vivo")
-                 : "Preparando 4 faixas independentes · música original preservada")
+                 : "Prepare os stems quando quiser · música original preservada")
                 .font(.caption2).foregroundStyle(.secondary)
             if !audio.stemsAvailable {
-                ProgressView().controlSize(.mini)
-                    .accessibilityLabel("Preparando faixas")
+                Button("Preparar stems") { audio.requestStemPreparation() }
             }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {
@@ -77,7 +76,6 @@ struct StemMixerControls: View {
         .accessibilityIdentifier("music.stemMixer")
         .onAppear {
             devToken = StemDevCredentials.load() ?? ""
-            audio.requestStemPreparation()
         }
     }
 }

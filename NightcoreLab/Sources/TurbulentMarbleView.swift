@@ -135,7 +135,7 @@ struct TurbulentMarbleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var shouldPauseLiveShader: Bool {
-        isPaused || energyBudget.pausesShader || scenePhase != .active || reduceMotion
+        isPaused || energyBudget.pausesShader || scenePhase == .background || reduceMotion
     }
     private var powerAwareShaderFPS: Double {
         ProcessInfo.processInfo.isLowPowerModeEnabled ? min(30, maxFPS) : maxFPS
