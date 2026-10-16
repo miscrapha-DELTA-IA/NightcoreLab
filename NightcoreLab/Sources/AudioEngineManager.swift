@@ -109,6 +109,7 @@ final class AudioEngineManager {
     private(set) var stemSource: StemSource?
     @ObservationIgnored private var stemFiles: [StemKind: AVAudioFile] = [:]
     @ObservationIgnored private var stemPrepareTask: Task<Void, Never>?
+    @ObservationIgnored private var stemRequestID = UUID()
     @ObservationIgnored private var stemRampTask: Task<Void, Never>?
     /// Live spectral proxy (EQ cannot truly isolate instruments).
     private let stemEQ = AVAudioUnitEQ(numberOfBands: 5)
@@ -273,6 +274,9 @@ final class AudioEngineManager {
     func load(url: URL, preparedFile: AVAudioFile? = nil) throws {
         stemPrepareTask?.cancel()
         stemPrepareTask = nil
+        stemRequestID = UUID()
+        stemPreparationStatus = nil
+        stemPreparationError = nil
         stemRampTask?.cancel()
         stemPlayers.values.forEach { $0.stop() }
         stemFiles = [:]
@@ -939,9 +943,14 @@ final class AudioEngineManager {
     // MARK: Four-stem mixer
 
     private(set) var stemPreparationError: String?
+    private(set) var stemPreparationStatus: String?
 
     func requestStemPreparation() {
-        guard !stemsAvailable, stemPrepareTask == nil, let sourceURL else { return }
+        guard !stemsAvailable, stemPrepareTask == nil else { return }
+        guard let sourceURL else {
+            stemPreparationError = "Selecione uma música antes de preparar os stems."
+            return
+        }
         prepareStems(source: sourceURL, revision: playbackSourceRevision)
     }
 
@@ -949,12 +958,11 @@ final class AudioEngineManager {
     /// Explicit retry is required before uploading the track to a new host.
     /// Do not alter the single AVAudioEngine graph or ongoing transport clock.
     func retryStemPreparation() {
+        guard stemPrepareTask == nil else { return }
         guard let sourceURL else {
             stemPreparationError = "Selecione uma música antes de preparar os stems."
             return
         }
-        stemPrepareTask?.cancel()
-        stemPrepareTask = nil
         if stemMixEnabled { setStemMixerEnabled(false) }
         stemPlayers.values.forEach { $0.stop() }
         stemFiles = [:]
@@ -963,22 +971,51 @@ final class AudioEngineManager {
         prepareStems(source: sourceURL, revision: playbackSourceRevision)
     }
 
+    /// Cancels client-side upload/polling. The already accepted server job may
+    /// continue on the developer's computer until the worker completes.
+    func cancelStemPreparation() {
+        guard stemPrepareTask != nil else { return }
+        stemPrepareTask?.cancel()
+        stemPrepareTask = nil
+        stemRequestID = UUID()
+        stemPreparationStatus = nil
+        stemPreparationError = "Preparação interrompida no app. Se o servidor já recebeu a faixa, pode continuar ocupado."
+    }
+
     private func prepareStems(source: URL, revision: Int) {
         stemPrepareTask?.cancel()
+        let requestID = UUID()
+        stemRequestID = requestID
         stemPreparationError = nil
+        stemPreparationStatus = DevStemBackend.enabled
+            ? "Iniciando preparação com Demucs…" : "Preparando stems locais…"
         stemPrepareTask = Task { [weak self] in
             let cacheFolder = TrackAudioCache.stemDirectory(for: source)
-            let outcome = await Task.detached(priority: .background) { () async -> (StemAsset?, String?) in
+            let worker = Task.detached(priority: .utility) { [weak self] () async -> (StemAsset?, String?) in
                 do {
-                    return (try await StemSplitterEngine.prepare(source: source,
-                        cacheFolder: cacheFolder), nil)
+                    let asset = try await StemSplitterEngine.prepare(source: source,
+                        cacheFolder: cacheFolder, onStatus: { [weak self] next in
+                            await MainActor.run {
+                                guard let self, self.stemRequestID == requestID,
+                                      self.playbackSourceRevision == revision else { return }
+                                self.stemPreparationStatus = next
+                            }
+                        })
+                    return (asset, nil)
                 } catch {
                     return (nil, error.localizedDescription)
                 }
-            }.value
+            }
+            let outcome = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
             guard let self, !Task.isCancelled,
+                  self.stemRequestID == requestID,
                   self.playbackSourceRevision == revision else { return }
             self.stemPrepareTask = nil
+            self.stemPreparationStatus = nil
             guard let asset = outcome.0 else {
                 self.stemPreparationError = outcome.1 ?? "Falha ao preparar os stems."
                 return
