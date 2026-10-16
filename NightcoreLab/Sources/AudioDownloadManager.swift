@@ -50,11 +50,11 @@ final class AudioDownloadManager: ObservableObject {
         configuration.sessionSendsLaunchEvents = true
         configuration.timeoutIntervalForRequest = 180
         configuration.timeoutIntervalForResource = 900
-        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpMaximumConnectionsPerHost = 6
         transfers = DownloadKit.DownloadManager(sessionConfiguration: configuration)
         transfers.setDelegate(self)
         // Foreground selection + one background prefetch at a time.
-        transfers.setMaxConcurrentDownloads(2)
+        transfers.setMaxConcurrentDownloads(4)
         cachedIDs = Set(cache.entries.keys)
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -95,6 +95,8 @@ final class AudioDownloadManager: ObservableObject {
         cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
             .prefix(8).map { cachedTrack($0.track) }
     }
+
+    var offlineCacheBadge: String { cache.cacheBadge }
 
     var allCachedTracks: [Track] {
         cache.entries.values.sorted { $0.accessedAt > $1.accessedAt }
@@ -522,7 +524,12 @@ extension AudioDownloadManager: DownloadManagerDelegate {
                           thumbnailURL: cover?.scheme == "https" ? cover : track.thumbnailURL)
         }
         do {
-            let local = try cache.store(track, from: location)
+            // Compress off the main actor: never move a WAV/PCM response into
+            // the cache under a misleading .m4a filename.
+            let compact = try await Task.detached(priority: .userInitiated) {
+                try TrackAudioCache.transcodeAAC(from: location)
+            }.value
+            let local = try cache.store(track, from: compact)
             var protected = Set(tracks.values.map(\.id))
             if let playingID { protected.insert(playingID) }
             if let selectedID { protected.insert(selectedID) }
