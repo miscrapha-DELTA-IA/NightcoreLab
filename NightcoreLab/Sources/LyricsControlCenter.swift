@@ -23,6 +23,7 @@ struct LyricsControlCenter: View {
     @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
     @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
     @AppStorage("karaokeChordMode") private var chordMode = false
+    @AppStorage("karaoke.showScoreHUD") private var showScoreHUD = true
     @AppStorage(CreativeHaptics.enabledKey) private var hapticsEnabled = true
 
     var body: some View {
@@ -57,6 +58,9 @@ struct LyricsControlCenter: View {
                 }
 
                 Section {
+                    Toggle("Mostrar Placar", isOn: $showScoreHUD)
+                        .tint(theme.accent)
+                        .accessibilityIdentifier("lyrics.controls.showScoreHUD")
                     Toggle("Karaokê limpo", isOn: $lyricsCleanMode)
                         .tint(theme.accent)
                     Text("Mantém título, reprodução e letra visíveis. A barra de temas fica oculta; os ajustes permanecem aqui.")
