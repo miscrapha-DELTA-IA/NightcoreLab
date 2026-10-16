@@ -106,6 +106,7 @@ final class AudioEngineManager {
     private(set) var stemLevels: [StemKind: Float] = Dictionary(
         uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
     private(set) var stemsAvailable = false
+    private(set) var stemSource: StemSource?
     @ObservationIgnored private var stemFiles: [StemKind: AVAudioFile] = [:]
     @ObservationIgnored private var stemPrepareTask: Task<Void, Never>?
     @ObservationIgnored private var stemRampTask: Task<Void, Never>?
@@ -277,6 +278,7 @@ final class AudioEngineManager {
         stemFiles = [:]
         stemMixEnabled = false
         stemsAvailable = false
+        stemSource = nil
         stemLevels = Dictionary(uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
         applyLiveStemEQ()
         centerCutPrepareTask?.cancel()
@@ -962,6 +964,7 @@ final class AudioEngineManager {
                 files[kind] = file
             }
             self.stemFiles = files
+            self.stemSource = asset.source
             self.stemsAvailable = true
             self.applyLiveStemEQ()
             if self.stemMixEnabled {
