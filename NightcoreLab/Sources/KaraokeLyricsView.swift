@@ -177,6 +177,7 @@ struct KaraokeLyricsView: View {
     @AppStorage(KaraokeGuidePreference.countdown) private var entranceCountdown = true
     @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
     @AppStorage("karaokeChordMode") private var chordMode = false
+    @AppStorage("karaoke.showScoreHUD") private var showScoreHUD = true
     @State private var chordPlacements: [ChordPlacement] = []
     @State private var chordTranspose = 0
     @State private var simplifyChords = false
@@ -368,8 +369,24 @@ struct KaraokeLyricsView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 8) {
-            KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill,
-                            onResult: onShowResult)
+            HStack {
+                Spacer()
+                Button { showScoreHUD.toggle() } label: {
+                    Label("Placar", systemImage: "trophy.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 13).padding(.vertical, 8)
+                        .background(showScoreHUD ? (accent ?? theme.fill).opacity(0.25) :
+                            .black.opacity(0.5), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("karaoke.toggleScoreHUD")
+                .accessibilityValue(showScoreHUD ? "Ligado" : "Desligado")
+                .padding(.trailing, 18)
+            }
+            if showScoreHUD {
+                KaraokeScoreHUD(session: store.scoring, accent: accent ?? theme.fill,
+                                onResult: onShowResult)
+            }
         }
         .onAppear {
             store.scoring.present(true)
