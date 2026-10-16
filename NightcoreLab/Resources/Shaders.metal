@@ -335,6 +335,160 @@ half4 texturedMarble(float2 position, half4 currentColor,
 }
 
 
+// Sampling the same smooth scalar field at nearby logical pixels replaces
+// GPU quad derivatives, which are invalid in a Metal *compute* kernel. This
+// helper has no stitchable ABI and no fragment-only builtin instructions.
+static inline float evaluateTexturedScalarAt(float2 position, float2 size,
+    float time, float bilateralSymmetry, float combStretch,
+    float reactiveDistortion, float beatPulse, float pulseWarp,
+    float diffusionSoftness) {
+    float2 uv = (position - 0.5f * size) / max(min(size.x, size.y), 1.0f) * 1.85f;
+    uv /= (1.0f + 0.035f * saturate(beatPulse));
+    uv.x = mix(uv.x, abs(uv.x), saturate(bilateralSymmetry));
+    float t = time * 0.065f;
+    float comp = max(0.0f, combStretch);
+    float2 stretched = uv * float2(1.0f + 0.24f * comp,
+                                 1.0f / (1.0f + 0.18f * comp));
+    float radius = length(uv);
+    float radialWave = sin(radius * 15.0f - t * 0.7f);
+    stretched += (uv / max(radius, 0.025f)) *
+        (0.032f * saturate(beatPulse) * radialWave);
+    float2 q = float2(fbm<2>(stretched * 1.2f + float2(t, 1.4f)),
+                      fbm<2>(stretched * 1.2f + float2(7.2f, -t)));
+    float warp = 0.42f + 0.16f * saturate(reactiveDistortion) +
+                 0.12f * saturate(beatPulse) * clamp(pulseWarp, 0.0f, 0.5f);
+    float flow = fbm<3>(stretched * 1.85f + warp * q +
+                         float2(t * 0.55f, -t * 0.35f));
+    float ribs = sin((stretched.y + 0.35f * flow + 0.12f * q.x) *
+                     (5.0f + 1.8f * comp));
+    float v = saturate(0.26f + 0.62f * flow + 0.18f * q.y + 0.14f * ribs);
+    float soft = saturate(diffusionSoftness);
+    return mix(v, smoothstep(0.13f, 0.88f, v), soft * 0.52f);
+}
+
+static inline half4 evaluateTexturedMarbleExport(float2 position, half4 currentColor,
+                     float2 size, float time,
+                     half4 color0, half4 color1, half4 color2,
+                     half4 color3, half4 color4,
+                     float stripingFrequency, float stripingMix,
+                     float speckleIntensity, float embossStrength,
+                     float scanlineDensity, float diffusionSoftness,
+                     float voidThreshold, float combStretch,
+                     float bilateralSymmetry, float halftoneGrating,
+                     float reactiveDistortion, float beatPulse,
+                     float pulseWarp, float pulseGlow, float detailQuality)
+{
+    float3 c0 = float3(color0.rgb);
+    float3 c1 = float3(color1.rgb);
+    float3 c2 = float3(color2.rgb);
+    float3 c3 = float3(color3.rgb);
+    float3 c4 = float3(color4.rgb);
+    float2 uv = (position - 0.5f * size) / max(min(size.x, size.y), 1.0f) * 1.85f;
+    uv /= (1.0f + 0.035f * saturate(beatPulse));
+    // Mirroring is centered on x=0 and the domain remains continuous.
+    uv.x = mix(uv.x, abs(uv.x), saturate(bilateralSymmetry));
+    float t = time * 0.065f;
+    float comp = max(0.0f, combStretch);
+    float2 stretched = uv * float2(1.0f + 0.24f * comp,
+                                 1.0f / (1.0f + 0.18f * comp));
+    // A typed pad impulse reaches beatPulse via the SAME CPU resolver in
+    // live preview and Story frames. A single bounded radial wave distorts
+    // contours without re-seeding noise or producing flashes.
+    float radius = length(uv);
+    float radialWave = sin(radius * 15.0f - t * 0.7f);
+    stretched += (uv / max(radius, 0.025f)) *
+                 (0.032f * saturate(beatPulse) * radialWave);
+    float2 q = float2(fbm<2>(stretched * 1.2f + float2(t, 1.4f)),
+                      fbm<2>(stretched * 1.2f + float2(7.2f, -t)));
+    float warp = 0.42f + 0.16f * saturate(reactiveDistortion) +
+                 0.12f * saturate(beatPulse) * clamp(pulseWarp, 0.0f, 0.5f);
+    float flow = fbm<3>(stretched * 1.85f + warp * q +
+                         float2(t * 0.55f, -t * 0.35f));
+    float ribs = sin((stretched.y + 0.35f * flow + 0.12f * q.x) *
+                     (5.0f + 1.8f * comp));
+    float v = saturate(0.26f + 0.62f * flow + 0.18f * q.y + 0.14f * ribs);
+    // Smooth, non-flashing airbrush transitions.
+    float soft = saturate(diffusionSoftness);
+    v = mix(v, smoothstep(0.13f, 0.88f, v), soft * 0.52f);
+    float band = v * 4.0f;
+    float3 col;
+    if (band < 1.0f) col = mix(c0, c1, smoothstep(0.0f, 1.0f, band));
+    else if (band < 2.0f) col = mix(c1, c2, smoothstep(1.0f, 2.0f, band));
+    else if (band < 3.0f) col = mix(c2, c3, smoothstep(2.0f, 3.0f, band));
+    else col = mix(c3, c4, smoothstep(3.0f, 4.0f, band));
+
+    if (stripingMix > 0.001f && stripingFrequency > 0.001f) {
+        // Optical micro-lines follow the WARPED scalar field, not screen
+        // coordinates; gentle time drift prevents harsh neon strobing.
+        float stripe = 0.5f + 0.5f * sin(
+            (v + 0.24f * flow + 0.12f * ribs) * stripingFrequency *
+            6.2831853f + t * 0.35f);
+        float veinMask = smoothstep(0.16f, 0.6f, abs(ribs));
+        col = mix(col, mix(c0, c4, stripe),
+                  saturate(stripingMix) * veinMask * 0.55f);
+    }
+
+    // Dark void pools do not become gray due to fake ambient lighting.
+    if (voidThreshold > 0.001f) {
+        float mask = smoothstep(voidThreshold - 0.10f,
+                                voidThreshold + 0.08f, v);
+        col *= mask;
+        // Small stationary whirlpool highlights, not a time-flickering noise.
+        float eddy = abs(sin(length(uv + 0.15f * q) * 29.0f + flow * 8.0f));
+        col += c2 * (1.0f - mask) * (1.0f - smoothstep(0.0f, 0.12f, eddy)) * 0.08f;
+    }
+
+    float quality = saturate(detailQuality);
+    if (quality > 0.05f && speckleIntensity > 0.001f) {
+        // Screen-stationary stochastic terrazzo: no temporal grain crawl.
+        float2 cell = floor(position * 0.68f);
+        float chips = hash21(cell);
+        float fleck = smoothstep(0.955f, 0.988f, chips);
+        float3 mineral = mix(c4, c3, hash21(cell + 19.7f));
+        col = mix(col, mineral, fleck * saturate(speckleIntensity) * quality * 0.75f);
+        col += (hash21(cell + 61.2f) - 0.5f) *
+               saturate(speckleIntensity) * quality * 0.035f;
+    }
+    if (quality > 0.05f && embossStrength > 0.001f) {
+        // Derivative-based, subtle directional relief on the ribbon contour.
+        // Compute has no dfdx/dfdy (fragment-only). Sample the exact scalar
+        // field at two adjacent half-logical-pixel positions on the 2x
+        // raster. Deterministic and keeps authored fine embossed contours.
+        float vRight = evaluateTexturedScalarAt(
+            position + float2(0.5f, 0.0f), size, time, bilateralSymmetry, combStretch, reactiveDistortion, beatPulse, pulseWarp, diffusionSoftness);
+        float vDown = evaluateTexturedScalarAt(
+            position + float2(0.0f, 0.5f), size, time, bilateralSymmetry, combStretch, reactiveDistortion, beatPulse, pulseWarp, diffusionSoftness);
+        float emboss = clamp((vRight - vDown) * 7.0f, -1.0f, 1.0f);
+        col *= 1.0f + emboss * saturate(embossStrength) * quality * 0.11f;
+    }
+    if (scanlineDensity > 0.001f) {
+        float ridges = 0.5f + 0.5f * sin(
+            uv.y * scanlineDensity * 6.2831853f + 0.75f * flow);
+        col *= 1.0f - 0.038f * ridges * (0.35f + 0.65f * soft);
+    }
+    if (halftoneGrating > 0.001f) {
+        // Bilateral guilloché rings; highlight width tracks luminance.
+        float engravingRadius = length(uv * float2(1.0f, 0.85f) + 0.05f * q);
+        float wave = abs(sin(engravingRadius * halftoneGrating * 3.14159265f +
+                             flow * 4.2f));
+        float luminance = dot(col, float3(0.2126f, 0.7152f, 0.0722f));
+        float width = mix(0.07f, 0.27f, saturate(luminance));
+        float engraving = 1.0f - smoothstep(width, width + 0.12f, wave);
+        col = mix(col, c0, engraving * 0.63f);
+    }
+    // Smooth contour glints are visible when a Kick or Snare lands.
+    // Void Gloss keeps black pools black even at maximum accent.
+    float voidMask = voidThreshold > 0.001f
+        ? smoothstep(voidThreshold - 0.10f, voidThreshold + 0.08f, v)
+        : 1.0f;
+    float accentGlow = saturate(beatPulse) *
+        (0.055f + 0.075f * smoothstep(0.3f, 0.9f, abs(ribs)));
+    col += c4 * voidMask *
+        (accentGlow + saturate(beatPulse) *
+         clamp(pulseGlow, 0.0f, 0.3f) * 0.18f);
+    return half4(half3(saturate(col)), 1.0h);
+}
+
 // Stage 40: three small compute kernels call only the PURE math evaluators.
 // They never invoke SwiftUI [[stitchable]] entrypoints, so the Metal compiler
 // does not need to resolve the SwiftUI function-table ABI while creating a
@@ -361,7 +515,7 @@ kernel void storyTexturedMarbleFrame(texture2d<float, access::write> output [[te
     float2 size(v[0], v[1]);
     float2 position = (float2(gid) + 0.5f) * size /
         float2(output.get_width(), output.get_height());
-    half4 color = evaluateTexturedMarble(position, half4(0), size, v[2],
+    half4 color = evaluateTexturedMarbleExport(position, half4(0), size, v[2],
         half4(c[0]), half4(c[1]), half4(c[2]), half4(c[3]), half4(c[4]),
         v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12],
         v[13], v[14], v[15], v[16], v[17], 1.0f);
