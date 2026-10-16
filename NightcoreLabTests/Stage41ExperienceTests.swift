@@ -91,6 +91,23 @@ final class Stage41ExperienceTests: XCTestCase {
         XCTAssertEqual(Set(StemKind.allCases), Set([.vocal, .drums, .bass, .instrumental]))
     }
 
+    func testDevDemucsConnectionCanExplicitlyRetryWithoutReplacingAudioGraph() throws {
+        let mixer = try String(contentsOf: sourceRoot
+            .appendingPathComponent("StemMixerControls.swift"))
+        let audio = try String(contentsOf: sourceRoot
+            .appendingPathComponent("AudioEngineManager.swift"))
+        let backend = try String(contentsOf: sourceRoot
+            .appendingPathComponent("DevStemBackend.swift"))
+        XCTAssertTrue(mixer.contains("stem.retryPreparation"))
+        XCTAssertTrue(mixer.contains("audio.retryStemPreparation()"))
+        XCTAssertTrue(mixer.contains("stem.preparationError"))
+        XCTAssertTrue(audio.contains("func retryStemPreparation()"))
+        XCTAssertTrue(audio.contains("if stemMixEnabled { setStemMixerEnabled(false) }"))
+        XCTAssertTrue(backend.contains("for _ in 0..<300"))
+        XCTAssertTrue(backend.contains("StemServerFailure.failed"))
+        XCTAssertFalse(mixer.contains("audio.retryStemPreparation()\n        .onChange"))
+    }
+
     func testStoryUsesFullWidthKaraokeHeaderAndRetainsStage40ShaderContracts() throws {
         let story = try String(contentsOf: sourceRoot
             .appendingPathComponent("Share/StorySceneView.swift"))
