@@ -279,7 +279,7 @@ struct SearchView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 7) {
                     hubPill(.mix, "⚡ Mix 15")
-                    hubPill(.offline, "📥 Offline (\(offlineTracks.count))")
+                    hubPill(.offline, "📥 " + downloader.offlineCacheBadge)
                     hubPill(.queue, "🎵 Fila")
                     hubPill(.albumArtist, "💿 Álbum & Artista")
                 }
