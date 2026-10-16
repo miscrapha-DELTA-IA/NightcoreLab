@@ -103,7 +103,8 @@ final class Stage41ExperienceTests: XCTestCase {
         XCTAssertTrue(mixer.contains("stem.preparationError"))
         XCTAssertTrue(audio.contains("func retryStemPreparation()"))
         XCTAssertTrue(audio.contains("if stemMixEnabled { setStemMixerEnabled(false) }"))
-        XCTAssertTrue(backend.contains("for _ in 0..<300"))
+        XCTAssertTrue(backend.contains("0..<300"))
+        XCTAssertTrue(backend.contains("Task.checkCancellation()"))
         XCTAssertTrue(backend.contains("StemServerFailure.failed"))
         XCTAssertFalse(mixer.contains("audio.retryStemPreparation()\n        .onChange"))
     }
