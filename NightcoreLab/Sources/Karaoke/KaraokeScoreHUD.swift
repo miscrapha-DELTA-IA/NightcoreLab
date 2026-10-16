@@ -183,6 +183,10 @@ struct KaraokeScoringControls: View {
         .onChange(of: store.scoring.mode) { _, mode in
             if mode == .off { audio.endKaraokeMicrophone() }
         }
+        .onReceive(NotificationCenter.default.publisher(for:
+            UIApplication.didBecomeActiveNotification)) { _ in
+            if !audio.microphonePermissionDenied { showsError = false }
+        }
         .onDisappear {
             request?.cancel()
         }
