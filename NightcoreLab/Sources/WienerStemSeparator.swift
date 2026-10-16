@@ -18,8 +18,14 @@ enum WienerStemSeparator {
         guard format.sampleRate > 0, (1...2).contains(format.channelCount),
               input.length > 0 else { throw CocoaError(.fileReadCorruptFile) }
         let stereo = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: 2)!
+        let compressedSettings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: 2,
+            AVEncoderBitRateKey: 96_000
+        ]
         let writers = try Dictionary(uniqueKeysWithValues: StemKind.allCases.map { kind in
-            (kind, try AVAudioFile(forWriting: urls[kind]!, settings: stereo.settings,
+            (kind, try AVAudioFile(forWriting: urls[kind]!, settings: compressedSettings,
                                    commonFormat: .pcmFormatFloat32, interleaved: false))
         })
         let n = windowSize, hop = hopSize
