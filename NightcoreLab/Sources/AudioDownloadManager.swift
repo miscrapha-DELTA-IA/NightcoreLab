@@ -232,7 +232,7 @@ final class AudioDownloadManager: ObservableObject {
                 guard generation == self.selectionGeneration, !self.isRateLimited else { return }
                 guard self.cache.localURL(for: track.id) == nil,
                       !self.tracks.values.contains(where: { $0.id == track.id }),
-                      speculativeIDs.count < 2 else { continue }
+                      speculativeIDs.count < 3 else { continue }
                 speculativeIDs.insert(track.id)
                 await self.append(track, priority: URLSessionTask.lowPriority)
             }
@@ -242,7 +242,7 @@ final class AudioDownloadManager: ObservableObject {
 
     nonisolated static func nextTracks(_ tracks: [Track], excluding id: String) -> [Track] {
         var seen = Set([id])
-        return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(2))
+        return Array(tracks.filter { seen.insert($0.id).inserted }.prefix(3))
     }
 
     private func activateRateLimit(retryAfter: TimeInterval = 60) {
