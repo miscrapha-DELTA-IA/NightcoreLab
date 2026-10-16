@@ -116,6 +116,46 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # Stage 40 GPU regression gate: run the 14 historically red tests FIRST.
+      # No exclusions/relaxations: the unfiltered full XCTest job runs immediately
+      # afterwards, and Release IPA remains gated on both test passes.
+      - name: Stage 40 targeted Metal render and preview/export parity regressions
+        run: |
+          set -o pipefail
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for devices in d["devices"].values() for v in devices if v["name"].startswith("iPhone")))')
+          xcodebuild test \
+            -project NightcoreLab.xcodeproj \
+            -scheme NightcoreLab \
+            -destination "platform=iOS Simulator,id=$device_id" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath Stage40-Targeted.xcresult \
+            -only-testing:NightcoreLabTests/AdaptiveCompositionLayoutTests/testPortraitOriginalPixelParity \
+            -only-testing:NightcoreLabTests/AdaptiveCompositionLayoutTests/testSquareAndLandscapePreviewExportExactPixelsAndViewport \
+            -only-testing:NightcoreLabTests/CompositionRuntimeTests/testExistingStoryFrameRendererReceivesCompatibleValues \
+            -only-testing:NightcoreLabTests/CreativeMarbleRenderingTests/testMetalFrameRasterSizesUnchangedWhenReactive \
+            -only-testing:NightcoreLabTests/CreatorControlTests/testControlledPreviewAndExportUseIdenticalFrame \
+            -only-testing:NightcoreLabTests/PlayerBackgroundStyleTests/testStage40ExportUsesEveryLivePaletteAndNativeResolution \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testDefaultPortraitPreviewAndEncoderShareExactPixels \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testFourLyricModelsFreezeIntoShareAndRenderDistinctStoryFrames \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testSharedCanvasRendersThreeRatiosWithoutChangingSceneSource \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testSharePackageContainsValidatedVideoThumbnailAndMetadata \
+            -only-testing:NightcoreLabTests/ShareExportPipelineTests/testStage40RealMetalContrastPaletteAndContinuousFrames \
+            -only-testing:NightcoreLabTests/StoryRenderTimelineTests/testExportFrameUsesSameVisualSceneAsScrubPreview \
+            -only-testing:NightcoreLabTests/StoryRenderTimelineTests/testStage37ConsecutiveThirtyFPSFramesHaveLinearPhaseAndDistinctPixels \
+            -only-testing:NightcoreLabTests/StoryRenderTimelineTests/testThreeBeatAndSectionFramesMatchPreviewAndEncoderState \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee stage40-targeted-test.log
+
+      - name: Save targeted Stage 40 regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stage40-Targeted-Tests
+          path: |
+            stage40-targeted-test.log
+            Stage40-Targeted.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Validar busca, cache e qualidade de áudio no simulador
         run: |
           set -o pipefail
