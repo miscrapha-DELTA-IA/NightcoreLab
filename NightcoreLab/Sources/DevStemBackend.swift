@@ -28,7 +28,7 @@ enum DevStemBackend {
               size > 0, size <= 35 * 1024 * 1024 else {
             throw URLError(.dataLengthExceedsMaximum)
         }
-        let token = UserDefaults.standard.string(forKey: "stems.devBackendToken") ?? ""
+        let token = StemDevCredentials.load() ?? ""
         guard token.count >= 16 else { throw URLError(.userAuthenticationRequired) }
         var request = URLRequest(url: server.appendingPathComponent("api/stems"))
         request.httpMethod = "POST"
