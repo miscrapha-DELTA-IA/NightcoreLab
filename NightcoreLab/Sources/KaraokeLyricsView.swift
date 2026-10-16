@@ -354,8 +354,13 @@ struct KaraokeLyricsView: View {
                     proxy.scrollTo("karaoke-top", anchor: .top)
                 }
                 .onChange(of: store.lines) { _, lines in
-                    if store.scrollAnchorLineID == 0, let first = lines.first,
-                       lastRequestedLineID == nil {
+                    // Acoustic/word refinement can update the current track.
+                    // Never jump back to the first verse while playback is live.
+                    guard store.activeLineIndex == nil, lastRequestedLineID == nil,
+                          let first = lines.first else { return }
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
                         proxy.scrollTo(first.id, anchor: .top)
                     }
                 }
@@ -430,7 +435,8 @@ struct KaraokeLyricsView: View {
             animatedDuration: decision.duration,
             automatic: reason == .automatic)
         if decision.animated {
-            withAnimation(.easeOut(duration: 0.28)) {
+            // Stage 17D decides a safe maximum duration for each verse.
+            withAnimation(.easeOut(duration: decision.duration)) {
                 proxy.scrollTo(id, anchor: .center)
             }
         } else {
@@ -553,29 +559,29 @@ private struct KaraokeLineView: View {
         Group {
         if line.words.isEmpty {
             Color.clear.frame(height: 14)                   // pausa instrumental
-        } else if status == .active {
-            // Only the current row subscribes to display cadence, never the stanza list.
+        } else {
+            // Keep one stable tree for upcoming -> active -> past.
+            // Inactive lines use paused timelines, so only the active row ticks.
+            // This avoids recreating an offscreen drawingGroup at verse switches.
             TimelineView(.animation(minimumInterval: energyBudget.visualInterval,
-                                    paused: !isPlaying || !energyBudget.allowsVisualUpdates)) { _ in
-                let source = clock.lyricTime
-                let _ = KaraokePerformanceProbe.shared.timelineTick(
-                    expectedInterval: energyBudget.visualInterval)
+                                    paused: status != .active || !isPlaying ||
+                                        !energyBudget.allowsVisualUpdates)) { _ in
+                let active = status == .active
+                let source = active ? clock.lyricTime :
+                    (status == .past ? line.end : line.start) - offset
+                let _ = active ? KaraokePerformanceProbe.shared.timelineTick(
+                    expectedInterval: energyBudget.visualInterval) : ()
                 layout(frame: resolve(sourceTime: source,
-                                      features: liveUniforms?.typographyFeatures(at: source)),
-                       pacing: KaraokeTimingGuide.pacing(
-                           start: line.start, end: line.end, at: source + offset),
-                       preview: nextPreviewEnabled && previewFrom.map {
+                                      features: active ?
+                                          liveUniforms?.typographyFeatures(at: source) : nil),
+                       pacing: active ? KaraokeTimingGuide.pacing(
+                           start: line.start, end: line.end, at: source + offset) : 0,
+                       preview: active && nextPreviewEnabled && (previewFrom.map {
                            KaraokeTimingGuide.previewsNext(activeEnd: $0,
                                                             at: source + offset)
-                       } == true,
-                       lineFocusProgress: 1)
+                       } == true),
+                       lineFocusProgress: active || status == .past ? 1 : 0)
             }
-        } else {
-            // A static row has no per-frame clock read, active animation or layout work.
-            layout(frame: resolve(sourceTime: (status == .past ? line.end : line.start) - offset,
-                                  features: nil),
-                   lineFocusProgress: status == .past ? 1 : 0)
-                .drawingGroup()
         }
         }
         .onAppear {
