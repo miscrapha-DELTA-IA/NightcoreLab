@@ -132,7 +132,7 @@ final class InstantStemAudioUnit: AUAudioUnit {
         componentFlags: 0, componentFlagsMask: 0)
 
     private static let registration: Void = {
-        AUAudioUnit.registerSubclass(Self.self, as: description,
+        AUAudioUnit.registerSubclass(InstantStemAudioUnit.self, as: description,
                                      name: "NightcoreLab:Instant Stems", version: 1)
     }()
 
