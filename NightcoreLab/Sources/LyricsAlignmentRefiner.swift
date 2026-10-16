@@ -10,8 +10,20 @@ enum LyricsAlignmentRefiner {
         return lines.map { line in
             guard line.precision == .line, !line.words.isEmpty,
                   line.end > line.start else { return line }
-            let weights = line.words.enumerated().map { index, word in
+            // Without genuine acoustic cues the legacy syllable prior is the
+            // calibrated baseline (compared against word-timed LRC samples).
+            // Blend a modest amount of phonetic sustain instead of letting a
+            // speculative phrase-ending vowel dominate the entire line.
+            let legacy = line.words.map { Double(max(1, syllableWeight($0.text))) }
+            let phonetic = line.words.enumerated().map { index, word in
                 sustainWeight(word.text, phraseEnding: index == line.words.count - 1)
+            }
+            let legacyTotal = legacy.reduce(0, +)
+            let phoneticTotal = phonetic.reduce(0, +)
+            let confidence = vocalEnergy.isEmpty && cues.isEmpty ? 0.30 : 0.70
+            let weights = line.words.indices.map { index in
+                (1 - confidence) * legacy[index] / legacyTotal +
+                confidence * phonetic[index] / phoneticTotal
             }
             let total = weights.reduce(0, +)
             var elapsed = 0.0
