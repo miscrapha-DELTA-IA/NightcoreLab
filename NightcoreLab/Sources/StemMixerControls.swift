@@ -23,6 +23,7 @@ struct StemMixerControls: View {
                 .font(.caption2).foregroundStyle(.secondary)
             if !audio.stemsAvailable {
                 Button("Preparar stems") { audio.requestStemPreparation() }
+                    .disabled(audio.stemPreparationStatus != nil)
             }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {
@@ -59,7 +60,18 @@ struct StemMixerControls: View {
                           systemImage: "waveform.path")
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(audio.stemPreparationStatus != nil)
                 .accessibilityIdentifier("stem.retryPreparation")
+                if let status = audio.stemPreparationStatus {
+                    HStack(alignment: .top, spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(status).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("stem.preparationStatus")
+                    Button("Cancelar espera no iPhone") { audio.cancelStemPreparation() }
+                        .font(.caption2)
+                        .accessibilityIdentifier("stem.cancelPreparation")
+                }
                 if let message = audio.stemPreparationError {
                     Text(message)
                         .font(.caption2)
