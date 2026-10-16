@@ -50,8 +50,22 @@ struct StemMixerControls: View {
                         .autocorrectionDisabled()
                     SecureField("Token do servidor", text: $devToken)
                         .onChange(of: devToken) { _, new in StemDevCredentials.save(new) }
-                    Text("Requer backend com htdemucs instalado e STEMS_DEV_ENABLED=1. O áudio só é enviado quando você ativa esta opção e prepara uma nova faixa.")
+                    Text("O áudio da faixa atual é enviado apenas quando você tocar Preparar com Demucs. Use a URL HTTPS do túnel e o token local gerado pelo instalador.")
                         .font(.caption2).foregroundStyle(.secondary)
+                }
+                Button {
+                    audio.retryStemPreparation()
+                } label: {
+                    Label(devBackend ? "Preparar com Demucs" : "Reprocessar stems locais",
+                          systemImage: "waveform.path")
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("stem.retryPreparation")
+                if let message = audio.stemPreparationError {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("stem.preparationError")
                 }
             }
             .font(.caption)
