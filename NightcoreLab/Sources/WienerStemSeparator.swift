@@ -157,8 +157,8 @@ enum WienerStemSeparator {
     }
 }
 
-private extension Array where Element == [Float] {
+private extension Array where Element == Float {
     func duplicated(count: Int) -> [[Float]] {
-        Array(repeating: first ?? [], count: count)
+        Array(repeating: self, count: count)
     }
 }
