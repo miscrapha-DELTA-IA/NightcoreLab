@@ -938,34 +938,66 @@ final class AudioEngineManager {
 
     // MARK: Four-stem mixer
 
+    private(set) var stemPreparationError: String?
+
     func requestStemPreparation() {
         guard !stemsAvailable, stemPrepareTask == nil, let sourceURL else { return }
         prepareStems(source: sourceURL, revision: playbackSourceRevision)
     }
 
+    /// The DEV URL/token can be configured after spectral stems were prepared.
+    /// Explicit retry is required before uploading the track to a new host.
+    /// Do not alter the single AVAudioEngine graph or ongoing transport clock.
+    func retryStemPreparation() {
+        guard let sourceURL else {
+            stemPreparationError = "Selecione uma música antes de preparar os stems."
+            return
+        }
+        stemPrepareTask?.cancel()
+        stemPrepareTask = nil
+        if stemMixEnabled { setStemMixerEnabled(false) }
+        stemPlayers.values.forEach { $0.stop() }
+        stemFiles = [:]
+        stemsAvailable = false
+        stemPreparationError = nil
+        prepareStems(source: sourceURL, revision: playbackSourceRevision)
+    }
+
     private func prepareStems(source: URL, revision: Int) {
         stemPrepareTask?.cancel()
+        stemPreparationError = nil
         stemPrepareTask = Task { [weak self] in
             let cacheFolder = TrackAudioCache.stemDirectory(for: source)
-            let asset = try? await Task.detached(priority: .background) {
-                try await StemSplitterEngine.prepare(source: source,
-                                                     cacheFolder: cacheFolder)
+            let outcome = await Task.detached(priority: .background) { () async -> (StemAsset?, String?) in
+                do {
+                    return (try await StemSplitterEngine.prepare(source: source,
+                        cacheFolder: cacheFolder), nil)
+                } catch {
+                    return (nil, error.localizedDescription)
+                }
             }.value
             guard let self, !Task.isCancelled,
                   self.playbackSourceRevision == revision else { return }
             self.stemPrepareTask = nil
-            guard let asset else { return } // allow retry on transient cache/separation failure
+            guard let asset = outcome.0 else {
+                self.stemPreparationError = outcome.1 ?? "Falha ao preparar os stems."
+                return
+            }
             var files: [StemKind: AVAudioFile] = [:]
             for kind in StemKind.allCases {
                 guard let url = asset.urls[kind],
                       let file = try? AVAudioFile(forReading: url,
                                                   commonFormat: .pcmFormatFloat32,
-                                                  interleaved: false) else { return }
+                                                  interleaved: false) else {
+                    self.stemPreparationError = "O servidor não retornou quatro faixas de áudio válidas."
+                    return
+                }
                 files[kind] = file
             }
             self.stemFiles = files
             self.stemSource = asset.source
             self.stemsAvailable = true
+            self.stemPreparationError = nil
             self.applyLiveStemEQ()
             if self.stemMixEnabled {
                 self.scheduleStems(startingAt: self.currentTime)
