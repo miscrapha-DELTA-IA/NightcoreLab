@@ -1009,7 +1009,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 request: frame,
                 audioSource: frozenAudio,
                 profile: StoryEncodingProfile.recommended(),
-                featureEngine: visualEngine
+                featureEngine: visualEngine,
+                currentPlaybackTime: { audio.playbackTime }
             )
         } catch {
             shareErrorDetails = error.localizedDescription

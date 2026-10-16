@@ -48,6 +48,7 @@ struct RenderSettings: Sendable {
 struct StoryAudioSource: Sendable {
     let url: URL
     let settings: RenderSettings
+    let stemLevels: [StemKind: Float]?
 }
 
 // MARK: - AudioEngineManager
@@ -1024,7 +1025,8 @@ final class AudioEngineManager {
         guard let sourceURL else { throw AudioEngineError.noFileLoaded }
         let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb, bass: bass,
                                       reverbPresetRaw: Self.defaultReverbPreset.rawValue)
-        return StoryAudioSource(url: sourceURL, settings: settings)
+        return StoryAudioSource(url: sourceURL, settings: settings,
+                                stemLevels: stemMixEnabled ? stemLevels : nil)
     }
 
     /// Standalone offline graph. Does not seek, pause or replace the live player.
@@ -1036,7 +1038,8 @@ final class AudioEngineManager {
             try Self.renderOffline(source: source.url, settings: source.settings,
                                    format: .m4a, progress: { _ in },
                                    startTime: startTime, maxDuration: duration,
-                                   performance: performance)
+                                   performance: performance,
+                                   stemLevels: source.stemLevels, fadeEdges: true)
         }
         // Detached tasks do not inherit cancellation automatically.
         // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.
@@ -1515,7 +1518,9 @@ final class AudioEngineManager {
                                                   progress: @Sendable (Double) -> Void,
                                                   startTime: TimeInterval = 0,
                                                   maxDuration: TimeInterval? = nil,
-                                                  performance: PerformanceTimeline? = nil) throws -> URL {
+                                                  performance: PerformanceTimeline? = nil,
+                                                  stemLevels: [StemKind: Float]? = nil,
+                                                  fadeEdges: Bool = false) throws -> URL {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let sourceRate = file.processingFormat.sampleRate
         guard file.length > 0, sourceRate > 0, (1...2).contains(file.processingFormat.channelCount),
@@ -1553,6 +1558,8 @@ final class AudioEngineManager {
         let reverb = makeReverb()
         let limiter = makeLimiter()
         [player, upmix, varispeed, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
+        let stemMask = stemLevels.map { _ in InstantStemAudioUnit.makeNode() }
+        if let stemMask { engine.attach(stemMask) }
         let performanceMixer = padStemURL.map { _ in AVAudioMixerNode() }
         let padPlayer = padStemURL.map { _ in AVAudioPlayerNode() }
         if let performanceMixer, let padPlayer {
@@ -1575,13 +1582,20 @@ final class AudioEngineManager {
         connectGraph(engine: engine, player: player, upmix: upmix, varispeed: varispeed, timePitch: timePitch, eq: eq,
                      reverb: reverb, limiter: limiter,
                      fileFormat: file.processingFormat, graphFormat: renderFormat,
-                     performanceMixer: performanceMixer)
+                     performanceMixer: performanceMixer, stemMask: stemMask)
         if let padPlayer, let performanceMixer {
             engine.connect(padPlayer, to: performanceMixer, format: renderFormat)
         }
 
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
         try engine.start()
+        if let stemMask, let stemLevels {
+            for (address, kind) in StemKind.allCases.enumerated() {
+                stemMask.auAudioUnit.scheduleParameterBlock(
+                    AUEventSampleTimeImmediate, 0, AUParameterAddress(address),
+                    stemLevels[kind] ?? 1)
+            }
+        }
         if let maxDuration {
             let startFrame = AVAudioFramePosition(min(max(startTime, 0) * sourceRate,
                                                       Double(file.length)))
@@ -1664,6 +1678,20 @@ final class AudioEngineManager {
                     continue
                 }
                 stalledRenders = 0
+                if fadeEdges, let channels = buffer.floatChannelData {
+                    let fadeInFrames = max(1, Int(0.120 * outputRate))
+                    let fadeOutFrames = max(1, Int(0.180 * outputRate))
+                    for index in 0..<Int(buffer.frameLength) {
+                        let absolute = rendered + AVAudioFramePosition(index)
+                        let incoming = min(1, Double(absolute) / Double(fadeInFrames))
+                        let outgoing = min(1, Double(totalFrames - 1 - absolute) /
+                                           Double(fadeOutFrames))
+                        let gain = Float(sin(.pi * 0.5 * max(0, min(incoming, outgoing))))
+                        for channel in 0..<Int(buffer.format.channelCount) {
+                            channels[channel][index] *= gain
+                        }
+                    }
+                }
                 try outputFile.write(from: buffer)
                 rendered += AVAudioFramePosition(buffer.frameLength)
 
