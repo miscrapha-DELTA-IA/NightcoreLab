@@ -46,8 +46,11 @@ enum AlbumArtistCollectionResolver {
     }
 
     static func artistName(for track: Track) -> String? {
-        if normalize(track.cleanArtist) != nil {
-            return track.cleanArtist?.replacingOccurrences(of: "(?i)\\s*(-\\s*topic|official artist channel|official|vevo)$", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let raw = track.cleanArtist {
+            let clean = raw.replacingOccurrences(
+                of: "(?i)\\s*(-\\s*topic|official artist channel|official|vevo)$",
+                with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalize(clean) != nil { return clean }
         }
         // Generic YouTube and old ID3 data often embed Artist - Title.
         for separator in [" - ", " – ", " — "] {
@@ -93,12 +96,22 @@ enum AlbumArtistCollectionResolver {
             }
         }
         // Prefer local identities when the same recording is in a catalog.
-        var recordings = Set<String>()
-        tracks = tracks.filter { track in
+        var recordings: [String: Int] = [:]
+        var merged: [Track] = []
+        for track in tracks {
             let artist = artistKey(track) ?? track.id
-            let title = normalize(track.cleanTitle ?? track.title) ?? track.id
-            return recordings.insert(artist + "|" + title).inserted
+            let title = normalize(MusicCatalogService.cleanedTitle(track)) ?? track.id
+            let key = artist + "|" + title
+            if let index = recordings[key] {
+                if normalize(merged[index].album) == nil { merged[index].album = albumTitle(for: track) }
+                if merged[index].trackNumber == nil { merged[index].trackNumber = track.trackNumber }
+                if merged[index].collectionID == nil { merged[index].collectionID = track.collectionID }
+            } else {
+                recordings[key] = merged.count
+                merged.append(track)
+            }
         }
+        tracks = merged
         let anchor = tracks[0]
         let album = albumTitle(for: anchor)
         let albumKey = normalize(album)

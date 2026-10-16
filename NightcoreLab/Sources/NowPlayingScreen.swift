@@ -851,32 +851,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         unifiedPlayerCard
             .overlay(alignment: .top) {
                 GeometryReader { card in
-                    VStack(spacing: 0) {
-                        SearchDrawerHandle(state: $searchDrawer, accent: appTheme.accent)
-                        ScrollView {
-                            searchDrawerContent(searchDrawer.focusRequest)
-                                .padding(12)
-                        }
-                        .scrollDismissesKeyboard(.interactively)
-                        .frame(height: searchDrawer.isOpen ? 340 : 0)
-                        .opacity(searchDrawer.isOpen ? 1 : 0)
-                        .clipped()
-                        .allowsHitTesting(searchDrawer.isOpen)
-                        .accessibilityHidden(!searchDrawer.isOpen)
-                        .background {
-                            if reduceTransparency {
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color.black)
-                            } else {
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(.ultraThinMaterial)
-                            }
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .strokeBorder(appTheme.accent.opacity(0.32), lineWidth: 1)
-                                .allowsHitTesting(false)
-                        }
+                    RetractableMusicDrawer(state: $searchDrawer, accent: appTheme.accent) {
+                        searchDrawerContent(searchDrawer.focusRequest)
                     }
                     .offset(y: card.size.height - 3)
                 }
@@ -1149,9 +1125,53 @@ struct LyricsFadeMask: View {
 
 // MARK: - Header: mesma view, dois layouts (AnyLayout preserva identidade)
 
+private struct RetractableMusicDrawer<Content: View>: View {
+    @Binding var state: SearchDrawerState
+    let accent: Color
+    @ViewBuilder var content: () -> Content
+    @GestureState private var dragTranslation: CGFloat = 0
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var body: some View {
+                    VStack(spacing: 0) {
+                        SearchDrawerHandle(state: $state, accent: accent)
+                            .simultaneousGesture(DragGesture(minimumDistance: 12)
+                                .updating($dragTranslation) { value, translation, _ in translation = value.translation.height }
+                                .onEnded { value in
+                                    guard abs(value.translation.height) > 24 else { return }
+                                    if value.translation.height < 0 { state.openForSearch() }
+                                    else { state.close() }
+                                })
+                        ScrollView {
+                            content()
+                                .padding(12)
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                        .frame(height: state.isOpen ? 340 : 0)
+                        .opacity(state.isOpen ? 1 : 0)
+                        .clipped()
+                        .allowsHitTesting(state.isOpen)
+                        .accessibilityHidden(!state.isOpen)
+                        .background {
+                            if reduceTransparency {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(Color.black)
+                            } else {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            }
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(accent.opacity(0.32), lineWidth: 1)
+                                .allowsHitTesting(false)
+                        }
+                    }
+        .offset(y: max(-40, min(40, dragTranslation)))
+    }
+}
+
 private struct SearchDrawerHandle: View {
     @Binding var state: SearchDrawerState
-    @GestureState private var dragTranslation: CGFloat = 0
     let accent: Color
     @Environment(PanelStore.self) private var panels
 
@@ -1192,14 +1212,6 @@ private struct SearchDrawerHandle: View {
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(accent.opacity(0.55), lineWidth: 1))
         .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
-        .offset(y: max(-24, min(24, dragTranslation)))
-        .simultaneousGesture(DragGesture(minimumDistance: 12)
-            .updating($dragTranslation) { value, translation, _ in translation = value.translation.height }
-            .onEnded { value in
-                guard abs(value.translation.height) > 24 else { return }
-                if value.translation.height < 0 { state.openForSearch() }
-                else { state.close() }
-            })
         .frame(maxWidth: .infinity)
     }
 }

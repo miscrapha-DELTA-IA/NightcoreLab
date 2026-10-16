@@ -1302,8 +1302,11 @@ struct ContentView: View {
         let token = playbackTransition.begin(trackID: track.id)
         downloader.select(track, onReady: { localURL, downloadedCoverURL in
             guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
+            Task { @MainActor in
             do {
-                try audio.load(url: localURL)
+                let preparedFile = try await AudioFilePreparation.open(localURL)
+                guard playbackTransition.isCurrent(token, trackID: track.id) else { return }
+                try audio.load(url: localURL, preparedFile: preparedFile)
                 if let resumeAt, resumeAt > 0, resumeAt < audio.duration {
                     audio.seek(to: resumeAt)
                 }
@@ -1371,6 +1374,7 @@ struct ContentView: View {
                     errorMessage = DownloadFailureMessage.describe(error)
                 }
                 if resumingPrevious { resumeTrack = track }
+            }
             }
         }, onFailure: { message in
             guard playbackTransition.didFail(token, trackID: track.id) else { return }

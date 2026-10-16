@@ -46,6 +46,9 @@ final class Stage42CatalogAndDownloadTests: XCTestCase {
         XCTAssertEqual(AlbumArtistCollectionResolver.artistName(for: track), "Artist")
         XCTAssertNil(AlbumArtistCollectionResolver.albumTitle(for: track))
         XCTAssertEqual(MusicCatalogService.query(for: track), "Artist Song")
+        let official = Track(id: "12345678901", title: "Song (Official Audio)",
+                             thumbnailURL: nil, cleanArtist: "Artist - Topic")
+        XCTAssertEqual(MusicCatalogService.bestMatch([official], for: track)?.id, official.id)
     }
 
     func testOfflineCatalogRetainsDeterministicLocalTracks() async {

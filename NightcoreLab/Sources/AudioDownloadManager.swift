@@ -529,7 +529,9 @@ extension AudioDownloadManager: DownloadManagerDelegate {
             track = Track(id: track.id, title: title ?? track.title,
                           thumbnailURL: cover?.scheme == "https" ? cover : track.thumbnailURL,
                           cleanArtist: track.cleanArtist, cleanTitle: track.cleanTitle,
-                          album: track.album, duration: track.duration, trackNumber: track.trackNumber)
+                          album: track.album, duration: track.duration, trackNumber: track.trackNumber,
+                          catalogProvider: track.catalogProvider, collectionID: track.collectionID,
+                          artistID: track.artistID, streamVideoID: track.streamVideoID)
         }
         do {
             var protected = Set(tracks.values.map(\.id))
@@ -581,7 +583,9 @@ extension AudioDownloadManager: DownloadManagerDelegate {
         let retryable: Bool
         switch error {
         case .serverError(let status): retryable = [429, 502, 503, 504].contains(status)
-        case .transportError: retryable = true
+        case .transportError(let network, _):
+            retryable = [.timedOut, .networkConnectionLost, .cannotConnectToHost,
+                         .notConnectedToInternet, .dnsLookupFailed].contains(network.code)
         default: retryable = false
         }
         guard retryable, attempt < 2 else {
@@ -630,6 +634,13 @@ enum DownloadFailureMessage {
         if let status, status >= 400 {
             if status == 429 { return "Servidor ocupado (HTTP 429). Aguarde um minuto e tente novamente." }
             return "O servidor recusou o áudio (HTTP \(status)). Tente novamente ou escolha outra versão."
+        }
+        if let transfer = error as? DownloadError {
+            switch transfer {
+            case .serverError(let status): return describe(URLError(.badServerResponse), status: status)
+            case .transportError(let network, _): return describe(network)
+            default: break
+            }
         }
         let ns = error as NSError
         if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {

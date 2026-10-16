@@ -270,7 +270,7 @@ final class AudioEngineManager {
 
     // MARK: Carregar arquivo
 
-    func load(url: URL) throws {
+    func load(url: URL, preparedFile: AVAudioFile? = nil) throws {
         stemPrepareTask?.cancel()
         stemPrepareTask = nil
         stemRampTask?.cancel()
@@ -285,12 +285,12 @@ final class AudioEngineManager {
         centerCutRampTask?.cancel()
         centerCutPlayer.stop()
         centerCutFile = nil
-        if let centerCutURL { try? FileManager.default.removeItem(at: centerCutURL) }
+        if let centerCutURL { AudioFilePreparation.remove(centerCutURL) }
         centerCutURL = nil
         centerCutEnabled = false
         interruptedSourceURL = nil // A replacement must never resume a prior source.
         // Core Audio decodifica MP3/AAC para PCM float; não há conversão com perdas na importação.
-        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let file = try preparedFile ?? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard file.length > 0, file.processingFormat.sampleRate > 0,
               (1...2).contains(file.processingFormat.channelCount) else {
             throw AudioEngineError.unsupportedAudio
@@ -1873,3 +1873,20 @@ private extension Comparable {
     }
 }
 
+
+/// Container probing is disk I/O; graph installation remains on the main actor.
+enum AudioFilePreparation {
+    private static let queue = DispatchQueue(label: "nightcore.audio.open", qos: .utility)
+    static func open(_ url: URL) async throws -> AVAudioFile {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result {
+                    try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+                })
+            }
+        }
+    }
+    static func remove(_ url: URL) {
+        queue.async { try? FileManager.default.removeItem(at: url) }
+    }
+}

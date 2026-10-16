@@ -46,12 +46,20 @@ actor MusicCatalogService {
         }
     }
 
-    static func query(for track: Track) -> String {
+    static func cleanedTitle(_ track: Track) -> String {
         let artist = AlbumArtistCollectionResolver.artistName(for: track)
         var title = track.cleanTitle ?? track.title
-        if let artist, title.hasPrefix(artist + " - ") { title = String(title.dropFirst(artist.count + 3)) }
-        title = title.replacingOccurrences(of: "(?i)\\s*[\\[(](official[^\\])]*|lyrics?|audio|video)[\\])]", with: "", options: .regularExpression)
-        return [artist, title].compactMap { $0 }.joined(separator: " ")
+        if let artist {
+            for separator in [" - ", " – ", " — "] where title.hasPrefix(artist + separator) {
+                title = String(title.dropFirst(artist.count + separator.count))
+            }
+        }
+        return title.replacingOccurrences(of: "(?i)\\s*[\\[(](official[^\\])]*|lyrics?|audio|video)[\\])]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static func query(for track: Track) -> String {
+        [AlbumArtistCollectionResolver.artistName(for: track), cleanedTitle(track)]
+            .compactMap { $0 }.joined(separator: " ")
     }
 
     private func request(_ base: String, _ params: [String: String] = [:]) throws -> URLRequest {
@@ -75,10 +83,10 @@ actor MusicCatalogService {
         return try JSONDecoder().decode(DeezerResponse.self, from: bytes).data.map(\.track)
     }
     static func bestMatch(_ candidates: [Track], for anchor: Track) -> Track? {
-        let title = MetadataCleaner.key(anchor.cleanTitle ?? anchor.title)
+        let title = MetadataCleaner.key(cleanedTitle(anchor))
         let artist = AlbumArtistCollectionResolver.artistName(for: anchor)
         return candidates.filter { candidate in
-            let key = MetadataCleaner.key(candidate.cleanTitle ?? candidate.title)
+            let key = MetadataCleaner.key(cleanedTitle(candidate))
             let titleMatches = key == title || title.hasSuffix(" " + key)
             let artistMatches = artist == nil || AlbumArtistCollectionResolver.normalize(artist) == AlbumArtistCollectionResolver.normalize(candidate.cleanArtist)
             return titleMatches && artistMatches
@@ -109,7 +117,7 @@ actor MusicCatalogService {
                     candidates += (try? await apple("lookup", ["id": id, "entity": "song", "limit": "200"])) ?? []
                 }
                 if let id = resolved.artistID {
-                    candidates += (try? await apple("lookup", ["id": id, "entity": "song", "limit": "25", "sort": "popular"])) ?? []
+                    candidates += (try? await apple("lookup", ["id": id, "entity": "song", "limit": "25"])) ?? []
                 }
             } else if resolved.catalogProvider == "deezer" {
                 if let id = resolved.collectionID {
