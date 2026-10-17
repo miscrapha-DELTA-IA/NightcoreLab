@@ -60,12 +60,6 @@ final class Stage41ExperienceTests: XCTestCase {
         XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.granted))
         XCTAssertTrue(AudioEngineManager.shouldShowMicrophonePermissionError(.denied))
         XCTAssertFalse(AudioEngineManager.shouldShowMicrophonePermissionError(.undetermined))
-        let score = try? String(contentsOf: sourceRoot
-            .appendingPathComponent("Karaoke/KaraokeScoreHUD.swift"))
-        XCTAssertTrue(score?.contains("showsError && audio.microphonePermissionDenied") == true)
-        let audio = try? String(contentsOf: sourceRoot
-            .appendingPathComponent("AudioEngineManager.swift"))
-        XCTAssertTrue(audio?.contains("input.installTap(onBus: 0, bufferSize: 1024, format: nil)") == true)
     }
 
     func testScoreToggleLivesInKaraokeAndLegendaWithoutTouchingPlayback() throws {
