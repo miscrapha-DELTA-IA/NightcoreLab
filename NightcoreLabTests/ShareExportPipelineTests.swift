@@ -442,7 +442,7 @@ final class ShareExportPipelineTests: XCTestCase {
                       "Desligado", "Fluido", "Reativo", "Magazine Clout",
                       "Brand Logo Clout", "Gothic & Chicano", "Acid Zine Clout",
                       "Sem Legenda", "Capa & Música",
-                      "Placar Karaokê", "Marca Nightcore Lab",
+                      "Placar Karaokê", "Marca Gnarly",
                       "Exportar Vídeo (.mp4)", "Salvar Imagem"] {
             XCTAssertTrue(ui.contains(title), "Missing direct export control \(title)")
         }

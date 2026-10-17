@@ -18,7 +18,17 @@ struct AppIconView: View {
     }
 }
 
-/// The same icon, spacing and title are used in the app chrome and rendered media.
+/// Official Gnarly logo used when a song has no cover image.
+struct GnarlyArtworkPlaceholder: View {
+    var body: some View {
+        Image("NightcoreLogo")
+            .resizable()
+            .scaledToFill()
+            .accessibilityHidden(true)
+    }
+}
+
+/// The same official artwork is used in the app chrome and rendered media.
 struct NightcoreBrandLockup: View {
     let theme: AppTheme
     var iconSize: CGFloat = 38
@@ -28,7 +38,7 @@ struct NightcoreBrandLockup: View {
         HStack(spacing: 8) {
             AppIconView(theme: theme, showsBackground: false)
                 .frame(width: iconSize, height: iconSize)
-            Text("Nightcore Lab")
+            Text("Gnarly")
                 .font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -40,6 +50,7 @@ struct NightcoreBrandLockup: View {
         .foregroundStyle(.white)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("brand.nightcoreLab")
+        .accessibilityLabel("Gnarly")
     }
 }
 
@@ -87,10 +98,10 @@ struct TrackIdentityPill: View {
             AsyncImage(url: artworkURL) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
-                Color.black.overlay(Image(systemName: "music.note"))
+                GnarlyArtworkPlaceholder()
             }
         } else {
-            Color.black.overlay(Image(systemName: "music.note"))
+            GnarlyArtworkPlaceholder()
         }
     }
 }

@@ -328,7 +328,7 @@ struct StoryDraftPreview: View {
                                     showsScoreStamp.toggle()
                                 }
                                 .disabled(frozenRequest.scoreStamp == nil)
-                                chip("Marca Nightcore Lab", enabled: showsBrand) {
+                                chip("Marca Gnarly", enabled: showsBrand) {
                                     showsBrand.toggle()
                                 }
                             }

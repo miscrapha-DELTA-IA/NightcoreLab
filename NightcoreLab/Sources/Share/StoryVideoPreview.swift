@@ -81,7 +81,7 @@ struct StoryVideoPreview: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
-                ShareLink(item: url, preview: SharePreview("Nightcore Lab Story")) {
+                ShareLink(item: url, preview: SharePreview("Gnarly Story")) {
                     Label("Compartilhar arquivo MP4", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
