@@ -406,7 +406,7 @@ final class AudioEngineManager {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
             // Inspect input only AFTER activating the recording session.
             guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
@@ -485,7 +485,7 @@ final class AudioEngineManager {
             // message is NEVER derived from route/format/session exceptions.
             if session.category != .playAndRecord {
                 try session.setCategory(.playAndRecord, mode: .default,
-                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             }
             try session.setActive(true)
             guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
@@ -1257,7 +1257,7 @@ final class AudioEngineManager {
             // Prepare input capability before a song is scheduled. A first mic
             // permission grant cannot reset an already playing player node.
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+                                    options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
         } catch {
             #if DEBUG

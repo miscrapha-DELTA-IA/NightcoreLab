@@ -49,9 +49,39 @@ final class KaraokeCleanModeTests: XCTestCase {
 
     @MainActor
     func testCleanModeDoesNotChangeLyricsOffsetOrUserPanelChoices() {
-        let store = LyricsStore()
+        let defaults = isolatedDefaults()
+        let store = LyricsStore(offsetDefaults: defaults)
         store.userOffset = 1.5
         XCTAssertFalse(KaraokeCleanLayout.showsQuickThemeBar(cleanMode: true))
         XCTAssertEqual(store.userOffset, 1.5)
     }
+
+    @MainActor
+    func testLyricCalibrationPersistsAndScalesWithPlaybackSpeed() {
+        let defaults = isolatedDefaults()
+        let store = LyricsStore(offsetDefaults: defaults)
+        store.userOffset = 0.2
+        XCTAssertEqual(store.sourceTimelineOffset(for: FixedClock(speed: 2)), 0.4,
+                       accuracy: 0.0001)
+        XCTAssertEqual(LyricsStore(offsetDefaults: defaults).userOffset, 0.2,
+                       accuracy: 0.0001)
+    }
+
+    func testOutputLatencyIsConvertedToSourceTimeAtDoubleSpeed() {
+        XCTAssertEqual(EnginePlaybackClock.audibleSourceTime(
+            anchorMedia: 10, elapsed: 0.1, speed: 2, outputLatency: 0.2),
+            9.8, accuracy: 0.0001)
+    }
+
+    private func isolatedDefaults() -> UserDefaults {
+        let suite = "KaraokeCleanModeTests.\(UUID().uuidString)"
+        return UserDefaults(suiteName: suite)!
+    }
+}
+
+private final class FixedClock: PlaybackClock, @unchecked Sendable {
+    let playbackSpeed: Double
+    init(speed: Double) { playbackSpeed = speed }
+    var isPlaying: Bool { true }
+    var lyricTime: TimeInterval { 0 }
 }
