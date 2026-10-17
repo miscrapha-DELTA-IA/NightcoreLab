@@ -918,6 +918,7 @@ struct ContentView: View {
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: 42, height: 42)
+                                .background(GnarlyArtworkPlaceholder())
                                 .clipShape(RoundedRectangle(cornerRadius: 9))
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(track.title)
@@ -1637,6 +1638,7 @@ private struct RelatedVideoCard: View {
                     .transition(.fade(duration: 0.2))
                     .scaledToFill()
                 .frame(width: 152, height: 120)
+                .background(GnarlyArtworkPlaceholder())
                 .opacity(0.55)
 
                 LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.85)],
@@ -1700,7 +1702,9 @@ private struct VinylPlaybackArtwork: View {
                             .rotationEffect(.degrees(angle(at: context.date)))
                     } else {
                         // Sem capa, carregando ou com falha: mantém o botão utilizável.
-                        Circle().fill(theme.accent)
+                        GnarlyArtworkPlaceholder()
+                            .frame(width: 64, height: 64)
+                            .clipShape(Circle())
                     }
 
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")

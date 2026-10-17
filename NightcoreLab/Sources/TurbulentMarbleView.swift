@@ -315,7 +315,7 @@ struct TurbulentMarbleView: View {
     ZStack {
         TurbulentMarbleView(theme: .acid)
         Color.black.opacity(0.35)                   // scrim: garante contraste do karaokê
-        Text("Nightcore Lab").font(.largeTitle.bold()).foregroundStyle(.white)
+        AppIconView().frame(width: 120, height: 120)
     }
 }
 

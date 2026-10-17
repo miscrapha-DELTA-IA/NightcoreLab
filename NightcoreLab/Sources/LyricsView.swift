@@ -232,6 +232,11 @@ struct LyricsView: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: 50, height: 50)
+                            .background(GnarlyArtworkPlaceholder())
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        GnarlyArtworkPlaceholder()
+                            .frame(width: 50, height: 50)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     Text(track.title)

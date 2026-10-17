@@ -140,6 +140,7 @@ private struct CoverFill: View {
                 .transition(.fade(duration: 0.2))
                 .scaledToFill()
                 .frame(width: geometry.size.width, height: geometry.size.height)
+                .background(GnarlyArtworkPlaceholder())
                 .clipped()
         }
     }
@@ -187,6 +188,7 @@ private struct MarqueeCover: View {
             .transition(.fade(duration: 0.2))
             .scaledToFill()
             .frame(width: size.width, height: size.height)
+            .background(GnarlyArtworkPlaceholder())
             .clipped()
     }
 

@@ -1285,8 +1285,7 @@ private struct CoverArt: View {
             case .success(let image):
                 image.resizable().scaledToFill()
             default:
-                Rectangle().fill(.white.opacity(0.08))
-                    .overlay(Image(systemName: "music.note").foregroundStyle(.white.opacity(0.4)))
+                GnarlyArtworkPlaceholder()
             }
         }
     }
@@ -1369,6 +1368,12 @@ private struct BlurredCover: View {
                             .opacity(0.66)
                             .blur(radius: 2)
                             .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+                    } else {
+                        GnarlyArtworkPlaceholder()
+                            .frame(width: KaraokeLayoutMetrics.coverEdge(for: viewport.size),
+                                   height: KaraokeLayoutMetrics.coverEdge(for: viewport.size))
+                            .opacity(0.66)
+                            .blur(radius: 2)
                     }
                 }
                 .frame(width: viewport.size.width, height: viewport.size.height)
