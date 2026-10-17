@@ -36,7 +36,7 @@ enum TypographyAnimationEngine {
             // remain those produced by the existing TypographyResolver.
             return state(scale: scaled, glow: glowing, intensity: effect)
 
-        case .magazineCutout:
+        case .magazineCutout, .vinylSticker, .dymoTicket, .liquidCapsule:
             // The legacy view treated every word on the active line as active,
             // and upcoming words with more than 10% fill as visually active.
             let tileActive = isActiveLine ||

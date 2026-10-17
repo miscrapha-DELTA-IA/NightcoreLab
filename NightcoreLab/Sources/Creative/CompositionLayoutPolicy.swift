@@ -48,7 +48,7 @@ struct CompositionLayoutPolicy: Equatable, Sendable {
                 lyricsArea: CGRect(x: 48, y: 116, width: 444, height: 310),
                 footerArea: CGRect(x: 30, y: 485, width: 480, height: 35),
                 materialViewport: canvas, cropPolicy: policy,
-                artworkSide: 136, lyricFontSize: 29,
+                artworkSide: 150, lyricFontSize: 29,
                 neighboringLyricFontSize: 18)
         }
         // All non-square, non-portrait ExportProfile targets are 16:9.
@@ -61,7 +61,7 @@ struct CompositionLayoutPolicy: Equatable, Sendable {
             lyricsArea: CGRect(x: 110, y: 130, width: 740, height: 270),
             footerArea: CGRect(x: 40, y: 486, width: 880, height: 34),
             materialViewport: canvas, cropPolicy: policy,
-            artworkSide: 152, lyricFontSize: 35,
+            artworkSide: 190, lyricFontSize: 35,
             neighboringLyricFontSize: 21)
     }
 }

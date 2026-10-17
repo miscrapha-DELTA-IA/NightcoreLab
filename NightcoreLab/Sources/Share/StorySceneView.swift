@@ -94,26 +94,27 @@ struct StorySceneView: View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
-            Color.black.opacity(0.40)
+            edgeVignette
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             VStack(spacing: 0) {
                 HStack {
-                    Text("NIGHTCORELAB")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .tracking(2.0)
+                    brandTitle(size: 18)
                     Spacer()
                     Text(request.theme.displayName.uppercased())
                         .font(.system(size: 13, weight: .bold))
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(.black.opacity(0.45), in: Capsule())
                 }
-                .padding(.top, 50)
+                .padding(.top, 42)
+
+                trackHeader
+                    .padding(.top, 16)
 
                 if request.mode == .player {
-                    Spacer(minLength: 25)
+                    Spacer(minLength: 20)
                     playerCard
-                    Spacer(minLength: 45)
+                    Spacer(minLength: 30)
                 } else {
                     Spacer(minLength: 70)
                     lyricsCard
@@ -145,14 +146,16 @@ struct StorySceneView: View {
         ZStack {
             background
                 .storyLayer(.background, frame: resolvedCompositionFrame)
-            Color.black.opacity(0.40)
+            edgeVignette
                 .storyLayer(.overlay, frame: resolvedCompositionFrame)
 
             HStack {
-                Text("NIGHTCORELAB")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .tracking(2)
+                brandTitle(size: 15)
                 Spacer()
+                Text(request.title)
+                    .font(.system(size: 14, weight: .bold))
+                    .lineLimit(1)
+                    .frame(maxWidth: layout.titleArea.width * 0.38)
                 Text(request.theme.displayName.uppercased())
                     .font(.system(size: 12, weight: .bold))
                     .padding(.horizontal, 10).padding(.vertical, 7)
@@ -190,6 +193,51 @@ struct StorySceneView: View {
         .environment(\.colorScheme, .dark)
     }
 
+    private func brandTitle(size: CGFloat) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "waveform")
+                .foregroundStyle(request.theme.accent)
+            Text("NIGHTCORELAB").tracking(1.4)
+        }
+        .font(.system(size: size, weight: .heavy, design: .rounded))
+    }
+
+    private var trackHeader: some View {
+        HStack(spacing: 14) {
+            artworkTile
+                .frame(width: 76, height: 76)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(request.title)
+                    .font(.system(size: 21, weight: .bold))
+                    .lineLimit(2)
+                Text(request.artist)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20)
+            .strokeBorder(.white.opacity(0.20)))
+        .accessibilityIdentifier("story.trackHeader")
+    }
+
+    /// Shade only the text areas so the animated material remains visible.
+    private var edgeVignette: some View {
+        LinearGradient(stops: [
+            .init(color: .black.opacity(0.20), location: 0),
+            .init(color: .clear, location: 0.20),
+            .init(color: .clear, location: 0.80),
+            .init(color: .black.opacity(0.20), location: 1)
+        ], startPoint: .top, endPoint: .bottom)
+        .allowsHitTesting(false)
+    }
+
     @ViewBuilder
     private var background: some View {
         if request.mode == .lyrics && request.karaokeBackground == .cover,
@@ -214,8 +262,8 @@ struct StorySceneView: View {
     private var playerCard: some View {
         VStack(spacing: layoutPolicy == nil ? 13 : 7) {
             artworkTile
-                .frame(width: layoutPolicy?.artworkSide ?? 230,
-                       height: layoutPolicy?.artworkSide ?? 230)
+                .frame(width: layoutPolicy?.artworkSide ?? 285,
+                       height: layoutPolicy?.artworkSide ?? 285)
                 .storyLayer(.artwork, frame: resolvedCompositionFrame)
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
@@ -367,7 +415,7 @@ private struct StoryLyricLine: View {
                     maxWordWidth: maxWordWidth,
                     fontSize: fontSize,
                     typographyStyle: frame.preset.style,
-                    magazineAppearance: resolved.magazine?.legacy,
+                    magazineAppearance: resolved.magazine?.appearance(for: frame.preset.style),
                     isCurrentLine: frame.status == .active,
                     isPastLine: frame.status == .past,
                     animation: animation,
