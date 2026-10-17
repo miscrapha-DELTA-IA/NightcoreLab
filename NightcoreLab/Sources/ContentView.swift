@@ -1339,6 +1339,7 @@ struct ContentView: View {
                     self.pendingMix = nil
                 }
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
+                audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL)
                 playingTrackID = track.id
                 currentTrack = committedTrack
                 finishDrawerSelection(track.id)
@@ -1403,6 +1404,7 @@ struct ContentView: View {
                 audio.seek(to: saved.position)
             }
             coverURL = saved.track.thumbnailURL
+            audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local)
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
             // AudioEngineManager.load() does not start playback.
@@ -1518,6 +1520,7 @@ struct ContentView: View {
             let destination = folder.appendingPathComponent(url.lastPathComponent)
             try FileManager.default.copyItem(at: url, to: destination)
             try audio.load(url: destination)
+            audio.loadNowPlayingArtwork(coverURL: nil, mediaURL: destination)
             imported = true
             coverURL = nil
             playingTrackID = nil

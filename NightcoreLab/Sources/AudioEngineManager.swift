@@ -180,6 +180,8 @@ final class AudioEngineManager {
 
     @ObservationIgnored private var audioFile: AVAudioFile?
     @ObservationIgnored private var sourceURL: URL?
+    @ObservationIgnored private var nowPlayingArtwork: MPMediaItemArtwork?
+    @ObservationIgnored private var artworkLoadTask: Task<Void, Never>?
     /// Read-only source for offline visual evidence. Live RMS/bass are
     /// independently obtained from the existing mixer through liveVisualMeter.
     var visualAnalysisURL: URL? { sourceURL }
@@ -268,6 +270,8 @@ final class AudioEngineManager {
         centerCutAvailable = file.processingFormat.channelCount == 2
         sourceURL = url
         playbackSourceRevision &+= 1
+        artworkLoadTask?.cancel()
+        nowPlayingArtwork = NowPlayingArtworkLoader.officialLogo()
         performanceRecorder.clearAll()
         performanceRecordingSourceRevision = nil
         padAccentEmitter.clear()
@@ -467,19 +471,28 @@ final class AudioEngineManager {
         else { scheduleIdleStop() }
     }
 
-    /// Scoring only: native input tap on the existing running engine. No player
-    /// stop, reschedule, graph connection or audio category change on entry.
+    /// Scoring only: native input tap on the existing engine. Keep the player
+    /// running when its graph survives input activation; recover its source
+    /// position if the hardware restarts the graph.
     var karaokeMicrophoneActive: Bool { karaokeCaptureActive || vocalCaptureActive }
     func beginKaraokeMicrophone() async -> Bool {
         if karaokeMicrophoneActive { return true }
         karaokeGeneration &+= 1
         let requested = karaokeGeneration
+        let sourceRevision = playbackSourceRevision
         let permission = AVAudioApplication.shared.recordPermission
         let allowed = permission == .granted ? true :
             (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
-        guard allowed, requested == karaokeGeneration, !Task.isCancelled else { return false }
+        guard allowed, requested == karaokeGeneration,
+              sourceRevision == playbackSourceRevision, !Task.isCancelled else { return false }
+        let wasPlaying = isPlaying
+        let position = currentTime
+        let wasReconfiguringGraph = isReconfiguringGraph
+        isReconfiguringGraph = true // Ignore stale player completions during route negotiation.
+        defer { isReconfiguringGraph = wasReconfiguringGraph }
         let session = AVAudioSession.sharedInstance()
         let capture = KaraokeMicrophoneCapture()
+        var tappedInput: AVAudioInputNode?
         do {
             // Mic permission is independent of SFSpeechRecognizer. A denied
             // message is NEVER derived from route/format/session exceptions.
@@ -490,41 +503,71 @@ final class AudioEngineManager {
             try session.setActive(true)
             guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
             let input = engine.inputNode
-            let hardware = input.inputFormat(forBus: 0)
             let native = input.outputFormat(forBus: 0)
             guard native.sampleRate.isFinite, native.sampleRate > 0,
                   native.channelCount > 0 else {
                 throw AudioEngineError.unsupportedAudio
             }
-            let tapFormat: AVAudioFormat? = hardware.sampleRate.isFinite &&
-                hardware.sampleRate > 0 && hardware.channelCount > 0 ? hardware : nil
             if let previous = karaokeInput { previous.removeTap(onBus: 0) }
             let scoringClock = lyricsClock
-            input.installTap(onBus: 0, bufferSize: 1024,
-                             format: tapFormat) { buffer, _ in
+            // The tap observes the input node's output format. Supplying its
+            // input-bus format can reformat an already connected output bus.
+            input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
                 capture.capture(buffer, sourceTime: scoringClock.lyricTime)
             }
+            tappedInput = input
             guard requested == karaokeGeneration, !Task.isCancelled else {
                 input.removeTap(onBus: 0); capture.stop(); return false
+            }
+            cancelIdleStop()
+            restorePlaybackAfterKaraokeInputChange(wasPlaying: wasPlaying,
+                at: position, sourceRevision: sourceRevision)
+            if !engine.isRunning { try engine.start() }
+            guard engine.isRunning, !wasPlaying || isPlaying else {
+                throw AudioEngineError.renderFailed
             }
             karaokeInput = input
             karaokeCapture = capture
             karaokeCaptureActive = true
             return true
         } catch {
+            tappedInput?.removeTap(onBus: 0)
             capture.stop()
+            restorePlaybackAfterKaraokeInputChange(wasPlaying: wasPlaying,
+                at: position, sourceRevision: sourceRevision)
+            if !wasPlaying { scheduleIdleStop() }
             // An audio route or format failure must not report permissionDenied.
             NSLog("Karaoke microphone hardware initialization failed: %@", error.localizedDescription)
             return false
         }
     }
+
+    private func restorePlaybackAfterKaraokeInputChange(
+        wasPlaying: Bool, at position: TimeInterval, sourceRevision: Int
+    ) {
+        guard wasPlaying, sourceRevision == playbackSourceRevision,
+              !engine.isRunning || !player.isPlaying || !isPlaying else { return }
+        lastKnownTime = position
+        isPlaying = true // seek preserves and resumes the pre-activation transport state.
+        seek(to: position)
+    }
+
     func endKaraokeMicrophone() {
         karaokeGeneration &+= 1
+        let wasPlaying = isPlaying
+        let position = currentTime
+        let sourceRevision = playbackSourceRevision
+        let wasReconfiguringGraph = isReconfiguringGraph
+        isReconfiguringGraph = true
         if let input = karaokeInput { input.removeTap(onBus: 0) }
         karaokeInput = nil
         karaokeCapture?.stop()
         karaokeCapture = nil
         karaokeCaptureActive = false
+        restorePlaybackAfterKaraokeInputChange(wasPlaying: wasPlaying,
+            at: position, sourceRevision: sourceRevision)
+        isReconfiguringGraph = wasReconfiguringGraph
+        if !wasPlaying && !wasReconfiguringGraph { scheduleIdleStop() }
     }
 
     func karaokeVoiceFrame() -> KaraokeVoiceFrame {
@@ -763,14 +806,16 @@ final class AudioEngineManager {
 
     private func scheduleIdleStop() {
         cancelIdleStop()
-        guard !performanceModePresented, !vocalCaptureActive else { return }
+        guard !performanceModePresented, !vocalCaptureActive,
+              !karaokeCaptureActive else { return }
         let generation = idleStopGeneration
         let deadline = ContinuousClock.now.advanced(by: idleStopDelay)
         idleStopTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
             guard !Task.isCancelled, let self,
                   generation == self.idleStopGeneration,
-                  !self.isPlaying, !self.performanceModePresented, !self.vocalCaptureActive else { return }
+                  !self.isPlaying, !self.performanceModePresented,
+                  !self.vocalCaptureActive, !self.karaokeCaptureActive else { return }
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
@@ -1118,6 +1163,21 @@ final class AudioEngineManager {
 
     // MARK: - Now Playing (Tela de Bloqueio / Control Center)
 
+    /// Cover loading is independent of transport. A late response cannot put
+    /// a previous song's thumbnail onto the current Lock Screen card.
+    func loadNowPlayingArtwork(coverURL: URL?, mediaURL: URL? = nil) {
+        artworkLoadTask?.cancel()
+        let revision = playbackSourceRevision
+        artworkLoadTask = Task { [weak self] in
+            let artwork = await NowPlayingArtworkLoader.load(
+                coverURL: coverURL, mediaURL: mediaURL)
+            guard !Task.isCancelled, let self,
+                  self.playbackSourceRevision == revision else { return }
+            self.nowPlayingArtwork = artwork ?? NowPlayingArtworkLoader.officialLogo()
+            self.setupNowPlaying()
+        }
+    }
+
     /// Posição atual em segundos da música original (antes do speed).
     private var currentTime: TimeInterval {
         guard isPlaying else { return lastKnownTime }
@@ -1146,15 +1206,16 @@ final class AudioEngineManager {
         let elapsed = isPlaying ? currentTime : lastKnownTime
         let mode = speed > 1.001 ? "Nightcore" : (speed < 0.999 ? "Slowed" : "Original")
 
-        center.nowPlayingInfo = [
-            MPMediaItemPropertyTitle: fileName,
-            MPMediaItemPropertyArtist: "\(mode) · \(String(format: "%.2f×", speed))",
-            MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? Double(speed) : 0.0,
-            MPNowPlayingInfoPropertyDefaultPlaybackRate: Double(speed),
-            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
-        ]
+        var info = center.nowPlayingInfo ?? [:]
+        info[MPMediaItemPropertyTitle] = fileName
+        info[MPMediaItemPropertyArtist] = "\(mode) · \(String(format: "%.2f×", speed))"
+        info[MPMediaItemPropertyPlaybackDuration] = duration
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? Double(speed) : 0.0
+        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = Double(speed)
+        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
+        info[MPMediaItemPropertyArtwork] = nowPlayingArtwork
+        center.nowPlayingInfo = info
         updateRemoteCommandAvailability()
     }
 
