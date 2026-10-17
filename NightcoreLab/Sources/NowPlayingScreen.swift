@@ -985,7 +985,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                                    (showsKaraoke ? 0.8 : 0.6)),
                 playbackTime: startAt ?? audio.playbackTime, sourceDuration: audio.duration,
                 speed: audio.speed, lines: matchedLyrics,
-                lyricOffset: lyricsStore.userOffset, typography: storyTypography,
+                lyricOffset: lyricsStore.sourceTimelineOffset(for: audio.lyricsClock), typography: storyTypography,
                 typographyStyle: karaokeTypography,
                 includeAudio: includeAudio,
                 reactiveProgram: CreativePresetCatalog.effectiveProgram(
@@ -1052,27 +1052,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
 
     private func updateKaraokePresentation(_ shown: Bool) {
         lyricsStore.scoring.setKaraokePresented(shown, lines: lyricsStore.lines,
-            at: clock.lyricTime + lyricsStore.userOffset,
+            at: clock.lyricTime + lyricsStore.sourceTimelineOffset(for: clock),
             trackEnergy: { [weak audio] in audio?.liveVisualMeter.snapshot().rms ?? 0 })
-        guard shown, lyricsStore.status == .ready, !lyricsStore.lines.isEmpty else { return }
-        let revision = audio.playbackSourceRevision
-        Task { @MainActor in
-            let active = await audio.beginKaraokeMicrophone()
-            guard lyricsStore.scoring.isPresented,
-                  audio.playbackSourceRevision == revision else {
-                audio.endKaraokeMicrophone(); return
-            }
-            guard active else {
-                lyricsStore.scoring.stop(message: "Ative o microfone para pontuar.")
-                return
-            }
-            lyricsStore.scoring.start(mode: .microphone, lines: lyricsStore.lines,
-                                     at: clock.lyricTime + lyricsStore.userOffset)
-            lyricsStore.scoring.microphoneFrame = { [weak audio] _ in
-                audio?.karaokeVoiceFrame() ?? .silence
-            }
-            audio.karaokeCompletion = { [weak session = lyricsStore.scoring] in session?.finish() }
-        }
     }
 
     private var micButton: some View {
