@@ -16,6 +16,12 @@ final class NativeSpectralStemSeparatorTests: XCTestCase {
         XCTAssertLessThan(NativeSpectralStemSeparator.vocalMask(
             hertz: 1000, leftReal: 1, leftImag: 0,
             rightReal: 0, rightImag: 1), 0.2)
+        XCTAssertEqual(NativeVocalPitchReference.accuracy(
+            sung: 440, reference: 440, pitchShift: 0), 1)
+        XCTAssertEqual(NativeVocalPitchReference.accuracy(
+            sung: 880, reference: 440, pitchShift: 0), 1)
+        XCTAssertNil(NativeVocalPitchReference.accuracy(
+            sung: 0, reference: 440, pitchShift: 0))
     }
 
     func testProducesAlignedLocalStemsAndReportsCompletion() async throws {
@@ -76,6 +82,10 @@ final class NativeSpectralStemSeparatorTests: XCTestCase {
         let cached = try await StemSplitterEngine.prepare(source: source, cacheFolder: folder)
         XCTAssertEqual(cached.urls[.instrumental], asset.urls[.instrumental])
         XCTAssertEqual(cached.urls[.vocal], asset.urls[.vocal])
+        let pitchReference = try NativeVocalPitchReference.analyze(
+            vocalsURL: XCTUnwrap(asset.vocalURL))
+        XCTAssertTrue(pitchReference.hasVoicedSamples)
+        XCTAssertEqual(pitchReference.frequency(at: 0.05) ?? 0, 900, accuracy: 40)
 
         try await MainActor.run {
             let audio = AudioEngineManager()

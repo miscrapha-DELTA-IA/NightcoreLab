@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Four instant, phase-preserving masking controls in Música.
 struct StemMixerControls: View {
+    @Environment(LyricsStore.self) private var lyricsStore
     let audio: AudioEngineManager
     @State private var nativeTest = NativeStemTestState()
 
@@ -39,13 +40,14 @@ struct StemMixerControls: View {
             Text("Separação espectral nativa · teste IPA")
                 .font(.caption.bold())
             Button(nativeTest.isPreparing ? "Processando…" : "Preparar instrumental e voz") {
-                nativeTest.prepare(source: audio.visualAnalysisURL)
+                nativeTest.prepare(source: audio.visualAnalysisURL, scoring: lyricsStore.scoring)
             }
             .disabled(nativeTest.isPreparing || audio.visualAnalysisURL == nil)
             .accessibilityIdentifier("stem.native.prepare")
             if nativeTest.isPreparing {
                 ProgressView(value: Double(nativeTest.progress), total: 100) {
-                    Text("Separando no iPhone · \(nativeTest.progress)%")
+                    Text(nativeTest.isAnalyzingReference ? "Analisando referência vocal" :
+                         "Separando no iPhone · \(nativeTest.progress)%")
                 }
                 .accessibilityIdentifier("stem.native.progress")
             }
@@ -79,6 +81,7 @@ struct StemMixerControls: View {
 private final class NativeStemTestState {
     private(set) var progress = 0
     private(set) var isPreparing = false
+    private(set) var isAnalyzingReference = false
     private(set) var asset: StemAsset?
     private(set) var message: String?
     @ObservationIgnored private var sourceURL: URL?
@@ -92,9 +95,10 @@ private final class NativeStemTestState {
         message = nil
         progress = 0
         isPreparing = false
+        isAnalyzingReference = false
     }
 
-    func prepare(source: URL?) {
+    func prepare(source: URL?, scoring: KaraokeScoringSession) {
         guard let source, source.isFileURL else {
             message = "Carregue uma música local antes de separar."
             return
@@ -115,12 +119,33 @@ private final class NativeStemTestState {
                 guard !Task.isCancelled, self?.sourceURL == source else { return }
                 self?.asset = result
                 self?.progress = 100
-                self?.message = "Arquivos locais prontos. Compartilhe para ouvir ou salvar no aparelho."
+                if let vocalsURL = result.vocalURL {
+                    self?.isAnalyzingReference = true
+                    let analysis = Task.detached(priority: .utility) {
+                        try NativeVocalPitchReference.analyze(vocalsURL: vocalsURL)
+                    }
+                    do {
+                        let reference = try await withTaskCancellationHandler {
+                            try await analysis.value
+                        } onCancel: {
+                            analysis.cancel()
+                        }
+                        guard !Task.isCancelled, self?.sourceURL == source else { return }
+                        scoring.setNativeVocalReference(reference.hasVoicedSamples ? reference : nil)
+                        self?.message = reference.hasVoicedSamples ?
+                            "Stems e referência vocal prontos para o próximo canto." :
+                            "Stems prontos; não houve afinação vocal confiável para o placar."
+                    } catch {
+                        guard !Task.isCancelled, self?.sourceURL == source else { return }
+                        self?.message = "Stems prontos; a referência vocal não pôde ser analisada."
+                    }
+                }
             } catch {
                 guard !Task.isCancelled, self?.sourceURL == source else { return }
                 self?.message = "Não foi possível separar a música: \(error.localizedDescription)"
             }
             self?.isPreparing = false
+            self?.isAnalyzingReference = false
             self?.task = nil
         }
     }

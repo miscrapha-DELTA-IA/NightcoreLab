@@ -67,13 +67,16 @@ struct KaraokeScoringEngine {
     private(set) var snapshot = KaraokeScoreSnapshot()
     var key: KeyAnalysisResult?
     var melody: MelodicFeatures?
+    var nativeVocalReference: NativeVocalPitchReference?
     /// Actual playback transposition; source timestamps already account for speed.
     var pitchShift = 0.0
 
     mutating func start(lines: [TimedLyricLine], at time: Double) {
         let reference = key, contour = melody, shift = pitchShift
+        let nativeReference = nativeVocalReference
         self = Self()
         key = reference; melody = contour; pitchShift = shift
+        nativeVocalReference = nativeReference
         lastTime = time.isFinite ? max(0, time) : 0
         verses = lines.compactMap { line in
             guard line.start.isFinite, line.end.isFinite, line.end > lastTime,
@@ -88,7 +91,8 @@ struct KaraokeScoringEngine {
             }
             return windows.isEmpty ? nil : Verse(start: start, end: line.end, windows: windows.sorted { $0.lowerBound < $1.lowerBound })
         }
-        snapshot.hasHarmonicReference = reliableKey != nil
+        snapshot.hasHarmonicReference = reliableKey != nil ||
+            nativeVocalReference?.hasVoicedSamples == true
     }
 
     private var reliableKey: KeyHypothesis? {
@@ -124,7 +128,8 @@ struct KaraokeScoringEngine {
         lastTime = time
         let voiced = trackPresence ?? voice.isVoiced
         if voiced && !priorVoice.isVoiced { attackTime = time }
-        snapshot.hasHarmonicReference = reliableKey != nil
+        snapshot.hasHarmonicReference = reliableKey != nil ||
+            nativeVocalReference?.hasVoicedSamples == true
         snapshot.vocalAccuracy = 0
         while cursor < verses.count {
             let verse = verses[cursor]
@@ -143,9 +148,14 @@ struct KaraokeScoringEngine {
                     let rhythm = 0.75 + 0.25 * attack
                     let sustain = priorVoice.isVoiced
                         ? max(0, 1 - abs(voice.rms - priorVoice.rms) / max(voice.rms, priorVoice.rms)) : 0.7
+                    let referenceHz = nativeVocalReference?.frequency(at: time)
                     if let hz = voice.frequency,
-                       let harmony = Self.harmonicAccuracy(frequency: hz, key: key, pitchShift: pitchShift) {
-                        let contour = contourAccuracy(at: time, frequency: hz) ?? 1
+                       let harmony = referenceHz.flatMap({
+                           NativeVocalPitchReference.accuracy(sung: hz, reference: $0,
+                                                              pitchShift: pitchShift)
+                       }) ?? Self.harmonicAccuracy(frequency: hz, key: key, pitchShift: pitchShift) {
+                        let contour = referenceHz == nil ?
+                            (contourAccuracy(at: time, frequency: hz) ?? 1) : 1
                         quality = 0.4 * rhythm + 0.4 * harmony * contour + 0.2 * sustain
                     } else {
                         // Missing evidence is labeled rhythm-only; never invent pitch.
