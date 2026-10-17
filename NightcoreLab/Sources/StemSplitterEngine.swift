@@ -47,14 +47,6 @@ struct StemAsset: Sendable {
     var vocalURL: URL? { urls[.vocal] }
 }
 
-/// Optional verified model slot. A model may replace the native DSP outputs,
-/// but its SHA-256 must match a bundled manifest before it can process audio.
-protocol StemModelProvider: Sendable {
-    var modelURL: URL { get }
-    var expectedSHA256: String { get }
-    func separate(source: URL, destination: URL) async throws -> StemAsset
-}
-
 enum StemSplitterEngine {
     private struct Filters {
         let bassA: Double, lowA: Double, highA: Double, transientA: Double
@@ -87,41 +79,61 @@ enum StemSplitterEngine {
         }
     }
 
-    static func verified(_ provider: any StemModelProvider) -> Bool {
-        guard let data = try? Data(contentsOf: provider.modelURL) else { return false }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() ==
-            provider.expectedSHA256.lowercased()
-    }
-
     /// Runs on a utility task, never in the render callback. The original song
     /// remains audible while the cache is populated.
     static func prepare(source: URL, cacheFolder: URL,
-                        model: (any StemModelProvider)? = nil) async throws -> StemAsset {
-        if let model, verified(model) {
-            let result = try await model.separate(source: source, destination: cacheFolder)
-            return StemAsset(urls: result.urls, source: .demucs)
+                        progress: @escaping @Sendable (Int) -> Void = { _ in }) async throws -> StemAsset {
+        let cancellation = StemCancellation()
+        return try await withTaskCancellationHandler {
+            try await StemPreparationCoordinator.shared.prepare(
+                source: source, cacheFolder: cacheFolder, progress: progress,
+                cancellation: cancellation)
+        } onCancel: {
+            cancellation.cancel()
         }
-        return try await StemPreparationCoordinator.shared.prepare(
-            source: source, cacheFolder: cacheFolder)
     }
 
-    fileprivate static func prepareNative(source: URL, cacheFolder: URL) throws -> StemAsset {
+    fileprivate static func prepareNative(source: URL, cacheFolder: URL,
+                                          progress: @Sendable (Int) -> Void,
+                                          cancellation: StemCancellation) throws -> StemAsset {
+        if cancellation.isCancelled { throw CancellationError() }
+        progress(0)
         let fingerprint = try source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let identity = "\(source.path)|\(fingerprint.fileSize ?? 0)|\(fingerprint.contentModificationDate?.timeIntervalSince1970 ?? 0)|v3-stft2048-aac"
+        let identity = "\(source.path)|\(fingerprint.fileSize ?? 0)|\(fingerprint.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(NativeSpectralStemSeparator.cacheVersion)"
         let key = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         let folder = cacheFolder.appendingPathComponent("stems-" + key, isDirectory: true)
-        let urls = Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
-            ($0, folder.appendingPathComponent($0.rawValue + ".m4a"))
-        })
-        if urls.values.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) {
+        let urls: [StemKind: URL] = [
+            .instrumental: folder.appendingPathComponent("instrumental.caf"),
+            .vocal: folder.appendingPathComponent("vocals.caf")
+        ]
+        let instrumental = urls[.instrumental]!
+        let vocals = urls[.vocal]!
+        if FileManager.default.fileExists(atPath: instrumental.path),
+           FileManager.default.fileExists(atPath: vocals.path) {
+            progress(100)
             return StemAsset(urls: urls)
         }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let temporaryInstrumental = folder.appendingPathComponent(UUID().uuidString + "-instrumental.caf")
+        let temporaryVocals = folder.appendingPathComponent(UUID().uuidString + "-vocals.caf")
+        defer {
+            try? FileManager.default.removeItem(at: temporaryInstrumental)
+            try? FileManager.default.removeItem(at: temporaryVocals)
+        }
         do {
-            try WienerStemSeparator.separate(source: source, urls: urls)
+            try NativeSpectralStemSeparator.separate(
+                source: source, instrumentalURL: temporaryInstrumental,
+                vocalsURL: temporaryVocals, progress: progress,
+                isCancelled: { cancellation.isCancelled })
+            if cancellation.isCancelled { throw CancellationError() }
+            try? FileManager.default.removeItem(at: instrumental)
+            try? FileManager.default.removeItem(at: vocals)
+            try FileManager.default.moveItem(at: temporaryInstrumental, to: instrumental)
+            try FileManager.default.moveItem(at: temporaryVocals, to: vocals)
             return StemAsset(urls: urls)
         } catch {
-            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: instrumental)
+            try? FileManager.default.removeItem(at: vocals)
             throw error
         }
     }
@@ -135,13 +147,24 @@ enum StemSplitterEngine {
 private actor StemPreparationCoordinator {
     static let shared = StemPreparationCoordinator()
     private let queue = DispatchQueue(label: "nightcore.stems.offline", qos: .utility)
-    func prepare(source: URL, cacheFolder: URL) async throws -> StemAsset {
+    func prepare(source: URL, cacheFolder: URL,
+                 progress: @escaping @Sendable (Int) -> Void,
+                 cancellation: StemCancellation) async throws -> StemAsset {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 continuation.resume(with: Result {
-                    try StemSplitterEngine.prepareNative(source: source, cacheFolder: cacheFolder)
+                    try StemSplitterEngine.prepareNative(source: source, cacheFolder: cacheFolder,
+                                                         progress: progress,
+                                                         cancellation: cancellation)
                 })
             }
         }
     }
+}
+
+fileprivate final class StemCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func cancel() { lock.lock(); value = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return value }
 }
