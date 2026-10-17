@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./branding/gnarly-banner(1).jpg" alt="Gnarly: neon green grid sphere with slime lettering" width="100%">
+  <img src="./branding/gnarly-banner (1).jpg" alt="Gnarly: neon green grid sphere with slime lettering" width="100%">
 </p>
 
 <p align="center">
