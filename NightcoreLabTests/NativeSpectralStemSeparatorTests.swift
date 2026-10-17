@@ -76,6 +76,24 @@ final class NativeSpectralStemSeparatorTests: XCTestCase {
         let cached = try await StemSplitterEngine.prepare(source: source, cacheFolder: folder)
         XCTAssertEqual(cached.urls[.instrumental], asset.urls[.instrumental])
         XCTAssertEqual(cached.urls[.vocal], asset.urls[.vocal])
+
+        try await MainActor.run {
+            let audio = AudioEngineManager()
+            try audio.load(url: source)
+            audio.seek(to: 0.05)
+            let revision = audio.playbackSourceRevision
+            let position = audio.playbackTime
+            try audio.setNativeStemPreview(.instrumental, asset: asset, expectedSource: source)
+            XCTAssertEqual(audio.nativeStemPreview, .instrumental)
+            XCTAssertEqual(audio.visualAnalysisURL, source)
+            XCTAssertEqual(audio.playbackSourceRevision, revision)
+            XCTAssertEqual(audio.playbackTime, position, accuracy: 0.001)
+            try audio.setNativeStemPreview(.vocal, asset: asset, expectedSource: source)
+            XCTAssertEqual(audio.nativeStemPreview, .vocal)
+            try audio.setNativeStemPreview(nil, asset: asset, expectedSource: source)
+            XCTAssertNil(audio.nativeStemPreview)
+            XCTAssertEqual(audio.playbackTime, position, accuracy: 0.001)
+        }
     }
 }
 

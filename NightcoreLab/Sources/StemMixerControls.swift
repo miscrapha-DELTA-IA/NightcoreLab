@@ -50,7 +50,17 @@ struct StemMixerControls: View {
                 .accessibilityIdentifier("stem.native.progress")
             }
             if let instrumental = nativeTest.asset?.urls[.instrumental],
-               let vocals = nativeTest.asset?.urls[.vocal] {
+               let vocals = nativeTest.asset?.urls[.vocal],
+               let asset = nativeTest.asset {
+                HStack {
+                    Button("Ouvir instrumental") { nativeTest.select(.instrumental, asset: asset, audio: audio) }
+                        .accessibilityIdentifier("stem.native.playInstrumental")
+                    Button("Ouvir voz") { nativeTest.select(.vocal, asset: asset, audio: audio) }
+                        .accessibilityIdentifier("stem.native.playVocals")
+                }
+                Button("Voltar à música original") { nativeTest.select(nil, asset: asset, audio: audio) }
+                    .disabled(audio.nativeStemPreview == nil)
+                    .accessibilityIdentifier("stem.native.playOriginal")
                 ShareLink(item: instrumental) { Label("Instrumental (.caf)", systemImage: "square.and.arrow.up") }
                     .accessibilityIdentifier("stem.native.instrumental")
                 ShareLink(item: vocals) { Label("Voz extraída (.caf)", systemImage: "square.and.arrow.up") }
@@ -112,6 +122,17 @@ private final class NativeStemTestState {
             }
             self?.isPreparing = false
             self?.task = nil
+        }
+    }
+
+    func select(_ kind: StemKind?, asset: StemAsset, audio: AudioEngineManager) {
+        guard let sourceURL else { return }
+        do {
+            try audio.setNativeStemPreview(kind, asset: asset, expectedSource: sourceURL)
+            message = kind == nil ? "Música original restaurada." :
+                "O player agora usa \(kind == .instrumental ? "instrumental" : "voz") na mesma posição."
+        } catch {
+            message = "Não foi possível trocar a faixa: \(error.localizedDescription)"
         }
     }
 }

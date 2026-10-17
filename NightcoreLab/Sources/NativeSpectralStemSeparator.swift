@@ -65,10 +65,12 @@ enum NativeSpectralStemSeparator {
             throw CocoaError(.fileReadCorruptFile)
         }
         let rate = inputFormat.sampleRate
-        guard let stereo = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2),
+        let outputChannels = inputFormat.channelCount
+        guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: rate,
+                                               channels: outputChannels),
               let readBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat,
                                                 frameCapacity: AVAudioFrameCount(windowSize)),
-              let output = AVAudioPCMBuffer(pcmFormat: stereo,
+              let output = AVAudioPCMBuffer(pcmFormat: outputFormat,
                                             frameCapacity: AVAudioFrameCount(hopSize)),
               let forward = vDSP_DFT_zop_CreateSetup(nil, vDSP_Length(windowSize), .FORWARD),
               let inverse = vDSP_DFT_zop_CreateSetup(nil, vDSP_Length(windowSize), .INVERSE)
@@ -78,7 +80,7 @@ enum NativeSpectralStemSeparator {
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: rate,
-            AVNumberOfChannelsKey: 2,
+            AVNumberOfChannelsKey: Int(outputChannels),
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsFloatKey: true
         ]
@@ -169,7 +171,7 @@ enum NativeSpectralStemSeparator {
                 }
                 output.frameLength = AVAudioFrameCount(count)
                 for (stem, writer) in [instrumental, vocals].enumerated() {
-                    for channel in 0..<2 {
+                    for channel in 0..<Int(outputChannels) {
                         for sample in 0..<count {
                             let index = offset + sample
                             destination[channel][sample] = overlap[stem][channel][index] /
