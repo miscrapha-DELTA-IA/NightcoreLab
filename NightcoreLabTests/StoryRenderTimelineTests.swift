@@ -7,6 +7,43 @@ import XCTest
 /// SwiftRender-style determinism: one immutable scene, integer frames and
 /// source-time arithmetic shared by the preview and exported MP4.
 final class StoryRenderTimelineTests: XCTestCase {
+    @MainActor
+    func testStage44ExactClipOriginDrivesLyricsAndRenderedFrames() throws {
+        let track = TrackInfo(track: Track(id: "clip44-lyrics", title: "Clip Lyrics",
+            thumbnailURL: nil), fileName: nil, coverURL: nil)
+        let line = TimedLyricLine(id: 44, start: 75, end: 79,
+            words: [WordSync(id: 0, text: "START", start: 75, end: 77,
+                             spaceAfter: true),
+                    WordSync(id: 1, text: "NOW", start: 77, end: 79,
+                             spaceAfter: false)], precision: .word)
+        var request = try StoryRequestBuilder.make(mode: .lyrics, track: track,
+            theme: .acid, playerStyle: .turbulent, karaokeBackground: .marble,
+            marblePhase: 2, playbackTime: 0, sourceDuration: 120, speed: 1,
+            lines: [line], lyricOffset: 0, typography: .classic,
+            includeAudio: false)
+        request.setClipRange(start: 75.5, selectedDuration: 10)
+        let profile = StoryEncodingProfile.economical
+        let timeline = StoryRenderTimeline(request: request, profile: profile)
+        XCTAssertEqual(timeline.frameCount, Int(10 * profile.fps))
+        let frames = [0, Int(profile.fps), Int(2 * profile.fps)]
+            .map { timeline.frame(index: $0) }
+        XCTAssertEqual(frames.map(\.sourceTime), [75.5, 76.5, 77.5])
+        XCTAssertTrue(frames.allSatisfy { request.activeLine(at: $0.elapsed)?.id == 44 })
+        let progress = try frames.map { frame -> Double in
+            let active = try XCTUnwrap(request.activeLine(at: frame.elapsed))
+            return Double(active.words[0].progress(at: frame.lyricTime))
+        }
+        XCTAssertLessThan(progress[0], progress[1])
+        XCTAssertLessThan(progress[1], progress[2])
+        for frame in frames {
+            XCTAssertEqual(frame, timeline.frame(at: frame.elapsed))
+            let image = try StoryFrameRenderer.render(request: request, artwork: nil,
+                frame: frame, profile: profile)
+            XCTAssertEqual(image.width, profile.width)
+        }
+        XCTAssertEqual(request.renderRuntime?.composition.timeline.sourceStart, 75.5)
+    }
+
     private func request(_ mode: StoryMode = .lyrics,
                          start: TimeInterval = 9.5,
                          speed: Float = 1.25) throws -> StoryVideoRequest {

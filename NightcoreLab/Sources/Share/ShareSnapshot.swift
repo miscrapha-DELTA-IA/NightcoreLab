@@ -21,6 +21,8 @@ struct ShareSnapshot: Sendable, Equatable {
     let sectionCadence: SongSectionCadence
     let typographyStyle: TypographyStyle
     let scoreStamp: KaraokePerformanceStamp?
+    let clipStartTime: TimeInterval
+    let clipDuration: TimeInterval
 
     init(trackID: String, title: String, artist: String?, artworkURL: URL?,
          theme: AppTheme, visualStyle: VisualStyle, marblePhase: Float,
@@ -30,7 +32,9 @@ struct ShareSnapshot: Sendable, Equatable {
          reactionMode: CreativePreset.AudioReaction = .off,
          sectionCadence: SongSectionCadence = .neutral,
          typographyStyle: TypographyStyle = .neon,
-         scoreStamp: KaraokePerformanceStamp? = nil) {
+         scoreStamp: KaraokePerformanceStamp? = nil,
+         clipStartTime: TimeInterval = 0,
+         clipDuration: TimeInterval = StoryVideoRequest.maxSeconds) {
         self.trackID = trackID
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         self.title = trimmedTitle.isEmpty ? "Música sem título" : trimmedTitle
@@ -47,6 +51,8 @@ struct ShareSnapshot: Sendable, Equatable {
         self.sectionCadence = sectionCadence
         self.typographyStyle = typographyStyle
         self.scoreStamp = scoreStamp
+        self.clipStartTime = max(0, clipStartTime)
+        self.clipDuration = max(0, clipDuration)
     }
 }
 
@@ -61,7 +67,9 @@ enum ShareSnapshotBuilder {
                      reactionMode: CreativePreset.AudioReaction = .off,
                      sectionCadence: SongSectionCadence = .neutral,
                      typographyStyle: TypographyStyle = .neon,
-                     scoreStamp: KaraokePerformanceStamp? = nil) -> ShareSnapshot {
+                     scoreStamp: KaraokePerformanceStamp? = nil,
+                     clipStartTime: TimeInterval = 0,
+                     clipDuration: TimeInterval = StoryVideoRequest.maxSeconds) -> ShareSnapshot {
         ShareSnapshot(
             trackID: track.id, title: track.title, artist: track.artist,
             artworkURL: track.coverURL, theme: theme, visualStyle: visualStyle,
@@ -69,7 +77,8 @@ enum ShareSnapshotBuilder {
             timestamp: capturedAt, experienceID: experienceID,
             material: material, reactionMode: reactionMode,
             sectionCadence: sectionCadence, typographyStyle: typographyStyle,
-            scoreStamp: scoreStamp
+            scoreStamp: scoreStamp,
+            clipStartTime: clipStartTime, clipDuration: clipDuration
         )
     }
 }

@@ -1,4 +1,44 @@
 import Foundation
+
+/// One source-clock window for the Share trimmer and export pipeline.
+struct StoryClipRange: Equatable, Sendable {
+    let start: TimeInterval
+    let duration: TimeInterval
+    let sourceDuration: TimeInterval
+    let speed: Double
+
+    var end: TimeInterval { min(sourceDuration, start + duration * speed) }
+
+    init(start: TimeInterval, selectedDuration: TimeInterval,
+         sourceDuration: TimeInterval, speed: Float,
+         minimumDuration: TimeInterval = 0) {
+        let total = sourceDuration.isFinite ? max(0, sourceDuration) : 0
+        let rate = speed.isFinite ? max(0.1, Double(speed)) : 1
+        let wanted = selectedDuration.isFinite ? max(0, selectedDuration) : 0
+        let requested = start.isFinite ? max(0, start) : 0
+        let minimum = min(max(0, minimumDuration), total / rate)
+        self.start = min(requested, max(0, total - minimum * rate))
+        self.duration = min(wanted, max(0, total - self.start) / rate)
+        self.sourceDuration = total
+        self.speed = rate
+    }
+
+    static func verseStart(_ line: TimedLyricLine) -> TimeInterval {
+        max(0, line.start - 0.15)
+    }
+
+    static func chorusStart(in dna: SongDNA?) -> TimeInterval? {
+        dna?.sections.first(where: {
+            ($0.label == .chorus || $0.label == .drop) && $0.confidence >= 0.65
+        })?.startTime
+    }
+
+    static func clock(_ seconds: TimeInterval) -> String {
+        let tenths = Int((max(0, seconds) * 10).rounded())
+        return String(format: "%02d:%02d.%d", tenths / 600,
+                      (tenths / 10) % 60, tenths % 10)
+    }
+}
 import SwiftUI
 
 /// Frozen presentation state: a Story cannot change when playback, theme or lyrics change.
@@ -33,6 +73,7 @@ struct KaraokePerformanceStamp: Equatable, Sendable {
 
 struct StoryVideoRequest: Sendable {
     static let maxSeconds: TimeInterval = 15
+    static let durationChoices: [TimeInterval] = [10, 15, 30, 45, 60]
     static let size = CGSize(width: 540, height: 960)
     static let fps: Int32 = 20
 
@@ -46,9 +87,9 @@ struct StoryVideoRequest: Sendable {
     let karaokeBackground: BackgroundStyle
     let marblePhase: Float
     let marbleSpeed: Float
-    let playbackTime: TimeInterval
+    var playbackTime: TimeInterval
     let speed: Float
-    let duration: TimeInterval
+    var duration: TimeInterval
     let totalSourceDuration: TimeInterval
     let lines: [TimedLyricLine]
     let lyricOffset: TimeInterval
@@ -88,6 +129,27 @@ struct StoryVideoRequest: Sendable {
     var showsTrackCard = true
     var showsBrand = true
     var showsLyrics = true
+
+    /// Retimes the frozen composition as one transaction with the audio window.
+    /// Source time, lyric time, pads and visual runtime then keep the same origin.
+    mutating func setClipRange(start: TimeInterval, selectedDuration: TimeInterval) {
+        let range = StoryClipRange(start: start, selectedDuration: selectedDuration,
+                                   sourceDuration: totalSourceDuration, speed: speed,
+                                   minimumDuration: 5)
+        playbackTime = range.start
+        duration = range.duration
+        if let old = compositionRuntime {
+            let seed = CreativePresetCatalog.selectedExperience(id: experienceID)?
+                .composition.deterministicSeed ?? 0
+            if let composition = CompositionRuntime.freeze(
+                program: old.composition.program, sourceStart: range.start,
+                speed: Double(speed), duration: range.duration,
+                deterministicSeed: seed) {
+                compositionRuntime = CompositionRuntime(composition: composition,
+                                                        material: old.material)
+            }
+        }
+    }
 
     /// The active line's typography layer at a lyric time. The ONE builder
     /// used by StorySceneView (MP4) and StoryDraftPreview (scrub preview).
@@ -167,6 +229,9 @@ struct StoryVideoRequest: Sendable {
     func marbleTime(at elapsed: TimeInterval) -> Float {
         StoryExportMotion.phase(at: elapsed, start: marblePhase, speed: marbleSpeed)
     }
+    func footerLabel(at elapsed: TimeInterval) -> String {
+        "\(Int(max(0, elapsed))) / \(Int(duration)) s"
+    }
     func activeLine(at elapsed: TimeInterval) -> TimedLyricLine? {
         let t = lyricTime(at: elapsed)
         return lines.last(where: { $0.start <= t && t < $0.end })
@@ -180,7 +245,7 @@ enum StoryRequestError: LocalizedError {
     case noRemainingAudio, lyricsUnavailable
     var errorDescription: String? {
         switch self {
-        case .noRemainingAudio: return "Não há 15 segundos disponíveis a partir desta posição."
+        case .noRemainingAudio: return "Não há áudio disponível a partir desta posição."
         case .lyricsUnavailable: return "A letra sincronizada ainda não está disponível."
         }
     }
@@ -200,11 +265,14 @@ enum StoryRequestBuilder {
                      padPerformance: PerformanceTimeline? = nil,
                      reactionMode: CreativePreset.AudioReaction? = nil,
                      songDNA: SongDNA? = nil,
-                     scoreStamp: KaraokePerformanceStamp? = nil) throws -> StoryVideoRequest {
+                     scoreStamp: KaraokePerformanceStamp? = nil,
+                     clipDuration: TimeInterval = StoryVideoRequest.maxSeconds) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
         let safeSpeed = max(Double(speed), 0.1)
-        let start = min(max(playbackTime, 0), sourceDuration)
-        let seconds = min(StoryVideoRequest.maxSeconds, max(0, sourceDuration - start) / safeSpeed)
+        let range = StoryClipRange(start: playbackTime, selectedDuration: clipDuration,
+                                   sourceDuration: sourceDuration, speed: speed)
+        let start = range.start
+        let seconds = range.duration
         guard seconds > 0.05 else { throw StoryRequestError.noRemainingAudio }
         // Typography reacts to audio only when the visuals do (same gate as
         // the live karaoke, which only gets features while reacting).

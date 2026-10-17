@@ -8,6 +8,7 @@ struct StoryVideoDraft: Identifiable {
     let audioSource: StoryAudioSource?
     let profile: StoryEncodingProfile
     let featureEngine: AudioFeatureEngine
+    let currentPlaybackTime: @MainActor () -> TimeInterval
 }
 
 /// One single-screen export customizer. Creator parameters remain in the actual
@@ -37,6 +38,11 @@ struct StoryDraftPreview: View {
     @State private var visualRhythm: RhythmAnalysisResult?
     @State private var visualIsReady = true
     @State private var elapsed: TimeInterval = 0
+    @State private var selectedDuration: TimeInterval
+    @State private var selectedStart: TimeInterval
+    @State private var previewPlayer: AVPlayer?
+    @State private var previewTask: Task<Void, Never>?
+    @State private var isLoopingPreview = false
     @State private var showsScoreStamp: Bool
     @State private var showsTrackCard: Bool
     @State private var showsBrand: Bool
@@ -62,6 +68,8 @@ struct StoryDraftPreview: View {
             typography: draft.request.typographyPreset,
             exportProfile: ExportProfile.matching(draft.profile))
         var frozen = initial.applying(to: draft.request)
+        frozen.setClipRange(start: draft.request.playbackTime,
+                            selectedDuration: StoryVideoRequest.maxSeconds)
         frozen.reactionMode = .off // Calm, clean export is the default.
         _selectedAspect = State(initialValue: initial.exportProfile.aspectRatio)
         _selectedQuality = State(initialValue: initial.exportProfile.quality)
@@ -77,6 +85,8 @@ struct StoryDraftPreview: View {
         _showsTrackCard = State(initialValue: draft.request.showsTrackCard)
         _showsBrand = State(initialValue: draft.request.showsBrand)
         _showsLyrics = State(initialValue: draft.request.showsLyrics)
+        _selectedDuration = State(initialValue: StoryVideoRequest.maxSeconds)
+        _selectedStart = State(initialValue: frozen.playbackTime)
         _frozenRequest = State(initialValue: frozen)
         _frozenTimeline = State(initialValue: StoryRenderTimeline(
             request: frozen, profile: initial.exportProfile.encodingProfile(for: frozen.mode)))
@@ -103,6 +113,8 @@ struct StoryDraftPreview: View {
 
     private func freezeSession(_ preset: CreatorPreset) {
         var candidate = frozenRequest
+        candidate.setClipRange(start: selectedStart, selectedDuration: selectedDuration)
+        selectedStart = candidate.playbackTime
         candidate.theme = selectedTheme
         candidate.reactionMode = selectedReaction
         candidate.showsScoreStamp = showsScoreStamp
@@ -117,6 +129,55 @@ struct StoryDraftPreview: View {
             request: resolved,
             profile: preset.exportProfile.encodingProfile(for: resolved.mode))
         elapsed = min(elapsed, frozenTimeline.lastFrameElapsed)
+    }
+
+    private func chooseStart(_ time: TimeInterval) {
+        selectedStart = time
+        elapsed = 0
+        freezeSession(selectedPreset)
+        if isLoopingPreview { startPreviewLoop() }
+    }
+
+    private func stopPreviewLoop() {
+        previewTask?.cancel()
+        previewTask = nil
+        previewPlayer?.pause()
+        previewPlayer = nil
+        isLoopingPreview = false
+    }
+
+    private func startPreviewLoop() {
+        stopPreviewLoop()
+        guard let source = draft.audioSource, frozenRequest.duration > 0 else { return }
+        let player = AVPlayer(url: source.url)
+        player.currentItem?.audioTimePitchAlgorithm = .spectral
+        previewPlayer = player
+        isLoopingPreview = true
+        let start = frozenRequest.playbackTime
+        let end = frozenRequest.sourceTime(at: frozenRequest.duration)
+        let rate = frozenRequest.speed
+        player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
+        player.playImmediately(atRate: rate)
+        previewTask = Task { @MainActor in
+            while !Task.isCancelled {
+                let position = player.currentTime().seconds
+                if position.isFinite {
+                    if position >= end - 0.02 {
+                        player.pause()
+                        await player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
+                                          toleranceBefore: .zero, toleranceAfter: .zero)
+                        guard !Task.isCancelled else { break }
+                        player.playImmediately(atRate: rate)
+                        elapsed = 0
+                    } else {
+                        elapsed = min(frozenTimeline.lastFrameElapsed,
+                                      max(0, (position - start) / Double(rate)))
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(33))
+            }
+        }
     }
 
     private func modelName(_ style: TypographyStyle) -> String {
@@ -278,6 +339,103 @@ struct StoryDraftPreview: View {
                     .background(.white.opacity(0.07),
                         in: RoundedRectangle(cornerRadius: 13))
 
+                    VStack(alignment: .leading, spacing: 11) {
+                        Text("Duração do Vídeo").font(.headline)
+                        HStack(spacing: 5) {
+                            ForEach(StoryVideoRequest.durationChoices, id: \.self) { seconds in
+                                chip("\(Int(seconds))s", enabled: selectedDuration == seconds) {
+                                    selectedDuration = seconds
+                                    elapsed = 0
+                                    freezeSession(selectedPreset)
+                                    if isLoopingPreview { startPreviewLoop() }
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("share.videoDuration")
+
+                        Text("Ponto Exato da Música").font(.headline)
+                        Text("Trecho da Música")
+                            .font(.caption.weight(.semibold))
+                        GeometryReader { geometry in
+                            let total = max(0.001, frozenRequest.totalSourceDuration)
+                            let left = geometry.size.width * frozenRequest.playbackTime / total
+                            let right = geometry.size.width * frozenRequest.sourceTime(
+                                at: frozenRequest.duration) / total
+                            Capsule().fill(.white.opacity(0.14))
+                                .overlay(alignment: .leading) {
+                                    Capsule().fill(selectedTheme.accent)
+                                        .frame(width: max(3, right - left))
+                                        .offset(x: left)
+                                }
+                        }
+                        .frame(height: 7)
+                        Slider(value: Binding(get: { selectedStart },
+                                              set: { chooseStart($0) }),
+                               in: 0...max(0.001, frozenRequest.totalSourceDuration -
+                                           min(5 * Double(frozenRequest.speed),
+                                               frozenRequest.totalSourceDuration)))
+                            .tint(selectedTheme.accent)
+                            .accessibilityIdentifier("share.clipStart")
+                        HStack {
+                            Text(StoryClipRange.clock(frozenRequest.playbackTime))
+                            Spacer()
+                            Text(StoryClipRange.clock(frozenRequest.sourceTime(
+                                at: frozenRequest.duration)))
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            ForEach(0..<4, id: \.self) { index in
+                                let steps: [Double] = [-1, -0.1, 0.1, 1]
+                                let labels = ["-1s", "-0.1s", "+0.1s", "+1s"]
+                                Button(labels[index]) {
+                                    chooseStart(selectedStart + steps[index])
+                                }
+                                    .buttonStyle(.bordered)
+                                    .font(.caption)
+                            }
+                        }
+                        HStack(spacing: 7) {
+                            Button("📍 Ponto Atual do Player") {
+                                chooseStart(draft.currentPlaybackTime())
+                            }
+                            .buttonStyle(.bordered)
+                            if let chorus = StoryClipRange.chorusStart(in: frozenRequest.songDNA) {
+                                Button("🔥 Ir para o Refrão") { chooseStart(chorus) }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                        .font(.caption)
+                        if !frozenRequest.lines.isEmpty {
+                            Text("Escolher pelo Verso")
+                                .font(.caption.weight(.semibold))
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                LazyHStack(spacing: 6) {
+                                    ForEach(frozenRequest.lines) { line in
+                                        Button {
+                                            chooseStart(StoryClipRange.verseStart(line))
+                                        } label: {
+                                            Text("\(StoryClipRange.clock(line.start))  \(line.text)")
+                                                .lineLimit(1)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("share.versePicker")
+                        }
+                        Button(isLoopingPreview ? "■ Parar Trecho" : "▶ Ouvir Trecho") {
+                            if isLoopingPreview { stopPreviewLoop() }
+                            else { startPreviewLoop() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(draft.audioSource == nil)
+                        .accessibilityIdentifier("share.loopPreview")
+                    }
+                    .padding(12)
+                    .background(.white.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 13))
+
                     HStack(spacing: 10) {
                         Picker("Formato", selection: $selectedAspect) {
                             ForEach(ExportAspectRatio.allCases) { ratio in
@@ -304,6 +462,7 @@ struct StoryDraftPreview: View {
                     .foregroundStyle(.secondary)
 
                     Button {
+                        stopPreviewLoop()
                         onExport(selectedPreset, frozenRequest, artwork,
                                  visualTimeline, visualRhythm)
                     } label: {
@@ -364,6 +523,7 @@ struct StoryDraftPreview: View {
             .onChange(of: showsTrackCard) { _, _ in freezeSession(selectedPreset) }
             .onChange(of: showsBrand) { _, _ in freezeSession(selectedPreset) }
             .onChange(of: showsLyrics) { _, _ in freezeSession(selectedPreset) }
+            .onDisappear { stopPreviewLoop() }
             .task(id: draft.id) {
                 let loaded = await ShareRenderer.loadArtwork(draft.request.artworkURL)
                 guard !Task.isCancelled else { return }

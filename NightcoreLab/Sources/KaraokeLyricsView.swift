@@ -241,7 +241,7 @@ struct KaraokeLyricsView: View {
                                 line: line,
                                 status: status(of: line),
                                 isPlaying: store.isPlaying,
-                                offset: store.userOffset,
+                                offset: store.sourceTimelineOffset(for: clock),
                                 clock: clock,
                                 theme: fittedTheme,
                                 accent: accent,
@@ -324,7 +324,7 @@ struct KaraokeLyricsView: View {
                 .overlay(alignment: .top) {
                     if entranceCountdown {
                         KaraokeEntranceCue(lines: store.lines, clock: clock,
-                                           offset: store.userOffset,
+                                           offset: store.sourceTimelineOffset(for: clock),
                                            isPlaying: store.isPlaying,
                                            trackID: store.trackID,
                                            microphoneActive: store.scoring.mode == .microphone,

@@ -146,7 +146,7 @@ struct StorySceneView: View {
                     Text(request.mode == .player ? "NOW PLAYING" : "KARAOKÊ · SYNC")
                         .tracking(1.5)
                     Spacer()
-                    Text("\(Int(elapsed)) / \(Int(request.duration)) s")
+                    Text(request.footerLabel(at: elapsed))
                         .monospacedDigit()
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -211,7 +211,7 @@ struct StorySceneView: View {
                 Text(request.mode == .player ? "NOW PLAYING" : "KARAOKÊ · SYNC")
                     .tracking(1.5)
                 Spacer()
-                Text("\(Int(elapsed)) / \(Int(request.duration)) s")
+                Text(request.footerLabel(at: elapsed))
                     .monospacedDigit()
             }
             .font(.system(size: 12, weight: .semibold))

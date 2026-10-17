@@ -6,6 +6,104 @@ import XCTest
 
 final class ShareExportPipelineTests: XCTestCase {
     @MainActor
+    func testStage44DurationChoicesFreezeSnapshotAndFooter() throws {
+        let track = TrackInfo(track: Track(id: "clip44", title: "Clip Song",
+            thumbnailURL: nil), fileName: nil, coverURL: nil)
+        for choice in StoryVideoRequest.durationChoices {
+            let snapshot = ShareSnapshotBuilder.make(track: track, theme: .acid,
+                visualStyle: .marble, marbleStartedAt: .now, speed: 1,
+                clipStartTime: 25, clipDuration: choice)
+            XCTAssertEqual(snapshot.clipStartTime, 25)
+            XCTAssertEqual(snapshot.clipDuration, choice)
+            var request = try StoryRequestBuilder.make(mode: .player, track: track,
+                theme: .acid, playerStyle: .turbulent,
+                karaokeBackground: .marble, marblePhase: 0,
+                playbackTime: 25, sourceDuration: 180, speed: 1,
+                lines: [], lyricOffset: 0, typography: .classic,
+                includeAudio: false)
+            request.setClipRange(start: 25, selectedDuration: choice)
+            XCTAssertEqual(request.duration, choice)
+            XCTAssertEqual(StoryRenderTimeline(request: request, profile: .balanced).frameCount,
+                           Int(choice * Double(StoryEncodingProfile.balanced.fps)))
+            XCTAssertEqual(request.footerLabel(at: 8), "8 / \(Int(choice)) s")
+            XCTAssertEqual(request.sourceTime(at: choice), 25 + choice)
+        }
+    }
+
+    func testStage44TrimmerPreservesExactStartAndSnapsVerseAndChorus() {
+        let range = StoryClipRange(start: 75.5, selectedDuration: 30,
+                                   sourceDuration: 180, speed: 1.25)
+        XCTAssertEqual(range.start, 75.5)
+        XCTAssertEqual(range.duration, 30)
+        XCTAssertEqual(range.end, 113, accuracy: 0.000_001)
+        XCTAssertEqual(StoryClipRange.clock(range.start), "01:15.5")
+        let line = TimedLyricLine(id: 1, start: 75.65, end: 80,
+            words: [WordSync(id: 0, text: "NOW", start: 75.65, end: 77,
+                             spaceAfter: false)], precision: .word)
+        XCTAssertEqual(StoryClipRange.verseStart(line), 75.5, accuracy: 0.000_001)
+        let dna = SongDNA(assetID: "song", sourceRevision: "1", sourceDuration: 180,
+            sections: [MusicSection(startTime: 74, endTime: 100,
+                                    label: .chorus, confidence: 0.9)])
+        XCTAssertEqual(StoryClipRange.chorusStart(in: dna), 74)
+        let nearEnd = StoryClipRange(start: 179.5, selectedDuration: 60,
+            sourceDuration: 180, speed: 1, minimumDuration: 5)
+        XCTAssertEqual(nearEnd.start, 175)
+        XCTAssertEqual(nearEnd.duration, 5)
+    }
+
+    func testStage44AudioExportUsesSelectedSourceWindowAndFades() async throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 44_100, channels: 2))
+        let frames = AVAudioFrameCount(2 * format.sampleRate)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format,
+                                                   frameCapacity: frames))
+        buffer.frameLength = frames
+        for frame in 0..<Int(frames) {
+            let frequency = frame < 44_100 ? 440.0 : 880.0
+            let sample = Float(0.25 * sin(2 * .pi * frequency *
+                                          Double(frame) / format.sampleRate))
+            buffer.floatChannelData?[0][frame] = sample
+            buffer.floatChannelData?[1][frame] = sample
+        }
+        let input = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clip44-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: input) }
+        do {
+            let writer = try AVAudioFile(forWriting: input, settings: format.settings)
+            try writer.write(from: buffer)
+        }
+        let settings = RenderSettings(speed: 1, pitch: 0, reverb: 0, bass: 0,
+            reverbPresetRaw: AVAudioUnitReverbPreset.mediumHall.rawValue)
+        let output = try await AudioEngineManager.exportStorySegment(
+            source: StoryAudioSource(url: input, settings: settings,
+                                     stemLevels: nil),
+            startTime: 1, duration: 0.5)
+        defer { try? FileManager.default.removeItem(at: output) }
+        let rendered = try AVAudioFile(forReading: output,
+            commonFormat: .pcmFormatFloat32, interleaved: false)
+        XCTAssertEqual(Double(rendered.length) / rendered.processingFormat.sampleRate,
+                       0.5, accuracy: 0.03)
+        let result = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: rendered.processingFormat,
+            frameCapacity: AVAudioFrameCount(rendered.length)))
+        try rendered.read(into: result)
+        let channel = try XCTUnwrap(result.floatChannelData?[0])
+        let rate = rendered.processingFormat.sampleRate
+        let middleStart = Int(0.2 * rate), middleEnd = Int(0.3 * rate)
+        let crossings = (middleStart..<middleEnd).filter {
+            channel[$0] <= 0 && channel[$0 + 1] > 0
+        }.count
+        XCTAssertEqual(Double(crossings) / 0.1, 880, accuracy: 40)
+        func meanAmplitude(_ start: Int, _ end: Int) -> Double {
+            (start..<end).reduce(0) { $0 + Double(abs(channel[$1])) } /
+                Double(end - start)
+        }
+        let center = meanAmplitude(Int(0.20 * rate), Int(0.25 * rate))
+        XCTAssertLessThan(meanAmplitude(0, Int(0.02 * rate)), center * 0.35)
+        XCTAssertLessThan(meanAmplitude(Int(0.48 * rate), Int(0.49 * rate)),
+                          center * 0.35)
+    }
+
+    @MainActor
     func testFourLyricModelsFreezeIntoShareAndRenderDistinctStoryFrames() throws {
         let track = TrackInfo(track: Track(id: "models-31", title: "Artist - Four Styles",
             thumbnailURL: nil), fileName: nil, coverURL: nil)
