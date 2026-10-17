@@ -179,6 +179,8 @@ final class AudioEngineManager {
     }
 
     @ObservationIgnored private var audioFile: AVAudioFile?
+    @ObservationIgnored private var nativeStemOriginalFile: AVAudioFile?
+    private(set) var nativeStemPreview: StemKind?
     @ObservationIgnored private var sourceURL: URL?
     /// Read-only source for offline visual evidence. Live RMS/bass are
     /// independently obtained from the existing mixer through liveVisualMeter.
@@ -265,6 +267,8 @@ final class AudioEngineManager {
         stopAllCreatorLoops()
         stopPlayback()
         audioFile = file
+        nativeStemOriginalFile = file
+        nativeStemPreview = nil
         centerCutAvailable = file.processingFormat.channelCount == 2
         sourceURL = url
         playbackSourceRevision &+= 1
@@ -891,6 +895,39 @@ final class AudioEngineManager {
     }
 
     // MARK: Four-stem mixer
+
+    /// Experimental file swap on the existing player node. Keep the original
+    /// track identity, source timeline, microphone graph and session. The
+    /// existing seek path reschedules at the same source time.
+    func setNativeStemPreview(_ kind: StemKind?, asset: StemAsset,
+                              expectedSource: URL) throws {
+        guard sourceURL == expectedSource, let original = nativeStemOriginalFile,
+              !isExporting, !isReconfiguringGraph else {
+            throw AudioEngineError.noFileLoaded
+        }
+        let selected: AVAudioFile
+        if let kind {
+            guard kind == .instrumental || kind == .vocal,
+                  let url = asset.urls[kind], url.isFileURL else {
+                throw AudioEngineError.unsupportedAudio
+            }
+            selected = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32,
+                                       interleaved: false)
+            guard selected.length == original.length,
+                  selected.processingFormat.sampleRate == original.processingFormat.sampleRate,
+                  selected.processingFormat.channelCount == original.processingFormat.channelCount else {
+                throw AudioEngineError.unsupportedAudio
+            }
+        } else {
+            selected = original
+        }
+        let position = currentTime
+        if stemMixEnabled { setStemMixerEnabled(false) }
+        if centerCutEnabled { setCenterCutEnabled(false) }
+        audioFile = selected
+        nativeStemPreview = kind
+        seek(to: position)
+    }
 
     /// Immediate AU parameter events. The AU applies each change to the live
     /// render stream with a 50 ms sample ramp; no file preparation or reschedule.

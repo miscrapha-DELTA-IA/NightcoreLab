@@ -21,6 +21,7 @@ final class KaraokeScoringSession {
     @ObservationIgnored private var syntheticFrame: KaraokeVoiceFrame?
     @ObservationIgnored private var referenceKey: KeyAnalysisResult?
     @ObservationIgnored private var referenceMelody: MelodicFeatures?
+    @ObservationIgnored private var nativeVocalReference: NativeVocalPitchReference?
 
     @ObservationIgnored var trackEnergy: (() -> Double)?
 
@@ -43,6 +44,13 @@ final class KaraokeScoringSession {
         if mode == .off { engine.key = key; engine.melody = melody }
     }
 
+    /// Optional local evidence from an explicitly prepared vocal stem. A run
+    /// already in progress keeps its frozen reference until the next start.
+    func setNativeVocalReference(_ reference: NativeVocalPitchReference?) {
+        nativeVocalReference = reference
+        if mode == .off { engine.nativeVocalReference = reference }
+    }
+
     func start(mode: Mode, lines: [TimedLyricLine], at time: Double) {
         guard isPresented, mode != .off else { return }
         self.mode = mode
@@ -50,6 +58,7 @@ final class KaraokeScoringSession {
         engine = KaraokeScoringEngine()
         engine.key = mode == .passive ? nil : referenceKey
         engine.melody = mode == .passive ? nil : referenceMelody
+        engine.nativeVocalReference = mode == .passive ? nil : nativeVocalReference
         engine.start(lines: lines, at: time)
         snapshot = engine.snapshot
         liveMicLevel = 0
@@ -65,6 +74,7 @@ final class KaraokeScoringSession {
 
     func resetForTrack() {
         stop(); referenceKey = nil; referenceMelody = nil
+        nativeVocalReference = nil
     }
 
     /// Safe hardware-free injection; real microphone runs cannot accept it.

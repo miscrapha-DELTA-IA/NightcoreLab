@@ -1,8 +1,11 @@
+import Observation
 import SwiftUI
 
 /// Four instant, phase-preserving masking controls in Música.
 struct StemMixerControls: View {
+    @Environment(LyricsStore.self) private var lyricsStore
     let audio: AudioEngineManager
+    @State private var nativeTest = NativeStemTestState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -32,7 +35,129 @@ struct StemMixerControls: View {
             }
             Text("Máscaras locais aproximadas. Algumas frequências e instrumentos podem se sobrepor.")
                 .font(.caption2).foregroundStyle(.secondary)
+
+            Divider()
+            Text("Separação espectral nativa · teste IPA")
+                .font(.caption.bold())
+            Button(nativeTest.isPreparing ? "Processando…" : "Preparar instrumental e voz") {
+                nativeTest.prepare(source: audio.visualAnalysisURL, scoring: lyricsStore.scoring)
+            }
+            .disabled(nativeTest.isPreparing || audio.visualAnalysisURL == nil)
+            .accessibilityIdentifier("stem.native.prepare")
+            if nativeTest.isPreparing {
+                ProgressView(value: Double(nativeTest.progress), total: 100) {
+                    Text(nativeTest.isAnalyzingReference ? "Analisando referência vocal" :
+                         "Separando no iPhone · \(nativeTest.progress)%")
+                }
+                .accessibilityIdentifier("stem.native.progress")
+            }
+            if let instrumental = nativeTest.asset?.urls[.instrumental],
+               let vocals = nativeTest.asset?.urls[.vocal],
+               let asset = nativeTest.asset {
+                HStack {
+                    Button("Ouvir instrumental") { nativeTest.select(.instrumental, asset: asset, audio: audio) }
+                        .accessibilityIdentifier("stem.native.playInstrumental")
+                    Button("Ouvir voz") { nativeTest.select(.vocal, asset: asset, audio: audio) }
+                        .accessibilityIdentifier("stem.native.playVocals")
+                }
+                Button("Voltar à música original") { nativeTest.select(nil, asset: asset, audio: audio) }
+                    .disabled(audio.nativeStemPreview == nil)
+                    .accessibilityIdentifier("stem.native.playOriginal")
+                ShareLink(item: instrumental) { Label("Instrumental (.caf)", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("stem.native.instrumental")
+                ShareLink(item: vocals) { Label("Voz extraída (.caf)", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("stem.native.vocals")
+            }
+            if let message = nativeTest.message {
+                Text(message).font(.caption2).foregroundStyle(.secondary)
+            }
         }
         .accessibilityIdentifier("music.stemMixer")
+        .onChange(of: audio.playbackSourceRevision) { _, _ in nativeTest.reset() }
+    }
+}
+
+@MainActor @Observable
+private final class NativeStemTestState {
+    private(set) var progress = 0
+    private(set) var isPreparing = false
+    private(set) var isAnalyzingReference = false
+    private(set) var asset: StemAsset?
+    private(set) var message: String?
+    @ObservationIgnored private var sourceURL: URL?
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    func reset() {
+        task?.cancel()
+        task = nil
+        sourceURL = nil
+        asset = nil
+        message = nil
+        progress = 0
+        isPreparing = false
+        isAnalyzingReference = false
+    }
+
+    func prepare(source: URL?, scoring: KaraokeScoringSession) {
+        guard let source, source.isFileURL else {
+            message = "Carregue uma música local antes de separar."
+            return
+        }
+        reset()
+        sourceURL = source
+        isPreparing = true
+        task = Task { [weak self] in
+            do {
+                let result = try await StemSplitterEngine.prepare(
+                    source: source, cacheFolder: TrackAudioCache.stemDirectory(for: source)) {
+                    percent in
+                    Task { @MainActor [weak self] in
+                        guard self?.sourceURL == source else { return }
+                        self?.progress = percent
+                    }
+                }
+                guard !Task.isCancelled, self?.sourceURL == source else { return }
+                self?.asset = result
+                self?.progress = 100
+                if let vocalsURL = result.vocalURL {
+                    self?.isAnalyzingReference = true
+                    let analysis = Task.detached(priority: .utility) {
+                        try NativeVocalPitchReference.analyze(vocalsURL: vocalsURL)
+                    }
+                    do {
+                        let reference = try await withTaskCancellationHandler {
+                            try await analysis.value
+                        } onCancel: {
+                            analysis.cancel()
+                        }
+                        guard !Task.isCancelled, self?.sourceURL == source else { return }
+                        scoring.setNativeVocalReference(reference.hasVoicedSamples ? reference : nil)
+                        self?.message = reference.hasVoicedSamples ?
+                            "Stems e referência vocal prontos para o próximo canto." :
+                            "Stems prontos; não houve afinação vocal confiável para o placar."
+                    } catch {
+                        guard !Task.isCancelled, self?.sourceURL == source else { return }
+                        self?.message = "Stems prontos; a referência vocal não pôde ser analisada."
+                    }
+                }
+            } catch {
+                guard !Task.isCancelled, self?.sourceURL == source else { return }
+                self?.message = "Não foi possível separar a música: \(error.localizedDescription)"
+            }
+            self?.isPreparing = false
+            self?.isAnalyzingReference = false
+            self?.task = nil
+        }
+    }
+
+    func select(_ kind: StemKind?, asset: StemAsset, audio: AudioEngineManager) {
+        guard let sourceURL else { return }
+        do {
+            try audio.setNativeStemPreview(kind, asset: asset, expectedSource: sourceURL)
+            message = kind == nil ? "Música original restaurada." :
+                "O player agora usa \(kind == .instrumental ? "instrumental" : "voz") na mesma posição."
+        } catch {
+            message = "Não foi possível trocar a faixa: \(error.localizedDescription)"
+        }
     }
 }
