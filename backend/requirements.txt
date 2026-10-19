@@ -14,3 +14,6 @@ ytmusicapi>=1.7,<2
 cachetools>=5.5,<7
 # Word-level transcription and Enhanced LRC generation.
 openai>=2,<4
+
+# Independent public audio recovery; no credentials required.
+requests>=2.32,<3

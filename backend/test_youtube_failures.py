@@ -11,6 +11,7 @@ import main
 
 class YouTubeFailureTests(unittest.TestCase):
     def setUp(self):
+        main.audio_sources._metadata.clear()
         main._youtube_cooldown_until = 0
         self.addCleanup(setattr, main, "_youtube_cooldown_until", 0)
 

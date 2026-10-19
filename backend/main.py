@@ -49,6 +49,7 @@ from itertools import islice
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
+import audio_sources
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, HttpUrl
@@ -355,6 +356,9 @@ def _music_search_entries(items: list[dict]) -> str:
         artwork = next((thumb.get("url") for thumb in reversed(item.get("thumbnails") or [])
                         if isinstance(thumb, dict) and isinstance(thumb.get("url"), str)
                         and thumb["url"].startswith("https://")), None)
+        artists = ", ".join(a["name"] for a in (item.get("artists") or [])
+                            if isinstance(a, dict) and isinstance(a.get("name"), str))
+        audio_sources.remember(video_id, title, artists, duration, artwork)
         accepted.append(json.dumps({"id": video_id, "title": title.strip(),
                                     "duration": duration, "thumbnail": artwork,
                                     "is_live": False}, ensure_ascii=False))
@@ -462,12 +466,20 @@ def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
     asyncio waiter is cancelled (run_in_executor cannot kill running threads).
     """
     with _heavy_ytdlp_slots:
-        _check_youtube_cooldown()
         _sweep_stale_work_dirs()
         work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
         try:
-            audio_path, title, thumbnail = _extract_m4a(url, work_dir)
-            return audio_path, title, thumbnail, work_dir
+            try:
+                _check_youtube_cooldown()
+                result = _extract_m4a(url, work_dir)
+            except (HTTPException, yt_dlp.utils.DownloadError) as error:
+                transient = (isinstance(error, HTTPException) and error.status_code in (429, 502, 503, 504)
+                             or isinstance(error, yt_dlp.utils.DownloadError)
+                             and any(marker in str(error).lower() for marker in _RETRYABLE))
+                result = audio_sources.recover(_youtube_video_id(url), work_dir) if transient else None
+                if result is None:
+                    raise
+            return (*result, work_dir)
         except BaseException:
             shutil.rmtree(work_dir, ignore_errors=True)
             raise
@@ -530,7 +542,8 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         if hit is not None:
             _release_cached_reader(video_id)
     if entry is None:
-        _check_youtube_cooldown()
+        if not audio_sources.can_recover(video_id):
+            _check_youtube_cooldown()
         # Bound distinct queued video IDs as well as actual worker count.
         # Otherwise thousands of unique requests still allocate tasks in RAM.
         if len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
