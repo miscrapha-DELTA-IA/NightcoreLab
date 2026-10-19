@@ -54,7 +54,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(sources._allowed_url('https://' + sources.STORAGE_HOST + '/song'))
         response.close.assert_called_once()
 
-    def test_negative_cache_and_ambiguous_recordings(self):
+    @patch.object(sources.shutil, "which", return_value="/test/ffmpeg")
+    def test_negative_cache_and_ambiguous_recordings(self, _which):
         response = MagicMock()
         response.__enter__.return_value = response
         response.iter_content.return_value = [json.dumps({'data': [TRACK, dict(TRACK, id='Other')]}).encode()]
@@ -64,7 +65,8 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(get.call_count, 1)
             self.assertEqual(list(Path(folder).iterdir()), [])
 
-    def test_success_returns_same_file_contract_and_cleans_source(self):
+    @patch.object(sources.shutil, "which", return_value="/test/ffmpeg")
+    def test_success_returns_same_file_contract_and_cleans_source(self, _which):
         metadata, stream = MagicMock(), MagicMock()
         for response in (metadata, stream):
             response.__enter__.return_value = response
