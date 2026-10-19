@@ -50,7 +50,8 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
+from lyrics_alignment import AlignmentError, generate_enhanced_lrc
 
 MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
 # A 512 MiB Render container defaults to one extraction; two is the hard cap.
@@ -172,6 +173,7 @@ class InFlightDownload:
 in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
 _search_slots = threading.BoundedSemaphore(1)
+_alignment_slots = threading.BoundedSemaphore(1)
 RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
 
@@ -193,6 +195,46 @@ app.include_router(stems_dev_router)
 
 class DownloadRequest(BaseModel):
     url: HttpUrl
+
+
+class AlignLyricsRequest(BaseModel):
+    url: HttpUrl
+    lyrics: str = Field(min_length=1, max_length=20_000)
+
+
+@app.post("/align-lyrics")
+async def align_lyrics(request: AlignLyricsRequest):
+    """Reuse the yt-dlp download and return source-checked Enhanced LRC."""
+    _youtube_video_id(str(request.url))
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="Alinhamento de letras indisponível.")
+    if not _alignment_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Alinhamento ocupado. Tente novamente.")
+    background_tasks = BackgroundTasks()
+    try:
+        response = await download(DownloadRequest(url=request.url), background_tasks)
+        transcription = asyncio.create_task(asyncio.to_thread(
+            generate_enhanced_lrc, Path(response.path), request.lyrics
+        ))
+        try:
+            lrc = await asyncio.shield(transcription)
+        finally:
+            # A disconnected client must not unpin/delete the file while the
+            # API worker is still reading or uploading it.
+            if not transcription.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(transcription)
+            await background_tasks()
+    except AlignmentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        log.exception("falha ao alinhar letra")
+        raise HTTPException(status_code=502, detail="Falha ao alinhar a letra.") from error
+    finally:
+        _alignment_slots.release()
+    return {"lrc": lrc}
 
 
 class RelatedVideo(BaseModel):
@@ -421,6 +463,7 @@ def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
     asyncio waiter is cancelled (run_in_executor cannot kill running threads).
     """
     with _heavy_ytdlp_slots:
+        _check_youtube_cooldown()
         _sweep_stale_work_dirs()
         work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
         try:
@@ -488,6 +531,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         if hit is not None:
             _release_cached_reader(video_id)
     if entry is None:
+        _check_youtube_cooldown()
         # Bound distinct queued video IDs as well as actual worker count.
         # Otherwise thousands of unique requests still allocate tasks in RAM.
         if len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
@@ -551,6 +595,27 @@ def _audio_response(audio_path: Path, title: str, thumbnail: str | None,
     )
 
 
+# A YouTube 429 applies to this server, not just one song. Cached audio remains
+# available while new/queued extractions wait. Never turn it into a misleading 422.
+_youtube_cooldown_until = 0.0
+_youtube_cooldown_lock = threading.Lock()
+
+
+def _pause_youtube_requests() -> None:
+    global _youtube_cooldown_until
+    with _youtube_cooldown_lock:
+        _youtube_cooldown_until = max(_youtube_cooldown_until, time.monotonic() + 300)
+
+
+def _check_youtube_cooldown() -> None:
+    with _youtube_cooldown_lock:
+        remaining = int(_youtube_cooldown_until - time.monotonic() + 0.999)
+    if remaining > 0:
+        raise HTTPException(status_code=429,
+            detail="O YouTube limitou os downloads deste servidor. As músicas já baixadas continuam disponíveis.",
+            headers={"Retry-After": str(remaining), "X-Download-Error": "upstream_rate_limited"})
+
+
 class _YtdlpLog:
     """Leva os avisos do yt-dlp para o log do Render (é neles que o YouTube explica
     por que um formato sumiu: PO token, desafio JS, cookies vencidos...)."""
@@ -565,6 +630,8 @@ class _YtdlpLog:
         pass
 
     def warning(self, msg: str) -> None:
+        if "http error 429" in msg.lower() or "too many requests" in msg.lower():
+            _pause_youtube_requests()
         log.warning("yt-dlp [%s]: %s", self.label, msg[:500])
 
     def error(self, msg: str) -> None:   # o erro final já é registrado em download()
@@ -589,6 +656,7 @@ _RETRYABLE = (
     "no video formats found",
     "po token",
     "http error 403",
+    "failed to extract any player response",
     "this content isn't available",
 )
 
@@ -617,11 +685,16 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         except yt_dlp.utils.DownloadError as error:
             last_error = error
             message = str(error)
+            _check_youtube_cooldown()
             log.warning("estratégia %s falhou: %s", label, message[:300])
             if not any(marker in message.lower() for marker in _RETRYABLE):
                 raise
 
     assert last_error is not None
+    if "failed to extract any player response" in str(last_error).lower():
+        raise HTTPException(status_code=503,
+            detail="O YouTube não respondeu ao servidor. Tente novamente mais tarde.",
+            headers={"Retry-After": "300", "X-Download-Error": "upstream_unavailable"})
     raise last_error
 
 

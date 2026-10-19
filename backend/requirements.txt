@@ -12,3 +12,6 @@ certifi>=2024.0.0
 ytmusicapi>=1.7,<2
 # TTL cache for /v1/search and /v1/suggest
 cachetools>=5.5,<7
+
+# Whisper word timestamps, restored from the working OpenAI integration.
+openai>=2,<4

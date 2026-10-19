@@ -40,6 +40,7 @@ final class LyricsStore {
     private(set) var hasWordSync = false
     private(set) var status: LyricsStatus = .idle
     private(set) var needsReview = false
+    private(set) var alignmentNotice: String?
     private(set) var activeLineIndex: Int?
     private(set) var scrollAnchorLineID: Int? = 0
     private(set) var isPlaying = false
@@ -104,6 +105,7 @@ final class LyricsStore {
 
     /// O prefetcher começa o trabalho antes do utilizador entrar em Karaokê.
     func beginLoading(trackID: String) {
+        alignmentNotice = nil
         loadTask?.cancel()
         if trackID != self.trackID {
             scoring.resetForTrack()
@@ -254,7 +256,33 @@ final class LyricsStore {
         }
     }
 
+    func setAlignmentNotice(_ message: String, trackID: String) {
+        guard self.trackID == trackID else { return }
+        alignmentNotice = message
+    }
+
+    /// Install an improvement atomically; keep existing lyrics visible during parsing.
+    /// A live scoring session retains its original timing until the next playback.
+    func installAlignedLyrics(_ lrc: String, trackID: String) async {
+        let expectedSource = rawSource
+        let parsed = await Task.detached(priority: .utility) {
+            EnhancedLRCParser.parse(lrc).lines
+        }.value
+        guard !Task.isCancelled, self.trackID == trackID, rawSource == expectedSource,
+              scoring.mode == .off, !parsed.isEmpty else { return }
+        loadTask?.cancel()
+        rawSource = lrc
+        acousticRefinementKey = nil
+        lines = parsed
+        hasWordSync = parsed.contains { $0.precision == .word }
+        needsReview = true
+        alignmentNotice = nil
+        status = .ready
+        syncNow()
+    }
+
     func clear() {
+        alignmentNotice = nil
         loadTask?.cancel()
         rawSource = nil
         acousticRefinementKey = nil
