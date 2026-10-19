@@ -10,6 +10,7 @@ struct CachedLyricsChoice: Codable, Sendable {
     var offlinePinned: Bool? = nil        // download explícito: manter letra além do TTL
     var alternatives: [LRCLIBRecord]     // top candidatos p/ "trocar letra" sem rede
     var savedAt: Date
+    var generatedLRC: String? = nil
 }
 
 struct LyricsDiskCache: Sendable {
@@ -97,14 +98,14 @@ actor LyricsPrefetcher {
     /// Offline preparation never replaces the current Karaoke lyrics in LyricsStore.
     func ensureSyncedLyrics(_ meta: TrackMetadata) async -> Bool {
         if var cached = cache.load(meta.videoID),
-           cached.selected?.syncedLyrics?.isEmpty == false {
+           (cached.generatedLRC ?? cached.selected?.syncedLyrics)?.isEmpty == false {
             cached.offlinePinned = true
             cache.save(cached, id: meta.videoID)
             return true
         }
         await run(meta, apply: false)
         guard var choice = cache.load(meta.videoID),
-              choice.selected?.syncedLyrics?.isEmpty == false else { return false }
+              (choice.generatedLRC ?? choice.selected?.syncedLyrics)?.isEmpty == false else { return false }
         choice.offlinePinned = true
         cache.save(choice, id: meta.videoID)
         return true
@@ -113,6 +114,7 @@ actor LyricsPrefetcher {
     /// A tela pode aguardar o trabalho já em curso, em vez de iniciar um segundo
     /// fluxo de até 3 requisições quando o usuário abre o karaokê rapidamente.
     func awaitChoice(for videoID: String) async -> CachedLyricsChoice? {
+        if let cached = cache.load(videoID) { return cached }
         if activeID == videoID { await task?.value }
         return cache.load(videoID)
     }
@@ -123,6 +125,7 @@ actor LyricsPrefetcher {
         var c = cache.load(videoID) ?? CachedLyricsChoice(selected: nil, score: 1, needsReview: false,
                                                            pinned: true, alternatives: [], savedAt: Date())
         c.selected = record; c.pinned = true; c.needsReview = false; c.score = 1; c.savedAt = Date()
+        c.generatedLRC = nil
         cache.save(c, id: videoID)
         if let lrc = record.syncedLyrics {
             await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
@@ -131,6 +134,7 @@ actor LyricsPrefetcher {
                                      sourceURL: sourceURL, duration: activeDuration,
                                      force: true)
         }
+        await enhance(c, videoID: videoID)
     }
 
     func alternatives(for videoID: String) -> [LRCLIBRecord] { cache.load(videoID)?.alternatives ?? [] }
@@ -181,9 +185,9 @@ actor LyricsPrefetcher {
 
     private func finish(_ c: CachedLyricsChoice, _ m: TrackMetadata, _ apply: Bool) async {
         guard apply, !Task.isCancelled, activeID == m.videoID else { return }   // resultado velho de faixa anterior
-        if let lrc = c.selected?.syncedLyrics {
+        if let lrc = c.generatedLRC ?? c.selected?.syncedLyrics {
             await store.load(trackID: m.videoID, rawLRC: lrc,
-                             needsReview: c.needsReview, force: c.pinned)
+                             needsReview: c.needsReview || c.generatedLRC != nil, force: c.pinned)
         } else if let sourceURL = activeSourceURL {
             await store.loadFallback(trackID: m.videoID,
                                      plainText: c.selected?.plainLyrics,
@@ -191,5 +195,27 @@ actor LyricsPrefetcher {
         } else {
             await store.markUnavailable(trackID: m.videoID)
         }
+        await enhance(c, videoID: m.videoID)
     }
+    private func enhance(_ choice: CachedLyricsChoice, videoID: String) async {
+        guard choice.generatedLRC == nil, let plain = choice.selected?.plainLyrics,
+              !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              activeID == videoID, !Task.isCancelled else { return }
+        let baseURL = await AudioDownloadManager.apiBaseURL
+        do {
+            let lrc = try await LyricsAlignmentClient.align(videoID: videoID, lyrics: plain,
+                                                           baseURL: baseURL)
+            guard !Task.isCancelled, activeID == videoID,
+                  var current = cache.load(videoID), current.selected == choice.selected,
+                  await store.trackID == videoID else { return }
+            current.generatedLRC = lrc
+            cache.save(current, id: videoID)
+            await store.installAlignedLyrics(lrc, trackID: videoID)
+        } catch {
+            guard !Task.isCancelled, activeID == videoID,
+                  cache.load(videoID)?.selected == choice.selected else { return }
+            await store.setAlignmentNotice(error.localizedDescription, trackID: videoID)
+        }
+    }
+
 }

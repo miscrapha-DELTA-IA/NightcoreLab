@@ -563,6 +563,7 @@ extension AudioDownloadManager: DownloadManagerDelegate {
     func downloadStatusDidChange(_ download: Download) async {
         guard case .failed(let error) = download.status, let track = tracks[download.id] else { return }
         let response = tasks[download.id]?.response as? HTTPURLResponse
+        let upstreamCode = response?.value(forHTTPHeaderField: "X-Download-Error")
         let rateLimited: Bool
         if case .serverError(let status) = error {
             rateLimited = status == 429
@@ -588,9 +589,9 @@ extension AudioDownloadManager: DownloadManagerDelegate {
                          .notConnectedToInternet, .dnsLookupFailed].contains(network.code)
         default: retryable = false
         }
-        guard retryable, attempt < 2 else {
+        guard retryable, upstreamCode == nil, attempt < 2 else {
             completeOfflineAudio(track.id, result: .failure(error))
-            fail(track, message: DownloadFailureMessage.describe(error, status: response?.statusCode))
+            fail(track, message: DownloadFailureMessage.describe(error, status: response?.statusCode, upstreamCode: upstreamCode))
             return
         }
         isRetrying = true
@@ -630,7 +631,13 @@ extension AudioDownloadManager: DownloadManagerDelegate {
 }
 
 enum DownloadFailureMessage {
-    static func describe(_ error: Error, status: Int? = nil) -> String {
+    static func describe(_ error: Error, status: Int? = nil, upstreamCode: String? = nil) -> String {
+        if upstreamCode == "upstream_rate_limited" {
+            return "O YouTube limitou os downloads do servidor. Aguarde cinco minutos. As músicas já baixadas continuam disponíveis."
+        }
+        if upstreamCode == "upstream_unavailable" {
+            return "O YouTube não respondeu ao servidor. Tente novamente mais tarde."
+        }
         if let status, status >= 400 {
             if status == 429 { return "Servidor ocupado (HTTP 429). Aguarde um minuto e tente novamente." }
             return "O servidor recusou o áudio (HTTP \(status)). Tente novamente ou escolha outra versão."

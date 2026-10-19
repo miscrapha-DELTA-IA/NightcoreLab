@@ -125,7 +125,7 @@ struct LyricsView: View {
 
     private func apply(_ selected: LyricsRecord, pin: Bool = false) {
         record = selected
-        if let synced = selected.syncedLyrics, !synced.isEmpty {
+        if let synced = cached.generatedLRC ?? selected.syncedLyrics, !synced.isEmpty {
             lyricStore.load(trackID: track.id, rawLRC: synced,
                             needsReview: false, force: true)
         } else if let url = audio.visualAnalysisURL {
@@ -304,6 +304,13 @@ struct LyricsView: View {
                     .padding(.horizontal, 22)
                 }
 
+                if !inline, let notice = lyricStore.alignmentNotice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 22)
+                }
+
                 if !inline && !lyricStore.lines.isEmpty {
                     HStack(spacing: 10) {
                         Text("SINCRONIA")
@@ -408,7 +415,7 @@ struct LyricsView: View {
                     candidates = cached.alternatives.map(\.asLegacyRecord)
                     if let selected = cached.selected {
                         record = selected.asLegacyRecord
-                        if let synced = selected.syncedLyrics, !synced.isEmpty {
+                        if let synced = cached.generatedLRC ?? selected.syncedLyrics, !synced.isEmpty {
                             lyricStore.load(trackID: track.id, rawLRC: synced,
                                             needsReview: cached.needsReview,
                                             force: cached.pinned)
