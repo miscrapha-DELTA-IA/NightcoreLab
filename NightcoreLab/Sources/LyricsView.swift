@@ -125,7 +125,7 @@ struct LyricsView: View {
 
     private func apply(_ selected: LyricsRecord, pin: Bool = false) {
         record = selected
-        if let synced = cached.generatedLRC ?? selected.syncedLyrics, !synced.isEmpty {
+        if let synced = selected.syncedLyrics, !synced.isEmpty {
             lyricStore.load(trackID: track.id, rawLRC: synced,
                             needsReview: false, force: true)
         } else if let url = audio.visualAnalysisURL {
