@@ -462,6 +462,7 @@ def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
     asyncio waiter is cancelled (run_in_executor cannot kill running threads).
     """
     with _heavy_ytdlp_slots:
+        _check_youtube_cooldown()
         _sweep_stale_work_dirs()
         work_dir = tempfile.mkdtemp(prefix=WORK_DIR_PREFIX)
         try:
@@ -529,6 +530,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         if hit is not None:
             _release_cached_reader(video_id)
     if entry is None:
+        _check_youtube_cooldown()
         # Bound distinct queued video IDs as well as actual worker count.
         # Otherwise thousands of unique requests still allocate tasks in RAM.
         if len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
@@ -592,6 +594,27 @@ def _audio_response(audio_path: Path, title: str, thumbnail: str | None,
     )
 
 
+# A YouTube 429 applies to this server, not just one song. Cached audio remains
+# available while new/queued extractions wait. Never turn it into a misleading 422.
+_youtube_cooldown_until = 0.0
+_youtube_cooldown_lock = threading.Lock()
+
+
+def _pause_youtube_requests() -> None:
+    global _youtube_cooldown_until
+    with _youtube_cooldown_lock:
+        _youtube_cooldown_until = max(_youtube_cooldown_until, time.monotonic() + 300)
+
+
+def _check_youtube_cooldown() -> None:
+    with _youtube_cooldown_lock:
+        remaining = int(_youtube_cooldown_until - time.monotonic() + 0.999)
+    if remaining > 0:
+        raise HTTPException(status_code=429,
+            detail="O YouTube limitou os downloads deste servidor. As músicas já baixadas continuam disponíveis.",
+            headers={"Retry-After": str(remaining), "X-Download-Error": "upstream_rate_limited"})
+
+
 class _YtdlpLog:
     """Leva os avisos do yt-dlp para o log do Render (é neles que o YouTube explica
     por que um formato sumiu: PO token, desafio JS, cookies vencidos...)."""
@@ -606,6 +629,8 @@ class _YtdlpLog:
         pass
 
     def warning(self, msg: str) -> None:
+        if "http error 429" in msg.lower() or "too many requests" in msg.lower():
+            _pause_youtube_requests()
         log.warning("yt-dlp [%s]: %s", self.label, msg[:500])
 
     def error(self, msg: str) -> None:   # o erro final já é registrado em download()
@@ -630,6 +655,7 @@ _RETRYABLE = (
     "no video formats found",
     "po token",
     "http error 403",
+    "failed to extract any player response",
     "this content isn't available",
 )
 
@@ -658,11 +684,16 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         except yt_dlp.utils.DownloadError as error:
             last_error = error
             message = str(error)
+            _check_youtube_cooldown()
             log.warning("estratégia %s falhou: %s", label, message[:300])
             if not any(marker in message.lower() for marker in _RETRYABLE):
                 raise
 
     assert last_error is not None
+    if "failed to extract any player response" in str(last_error).lower():
+        raise HTTPException(status_code=503,
+            detail="O YouTube não respondeu ao servidor. Tente novamente mais tarde.",
+            headers={"Retry-After": "300", "X-Download-Error": "upstream_unavailable"})
     raise last_error
 
 
