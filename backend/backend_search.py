@@ -12,6 +12,8 @@ NÃO testado contra o YouTube neste ambiente.
 """
 import logging
 import threading
+from concurrent.futures import Future, TimeoutError
+import audio_sources
 
 from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException, Query
@@ -29,7 +31,7 @@ _suggest_cache: TTLCache = TTLCache(maxsize=2048, ttl=300)
 def _hit(r: dict, is_song: bool) -> dict:
     artists = ", ".join(a["name"] for a in (r.get("artists") or []) if a.get("name"))
     thumbs = r.get("thumbnails") or []
-    return {
+    hit = {
         "id": r["videoId"],
         "title": r.get("title", ""),
         "artist": artists,
@@ -40,18 +42,69 @@ def _hit(r: dict, is_song: bool) -> dict:
         "explicit": bool(r.get("isExplicit", False)),
     }
 
+    if is_song:
+        audio_sources.remember(hit["id"], hit["title"], hit["artist"], hit["duration"], hit["thumb"])
+    return hit
+
+
+_stale = TTLCache(maxsize=4096, ttl=3600)
+_pending = {}
+
+
+def _cached_call(namespace, key, cache, fetch):
+    """Coalesce identical lookups; serve recent metadata on temporary upstream failure."""
+    token = (namespace, key)
+    with _cache_lock:
+        if key in cache:
+            return cache[key]
+        future = _pending.get(token)
+        owner = future is None
+        if owner:
+            if not _guard.acquire(blocking=False):
+                if token in _stale:
+                    return _stale[token]
+                raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.",
+                                    headers={"Retry-After": "2"})
+            future = _pending[token] = Future()
+    if not owner:
+        try:
+            return future.result(timeout=20)
+        except TimeoutError:
+            with _cache_lock:
+                if token in _stale:
+                    return _stale[token]
+            raise HTTPException(status_code=504, detail="Tempo limite da busca excedido.")
+    try:
+        try:
+            result = fetch()
+        except Exception as exc:
+            log.warning("Music %s failed: %s", namespace, type(exc).__name__)
+            with _cache_lock:
+                if token not in _stale:
+                    raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.") from exc
+                result = _stale[token]
+            # Do not renew stale lifetime during an outage.
+        else:
+            with _cache_lock:
+                cache[key] = result
+                _stale[token] = result
+        future.set_result(result)
+        return result
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _cache_lock:
+            _pending.pop(token, None)
+        _guard.release()
+
 
 @router.get("/v1/search")
 def search(q: str = Query(..., min_length=2, max_length=120), limit: int = Query(10, ge=1, le=20)):
     key = (q.strip().lower(), limit)
     if not key[0]:
         raise HTTPException(status_code=422, detail="Consulta vazia.")
-    with _cache_lock:
-        if key in _search_cache:
-            return _search_cache[key]
-    if not _guard.acquire(blocking=False):
-        raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.")
-    try:
+    def fetch():
         ytm = YTMusic()
         out = [_hit(r, True) for r in ytm.search(q, filter="songs", limit=limit)
                if r.get("videoId")]
@@ -62,14 +115,8 @@ def search(q: str = Query(..., min_length=2, max_length=120), limit: int = Query
                     out.append(_hit(r, False))
                     seen.add(r["videoId"])
         out = out[:limit]
-        with _cache_lock:
-            _search_cache[key] = out
         return out
-    except Exception as exc:
-        log.warning("YT Music v1 search failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.") from exc
-    finally:
-        _guard.release()
+    return _cached_call("search", key, _search_cache, fetch)
 
 
 @router.get("/v1/suggest", response_model=list[str])
@@ -77,18 +124,6 @@ def suggest(q: str = Query(..., min_length=1, max_length=80)) -> list[str]:
     key = q.strip().lower()
     if not key:
         return []
-    with _cache_lock:
-        if key in _suggest_cache:
-            return _suggest_cache[key]
-    if not _guard.acquire(blocking=False):
-        raise HTTPException(status_code=429, detail="Busca ocupada.")
-    try:
-        suggestions = [v for v in YTMusic().get_search_suggestions(q) if isinstance(v, str)][:6]
-        with _cache_lock:
-            _suggest_cache[key] = suggestions
-        return suggestions
-    except Exception as exc:
-        log.warning("YT Music suggestions failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="Sugestões indisponíveis.") from exc
-    finally:
-        _guard.release()
+    def fetch():
+        return [v for v in YTMusic().get_search_suggestions(q) if isinstance(v, str)][:6]
+    return _cached_call("suggest", key, _suggest_cache, fetch)
