@@ -657,6 +657,7 @@ class _YtdlpLog:
 # quais clientes exigem PO token num IP de datacenter; ter alternativas evita o app quebrar.
 #   (rótulo, usa cookies?, clientes do player — None = padrão do yt-dlp)
 _STRATEGIES: list[tuple[str, bool, list[str] | None]] = [
+    ("logado/web", True, ["web"]),                      # evita clientes que retornam 403 neste servidor
     ("logado/padrão", True, None),                          # web_embedded, tv_downgraded, web
     ("logado/tv", True, ["tv", "web_embedded", "mweb"]),    # tv e web_embedded dispensam PO token
     ("anônimo/visionos", False, ["visionos", "android_vr"]),
@@ -702,8 +703,15 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
             message = str(error)
             _check_youtube_cooldown()
             log.warning("estratégia %s falhou: %s", label, message[:300])
-            if not any(marker in message.lower() for marker in _RETRYABLE):
+            if "private video" in message.lower() or (label != "logado/web" and
+                    not any(marker in message.lower() for marker in _RETRYABLE)):
                 raise
+        except HTTPException as error:
+            # The single-client shortcut may find no usable m4a. Keep the
+            # original multi-client strategy for that video.
+            if label != "logado/web" or error.status_code != 422 or error.detail != "Não foi possível obter o áudio em formato .m4a.":
+                raise
+            log.warning("estratégia %s sem áudio m4a; tentando clientes padrão", label)
 
     assert last_error is not None
     if "failed to extract any player response" in str(last_error).lower():
