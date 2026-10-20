@@ -553,7 +553,6 @@ struct SearchView: View {
             }
             .padding(14)
             .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
-            .hideablePanel(.omnibox, edge: .top)
 
             if let pendingTrackID {
                 HStack(spacing: 9) {

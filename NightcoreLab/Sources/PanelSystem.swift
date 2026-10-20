@@ -128,8 +128,8 @@ enum PanelID: String, CaseIterable, Identifiable {
     case header, player, lyrics, themes, controls
     case omnibox, discover, queue, presets, export
 
-    // Only the search field is independently hideable from the eye menu.
-    // Discovery results and queue remain in their existing drawer sections.
+    // Busca controls the complete omnibox surface, including its drawer handle.
+    // Its contents and playback queue retain their state while hidden.
     static let discoveryPanels: [PanelID] = [.omnibox]
     static let audioPanels: [PanelID] = [.presets, .controls]
     static let mainPanels: [PanelID] = [.header, .player, .omnibox, .presets, .controls, .export]

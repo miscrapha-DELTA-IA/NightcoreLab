@@ -473,7 +473,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                                     Spacer(minLength: 52)
                                 }
                                 .frame(minHeight: viewport.size.height)
-                                .padding(.bottom, searchDrawer.isOpen ? 360 : 0)
+                                .padding(.bottom, searchDrawer.isOpen && panels.isVisible(.omnibox) ? 360 : 0)
                                 .zIndex(5)
                             } else {
                                 // Keep the import shortcut close to discovery
@@ -855,6 +855,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         searchDrawerContent(searchDrawer.focusRequest)
                     }
                     .offset(y: card.size.height - 3)
+                    .hideablePanel(.omnibox, edge: .top)
                 }
             }
             .zIndex(5)
