@@ -1155,12 +1155,11 @@ private struct RetractableMusicDrawer<Content: View>: View {
 private struct SearchDrawerHandle: View {
     @Binding var state: SearchDrawerState
     let accent: Color
-    @Environment(PanelStore.self) private var panels
-
     var body: some View {
         HStack(spacing: 4) {
             Button {
-                panels.setVisible(true, for: .omnibox)
+                // The eye menu alone controls whether the existing omnibox is visible.
+                // Opening the drawer must not override that saved choice.
                 state.openForSearch()
                 CreativeHaptics.selection()
             } label: {
