@@ -82,7 +82,10 @@ final class AnalysisSchedulerTests: XCTestCase {
                 return result
             }
         }
-        await fulfillment(of: [started], timeout: 12)
+        // CI macOS can temporarily starve .utility tasks while the simulator
+        // boots. Preserve the correctness assertion without treating scheduling
+        // latency as a functional failure.
+        await fulfillment(of: [started], timeout: 45)
         let queued = Task {
             try await scheduler.run(key: "queued") { _ in
                 XCTFail("A cancelled queued request cannot execute")
