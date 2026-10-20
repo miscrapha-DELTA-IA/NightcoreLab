@@ -93,6 +93,9 @@ final class NeuralStemsRegressionTests: XCTestCase {
         let array = try MLMultiArray(dataPointer: pointer, shape: [1, 2, 3], dataType: .float32,
                                     strides: [16, 8, 2], deallocator: { _ in })
         XCTAssertEqual(try DemucsCoreMLModel.readStrided(array), values)
+        try DemucsCoreMLModel.writeStrided(values.map { $0 * 2 }, to: array)
+        XCTAssertEqual(try DemucsCoreMLModel.readStrided(array), values.map { $0 * 2 })
+        XCTAssertEqual(pointer[1], -999, "Tensor padding must stay untouched")
     }
 
     func testIndependentGainHasExactMuteAndTransparentUnity() {

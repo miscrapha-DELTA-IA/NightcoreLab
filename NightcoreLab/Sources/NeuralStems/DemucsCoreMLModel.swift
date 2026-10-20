@@ -71,15 +71,15 @@ public final class DemucsCoreMLModel {
         let length = StemDSP.segmentSamples, plane = StemDSP.bins * StemDSP.frames
         let mix = try MLMultiArray(shape: [1, 2, NSNumber(value: length)], dataType: .float32)
         let spectrum = try MLMultiArray(shape: [1, 4, NSNumber(value: StemDSP.bins), NSNumber(value: StemDSP.frames)], dataType: .float32)
-        // Input arrays created here are dense. Output arrays are NOT assumed dense.
-        input.withUnsafeBufferPointer { mix.dataPointer.assumingMemoryBound(to: Float.self).update(from: $0.baseAddress!, count: input.count) }
-        let specPointer = spectrum.dataPointer.assumingMemoryBound(to: Float.self)
+        try Self.writeStrided(input, to: mix)
+        var spectralInput = [Float](repeating: 0, count: 4 * plane)
         for channel in 0..<2 {
             let signal = Array(input[(channel * length)..<((channel + 1) * length)])
             let spec = StemDSP.stft(signal)
-            spec.re.withUnsafeBufferPointer { (specPointer + channel * 2 * plane).update(from: $0.baseAddress!, count: plane) }
-            spec.im.withUnsafeBufferPointer { (specPointer + (channel * 2 + 1) * plane).update(from: $0.baseAddress!, count: plane) }
+            spectralInput.replaceSubrange((channel * 2 * plane)..<((channel * 2 + 1) * plane), with: spec.re)
+            spectralInput.replaceSubrange(((channel * 2 + 1) * plane)..<((channel * 2 + 2) * plane), with: spec.im)
         }
+        try Self.writeStrided(spectralInput, to: spectrum)
         let output = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: [mixName: mix, specName: spectrum]))
         try Task.checkCancellation()
         let arrays = output.featureNames.compactMap { output.featureValue(for: $0)?.multiArrayValue }
@@ -108,6 +108,20 @@ public final class DemucsCoreMLModel {
             throw NeuralStemError.invalidOutput
         }
         return result
+    }
+
+    public static func writeStrided(_ values: [Float], to array: MLMultiArray) throws {
+        let shape = array.shape.map(\.intValue), strides = array.strides.map(\.intValue)
+        guard array.dataType == .float32, shape.reduce(1, *) == values.count,
+              let inner = shape.last, inner > 0 else { throw NeuralStemError.incompatibleModel }
+        let pointer = array.dataPointer.assumingMemoryBound(to: Float.self)
+        for row in 0..<(values.count / inner) {
+            var base = 0, remaining = row
+            for dim in stride(from: shape.count - 2, through: 0, by: -1) {
+                base += (remaining % shape[dim]) * strides[dim]; remaining /= shape[dim]
+            }
+            for i in 0..<inner { pointer[base + i * strides.last!] = values[row * inner + i] }
+        }
     }
 
     /// Core ML fp16 tensors can have padded rows (e.g. 344000 vs 343980).
