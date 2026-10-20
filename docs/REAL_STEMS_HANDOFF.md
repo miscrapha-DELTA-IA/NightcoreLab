@@ -132,3 +132,23 @@ cannot mute the four stems. Offline exports now use that exact shared graph
 and original-source gate; the independent isolation/mute test covers it.
 Added selected-source-time stem export regression. Next full IPA CI and
 artifact inspection, followed by final PR/checkpoint and automation pause.
+
+## Full suite checkpoint — 2026-10-20 20:30 UTC
+
+Code head 0392a34: model parity, iOS compile, Karaoke Clean and 14 targeted
+Metal/Share regressions PASSED. Full run 39489478644 executed 655 tests:
+1 pre-existing test skipped, 1 failure in the new mono48→stereo44.1 resampling
+fixture (Apple AVAudioFile threw `nilError`), all other tests passed.
+In particular, actual independent isolation/mute, selected-time export,
+strided tensors and live AU parameter event delivery all PASSED.
+
+Fix: bound the converter input callback to the file's remaining frames and
+signal endOfStream before attempting a read at EOF; explicitly use planar
+float32 AVAudioFile processing formats for decoded CAF and output WAVs.
+The existing test retains its exact frame/impulse/gain assertions.
+The delivery test now also LOADS AND PREDICTS from the actual compiled model
+in the iOS Simulator runtime, instead of merely checking bundle presence.
+Bundled MIT notices now describe the actual distributed components precisely.
+Next inspect the new CI run; resolve any remaining conversion/runtime failure
+without weakening meaningful tests. Do not deliver until the IPA exists and
+its identity, neural model and parity evidence have been inspected.

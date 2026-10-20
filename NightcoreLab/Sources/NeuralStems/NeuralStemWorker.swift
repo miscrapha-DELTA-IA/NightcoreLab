@@ -148,15 +148,22 @@ enum NeuralStemWorker {
               let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8192),
               let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192),
               let buffer = AVAudioPCMBuffer(pcmFormat: stereo, frameCapacity: 8192) else { throw NeuralStemError.noAudio }
-        let writer = try AVAudioFile(forWriting: destination, settings: stereo.settings)
+        let writer = try AVAudioFile(forWriting: destination, settings: stereo.settings,
+                                     commonFormat: .pcmFormatFloat32, interleaved: false)
         var total = 0, sum = 0.0, squares = 0.0, ended = false
         while true {
             try check()
             var conversionError: NSError?, readError: Error?
             let status = converter.convert(to: output, error: &conversionError) { packets, state in
-                if ended { state.pointee = .endOfStream; return nil }
+                // AVAudioFile can fail with a nil NSError when asked to read
+                // beyond EOF. Signal EOF before reading, and drain the
+                // converter's remaining resampler frames normally.
+                let remaining = file.length - file.framePosition
+                if ended || remaining <= 0 { ended = true; state.pointee = .endOfStream; return nil }
+                let count = AVAudioFrameCount(min(Int64(min(packets, input.frameCapacity)), remaining))
+                guard count > 0 else { state.pointee = .noDataNow; return nil }
                 do {
-                    try file.read(into: input, frameCount: min(packets, input.frameCapacity))
+                    try file.read(into: input, frameCount: count)
                     if input.frameLength == 0 { ended = true; state.pointee = .endOfStream; return nil }
                     state.pointee = .haveData; return input
                 } catch { readError = error; state.pointee = .endOfStream; return nil }
@@ -197,7 +204,10 @@ enum NeuralStemWorker {
         let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(length))!
         // Keep Float32 on disk: no AAC priming, independent rescaling or clipping.
         let order: [StemKind] = [.drums, .bass, .instrumental, .vocal]
-        let writers = try order.map { try AVAudioFile(forWriting: destinations[$0]!, settings: format.settings) }
+        let writers = try order.map {
+            try AVAudioFile(forWriting: destinations[$0]!, settings: format.settings,
+                            commonFormat: .pcmFormatFloat32, interleaved: false)
+        }
         var accumulator = [Float](repeating: 0, count: 8 * length)
         var weights = [Float](repeating: 0, count: length)
         var start = 0

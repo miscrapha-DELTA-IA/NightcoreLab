@@ -182,7 +182,7 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(try settledPeak(), 0.05, accuracy: 0.0001)
     }
 
-    func testDeliveryContainsVerifiedNeuralModel() throws {
+    func testDeliveryContainsAndRunsVerifiedNeuralModel() throws {
         let environment = ProcessInfo.processInfo.environment
         let required = environment["GNARLY_REQUIRE_NEURAL_MODEL"] == "1" ||
             environment["TEST_RUNNER_GNARLY_REQUIRE_NEURAL_MODEL"] == "1"
@@ -194,5 +194,15 @@ final class NeuralStemsRegressionTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: evidence)) as? [String: Any])
         XCTAssertEqual(json["passed"] as? Bool, true)
         XCTAssertEqual((json["sources"] as? [[String: Any]])?.count, 4)
+        // This uses the actual bundled compiled model in the iOS runtime,
+        // rather than trusting the separate macOS converter/parity process.
+        let runtime = try DemucsCoreMLModel(url: model, cpuOnly: true)
+        let channel = (0..<StemDSP.segmentSamples).map {
+            Float(0.1 * sin(2 * .pi * 440 * Double($0) / 44_100))
+        }
+        let output = try runtime.separate(channel + channel)
+        XCTAssertEqual(output.count, 8 * StemDSP.segmentSamples)
+        XCTAssertTrue(output.allSatisfy { $0.isFinite })
+        XCTAssertGreaterThan(output.map { abs($0) }.max() ?? 0, 0.001)
     }
 }

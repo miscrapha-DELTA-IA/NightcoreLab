@@ -39,7 +39,7 @@ __pycache__/
 .venv-demucs-*/
 venv/
 
-# Generated neural model resources are verified from the pinned release asset.
+# Generated neural model resources are verified by the pinned-source CI pipeline.
 .cache/
 .build/
 NightcoreLab/Resources/NeuralStems/*.mlmodelc/

@@ -19,29 +19,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-# Third-party notices
+Bundled model: Meta HTDemucs v4 (955717e8), MIT.
+Weights: https://huggingface.co/adefossez/HTDemucs
+Revision: cbc8a9b1a87023b7fd74e7b3412e6321c0eab003
+Source: https://github.com/facebookresearch/demucs
 
-This repository contains no model weights. The conversion scripts download them from their original
-sources at run time. Licenses below apply to those components, not to this repository's own code
-(which is MIT — see [LICENSE](LICENSE)).
+Core ML conversion and DSP port adapted from demucs-coreml-ios, MIT:
+https://github.com/tsyrenov1987/demucs-coreml-ios
+Revision: 8bc00d620eada4c75dc668c37704feb675be2f59
 
-| Component | Used for | Source | License |
-|---|---|---|---|
-| Demucs v4 (htdemucs) — code and pretrained weights | The separator being converted; `convert_core.py` reuses `HTDemucs.forward` with the spec calls replaced, and `stemcommon.py` reproduces `_spec`/`_ispec`/`_magnitude`/`_mask` | [facebookresearch/demucs](https://github.com/facebookresearch/demucs) | MIT, © Meta Platforms, Inc. |
-| coremltools | PyTorch → Core ML conversion | [apple/coremltools](https://github.com/apple/coremltools) | BSD-3-Clause, © Apple Inc. |
-| PyTorch / torchaudio | Reference implementation and export | [pytorch/pytorch](https://github.com/pytorch/pytorch) | BSD-3-Clause |
-| einops | Tensor rearrangement inside the copied forward | [arogozhnikov/einops](https://github.com/arogozhnikov/einops) | MIT |
-| MUSDB18 (previews) | Quality measurement in `musdb_sdr.py` (not redistributed) | [sigsep/sigsep-mus-db](https://github.com/sigsep/sigsep-mus-db) | Dataset is licensed for non-commercial research use — check before using it in a commercial context |
+The conversion uses PyTorch and Apple coremltools at build time. Those Python
+runtimes and evaluation datasets are not bundled in the app. The model runs
+locally with Apple's Core ML and Accelerate frameworks.
 
-Notes:
-
-* **Demucs weights are MIT**, which is what makes on-device separation usable in a commercial app.
-  Include this notice (or an equivalent attribution) in your app's acknowledgements.
-* `convert_ft.py` targets `htdemucs_ft` — the same MIT weights, four fine-tuned models instead of one.
-* BS-RoFormer is intentionally **not** included here. The architecture and training code
-  ([ZFTurbo/Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training),
-  [lucidrains/BS-RoFormer](https://github.com/lucidrains/BS-RoFormer)) are MIT, but the widely used
-  community checkpoints have unclear licensing, so nothing that depends on them ships here.
 MIT License
 
 Copyright (c) Meta Platforms, Inc. and affiliates.
