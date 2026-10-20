@@ -6,6 +6,11 @@ import Observation
 @MainActor @Observable
 final class KaraokeScoringSession {
     enum Mode: Equatable, Sendable { case off, microphone, simulation, passive }
+    struct Result {
+        let snapshot: KaraokeScoreSnapshot
+        let mode: Mode
+    }
+    private(set) var lastResult: Result?
     private(set) var mode: Mode = .off
     private(set) var snapshot = KaraokeScoreSnapshot()
     private(set) var message: String?
@@ -57,6 +62,7 @@ final class KaraokeScoringSession {
     }
 
     func stop(message: String? = nil) {
+        if mode != .off { finish() }
         mode = .off; self.message = message
         snapshot = .init(); lastTime = nil; judgmentVisible = false
         liveMicLevel = 0
@@ -64,7 +70,7 @@ final class KaraokeScoringSession {
     }
 
     func resetForTrack() {
-        stop(); referenceKey = nil; referenceMelody = nil
+        stop(); lastResult = nil; referenceKey = nil; referenceMelody = nil
     }
 
     /// Safe hardware-free injection; real microphone runs cannot accept it.
@@ -108,6 +114,7 @@ final class KaraokeScoringSession {
     func finish() {
         guard mode != .off else { return }
         engine.finish(); snapshot = engine.snapshot
+        lastResult = Result(snapshot: snapshot, mode: mode)
         microphoneFrame = nil
     }
 }

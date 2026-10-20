@@ -63,6 +63,7 @@ final class LyricsStore {
     @ObservationIgnored private var clock: PlaybackClock?
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadGeneration = UUID()
     @ObservationIgnored private var refinedCache: [String: (source: String, lines: [TimedLyricLine])] = [:]
     /// Called by the app's memory-warning owner. Active song state stays intact.
     func discardVolatileLyricCache() {
@@ -104,7 +105,12 @@ final class LyricsStore {
 
     /// O prefetcher começa o trabalho antes do utilizador entrar em Karaokê.
     func beginLoading(trackID: String) {
+        if self.trackID == trackID { return }
         loadTask?.cancel()
+        loadGeneration = UUID()
+        rawSource = nil
+        acousticRefinementKey = nil
+        latestDNA = nil
         if trackID != self.trackID {
             scoring.resetForTrack()
             self.trackID = trackID
@@ -120,6 +126,8 @@ final class LyricsStore {
 
     func markUnavailable(trackID: String) {
         guard self.trackID == trackID else { return }
+        loadTask?.cancel()
+        loadGeneration = UUID()
         scoring.stop()
         status = .unavailable
         lines = []
@@ -136,6 +144,8 @@ final class LyricsStore {
                       retryRecognition: Bool = false) {
         guard self.trackID == trackID, force || status != .ready else { return }
         loadTask?.cancel()
+        loadGeneration = UUID()
+        let generation = loadGeneration
         status = .searching
         let bars = latestDNA?.barTimestamps ?? []
         let fingerprint = AutoLyricsTranscriber.fingerprint(source: sourceURL) +
@@ -145,7 +155,7 @@ final class LyricsStore {
                                                                fingerprint: fingerprint),
                !retryRecognition || cached.contains(where: {
                    $0.provenance == .autoTranscribed }) {
-                await self?.installFallback(cached, trackID: trackID)
+                await self?.installFallback(cached, trackID: trackID, generation: generation)
                 return
             }
             // Lyrics fallback must not trigger a full-track STFT or upload.
@@ -163,12 +173,13 @@ final class LyricsStore {
             guard !Task.isCancelled else { return }
             await AutoLyricsCache.shared.save(generated, trackID: trackID,
                                               fingerprint: fingerprint)
-            await self?.installFallback(generated, trackID: trackID)
+            await self?.installFallback(generated, trackID: trackID, generation: generation)
         }
     }
 
-    private func installFallback(_ generated: [TimedLyricLine], trackID: String) {
-        guard self.trackID == trackID, status != .ready, !generated.isEmpty else { return }
+    private func installFallback(_ generated: [TimedLyricLine], trackID: String, generation: UUID) {
+        guard self.trackID == trackID, loadGeneration == generation,
+              status != .ready, !generated.isEmpty else { return }
         lines = generated
         hasWordSync = generated.contains { $0.precision == .word }
         status = .ready
@@ -202,6 +213,12 @@ final class LyricsStore {
             vocalEnergy: phrases.map { (time: $0.start, value: 1.0) })
     }
 
+    func loadIfCurrent(trackID: String, rawLRC: String,
+                       needsReview: Bool = false, force: Bool = false) {
+        guard self.trackID == trackID else { return }
+        load(trackID: trackID, rawLRC: rawLRC, needsReview: needsReview, force: force)
+    }
+
     /// force=true é usado pela seleção manual (pin); o automático não a substitui.
     func load(trackID: String, rawLRC: String,
               needsReview: Bool = false, force: Bool = false) {
@@ -210,6 +227,8 @@ final class LyricsStore {
             return
         }
         loadTask?.cancel()
+        loadGeneration = UUID()
+        let generation = loadGeneration
         scoring.stop()
         self.trackID = trackID
         rawSource = rawLRC
@@ -244,7 +263,7 @@ final class LyricsStore {
             }
             if Task.isCancelled { return }
             await MainActor.run {
-                guard let self, self.trackID == trackID else { return }
+                guard let self, self.trackID == trackID, self.loadGeneration == generation else { return }
                 self.refinedCache[trackID] = (source: rawLRC, lines: refined)
                 self.lines = refined
                 self.hasWordSync = refined.contains { $0.precision == .word }
@@ -256,6 +275,7 @@ final class LyricsStore {
 
     func clear() {
         loadTask?.cancel()
+        loadGeneration = UUID()
         rawSource = nil
         acousticRefinementKey = nil
         latestDNA = nil

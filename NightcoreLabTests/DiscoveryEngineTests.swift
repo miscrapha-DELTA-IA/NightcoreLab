@@ -40,7 +40,7 @@ final class DiscoveryEngineTests: XCTestCase {
                              try XCTUnwrap(a.similarity(to: different)))
     }
 
-    func testColdStartPreservesMixWithNewDiscoverySnapshot() {
+    func testColdStartAppliesDiversityWithNewDiscoverySnapshot() {
         let mix = (0..<8).map { track("mix\($0)", artist: "Same") }
         let context = RecContext(speed: 1.25, now: now)
         let discovery = DiscoverySnapshot(events: [], vectors: [
@@ -49,7 +49,7 @@ final class DiscoveryEngineTests: XCTestCase {
         ], currentID: "playing", materialID: "chrome", presetID: "x")
         let result = RecommendationRanker.recommendations(mix: mix, history: [:],
             currentID: "playing", queued: [], context: context, discovery: discovery)
-        XCTAssertEqual(result.map(\.id), mix.map(\.id))
+        XCTAssertEqual(result.map(\.id), Array(mix.prefix(2)).map(\.id))
     }
 
     func testAcousticSimilarityIncreasesScoreOnlyWithTwoVectors() {

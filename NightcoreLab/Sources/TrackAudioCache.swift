@@ -147,6 +147,16 @@ struct TrackAudioCache {
         entries[id].map { folder.appendingPathComponent($0.relativePath) }
     }
 
+    mutating func remove(_ id: String) throws {
+        if let entry = entries[id] {
+            let file = folder.appendingPathComponent(entry.relativePath)
+            if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        }
+        entries[id] = nil
+        pinnedIDs.remove(id)
+        try persist()
+    }
+
     mutating func trim(protecting ids: Set<String>) {
         // Enforce a 20-track / 100 MiB disposable quota without evicting pinned offline audio.
         let sizes = entries.mapValues { entry -> Int in
