@@ -1547,9 +1547,9 @@ final class AudioEngineManager {
     /// The shared application temp directory can contain inputs for tests,
     /// share extensions and other features: deleting every audio file here
     /// would destroy a source immediately before load(url:).
-    nonisolated private static func clearTempAudioFiles() {
+    nonisolated static func clearTempAudioFiles(in tempDir: URL = FileManager.default.temporaryDirectory) {
         let fileManager = FileManager.default
-        let tempDir = fileManager.temporaryDirectory
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
 
         guard let files = try? fileManager.contentsOfDirectory(
             at: tempDir,
@@ -1562,7 +1562,7 @@ final class AudioEngineManager {
             // Only stale files: a deferred cleanup must never delete a new
             // import, a current export or another live engine's center cut.
             guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-                  modified < Date().addingTimeInterval(-24 * 60 * 60) else { continue }
+                  modified < cutoff else { continue }
             if url.lastPathComponent.hasPrefix("nightcore_import_"),
                (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 try? fileManager.removeItem(at: url)

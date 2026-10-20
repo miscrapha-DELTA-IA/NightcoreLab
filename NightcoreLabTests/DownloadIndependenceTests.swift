@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import XCTest
 @testable import NightcoreLab
 
@@ -74,8 +75,13 @@ final class DownloadIndependenceTests: XCTestCase {
         let selected = track(), offline = track()
         manager.select(selected, onReady: { _, _ in XCTFail("Held request cannot finish") })
         try await waitForStart(selected.id)
+        let registered = expectation(description: "Offline request joins the independent pending queue")
+        let subscription = manager.$downloadingIDs
+            .first(where: { $0 == [selected.id, offline.id] })
+            .sink { _ in registered.fulfill() }
+        defer { subscription.cancel() }
         Task { _ = try? await manager.saveOfflineAudio(offline) }
-        try await Task.sleep(for: .milliseconds(100))
+        await fulfillment(of: [registered], timeout: 5)
         XCTAssertTrue(manager.isDownloading)
         XCTAssertEqual(manager.downloadingIDs, [selected.id, offline.id])
         XCTAssertEqual(DownloadRequestProbe.shared.counts(selected.id).starts, 1)
