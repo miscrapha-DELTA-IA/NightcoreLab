@@ -43,3 +43,9 @@ review added compatibility for flat legacy audio paths: sidecars always belong
 to separate per-ID directories, and deletion never removes the shared cache
 root. A regression covers distinct covers and deleting only one legacy track.
 Next inspect the latest run after this compatibility fix (not the old head).
+
+Also update system command availability directly after confirmed playback,
+queue arrival/removal and session restoration: SwiftUI onChange can be deferred
+while the screen is locked. Keep queue capability independent from temporary
+export blocking; AudioEngineManager observes its own isExporting transition to
+disable/re-enable remote commands without depending on a visible screen.

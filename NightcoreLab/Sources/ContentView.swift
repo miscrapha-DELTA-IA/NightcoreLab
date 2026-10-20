@@ -623,7 +623,10 @@ struct ContentView: View {
                                                lyrics: lyricsPrefetcher)
                     },
                     onPlayQueue: { track in selectFromDrawer(track) },
-                    onRemoveQueue: { track in _ = playbackQueue.remove(track) }
+                    onRemoveQueue: { track in
+                        _ = playbackQueue.remove(track)
+                        synchronizeRemoteAvailability()
+                    }
                 )
                 relatedSection.hideablePanel(.queue)
             }
@@ -1283,9 +1286,8 @@ struct ContentView: View {
 
     private func synchronizeRemoteAvailability() {
         audio.updateRemoteCommandAvailability(
-            canSkipNext: !audio.isExporting &&
-                nextTrackSelection != nil,
-            canSkipPrevious: !audio.isExporting && hasTrack)
+            canSkipNext: nextTrackSelection != nil,
+            canSkipPrevious: hasTrack)
     }
 
     private func applyPitch() {
@@ -1388,6 +1390,9 @@ struct ContentView: View {
                 audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL)
                 playingTrackID = track.id
                 currentTrack = committedTrack
+                // SwiftUI onChange may be deferred while the screen is locked.
+                // Remote command state follows the confirmed queue immediately.
+                synchronizeRemoteAvailability()
                 finishDrawerSelection(track.id)
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
@@ -1453,6 +1458,7 @@ struct ContentView: View {
             audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local)
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
+            synchronizeRemoteAvailability()
             // AudioEngineManager.load() does not start playback.
         } catch {
             resumeTrack = saved.track
@@ -1546,6 +1552,7 @@ struct ContentView: View {
                 discovery: snapshot).map { (track.id, $0) }
         })
         playbackTransition.enqueue(ranked, excluding: playingTrackID, queue: playbackQueue)
+        synchronizeRemoteAvailability()
         prefetchUpcoming()
         if autoplayWhenRadioReady {
             autoplayWhenRadioReady = false
@@ -1587,6 +1594,7 @@ struct ContentView: View {
             resumeTrack = nil
             playbackTransition.clearSession()
             playbackTransition.clearQueue(playbackQueue)
+            synchronizeRemoteAvailability()
             navigationHistory.clear()
             playbackTransition.reset()
             downloader.cancelPlaybackSelection()
