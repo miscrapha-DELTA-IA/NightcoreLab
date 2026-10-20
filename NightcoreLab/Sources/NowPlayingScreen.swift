@@ -339,6 +339,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
 
     @Environment(LyricsStore.self) private var lyricsStore
     @Environment(PanelStore.self) private var panels
+    @Environment(\.energyBudget) private var parentEnergyBudget
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.scenePhase) private var scenePhase
@@ -645,8 +646,15 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
     }
 
+    private var playerEnergyBudget: EnergyBudget {
+        var budget = parentEnergyBudget
+        budget.neuralWorkActive = audio.isPreparingStems
+        return budget
+    }
+
     var body: some View {
         playerSheets
+            .environment(\.energyBudget, playerEnergyBudget)
         .environment(\.colorScheme, .dark)
         .onAppear {
             creativePresetID = CreativePresetCatalog.liveSelection(creativePresetID)

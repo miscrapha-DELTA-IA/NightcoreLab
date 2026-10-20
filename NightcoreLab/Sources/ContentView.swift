@@ -97,8 +97,16 @@ private enum MusicControlPage: String, CaseIterable {
     case speedPitch, stems
 }
 
+/// StateObject's autoclosure constructs the expensive engine only once per
+/// screen lifetime. @State(initialValue:) eagerly rebuilt it with view values.
+@MainActor
+private final class PlayerEngineLifetime: ObservableObject {
+    let audio = AudioEngineManager()
+}
+
 struct ContentView: View {
-    @State private var audio = AudioEngineManager()
+    @StateObject private var engineLifetime = PlayerEngineLifetime()
+    private var audio: AudioEngineManager { engineLifetime.audio }
     @State private var searchSession = SearchSession()
 
     @State private var speed: Float = 1.0

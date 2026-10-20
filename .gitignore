@@ -43,5 +43,5 @@ venv/
 .cache/
 .build/
 NightcoreLab/Resources/NeuralStems/*.mlmodelc/
-NightcoreLab/Resources/NeuralStems/neural-parity.json
+NightcoreLab/Resources/NeuralStems/neural-parity*.json
 NightcoreLab/Resources/NeuralStems/model-manifest.json

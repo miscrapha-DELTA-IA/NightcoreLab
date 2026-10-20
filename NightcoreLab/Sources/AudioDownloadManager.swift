@@ -97,11 +97,8 @@ final class AudioDownloadManager: ObservableObject {
                 cache = loaded
                 cachedIDs = Set(loaded.entries.keys)
                 isCacheReady = true
-                // Migrate covers already in WebImage's disk cache, or fill
-                // missing sidecars while online, without delaying audio.
-                for entry in loaded.entries.values {
-                    Task { _ = await ensureArtwork(for: entry.track) }
-                }
+                // Covers migrate when a track is selected or explicitly saved.
+                // Opening the app must never fan out work for the entire library.
             }
         }
         memoryWarningObserver = NotificationCenter.default.addObserver(
@@ -121,6 +118,7 @@ final class AudioDownloadManager: ObservableObject {
     /// Called outside CoreAudio callbacks. No changes to the current source,
     /// active downloads, pad voice pool or uncommitted transfer files.
     func handleMemoryPressure() {
+        Task { await NowPlayingArtworkLoader.releaseDecodedCovers() }
         var protected = Set(tracks.values.map(\.id))
         if let playingID { protected.insert(playingID) }
         if let selectedID { protected.insert(selectedID) }

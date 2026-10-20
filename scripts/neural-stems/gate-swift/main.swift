@@ -89,6 +89,9 @@ if !passed {
     }
 }
 let peak = peakMemoryBytes()
+// Leaves headroom for the UI, playback and streaming writer in a 3GB phone's
+// process budget. This host regression gate does not certify physical iOS RAM.
+if cpuOnly && peak > 1_024 * 1_024 * 1_024 { passed = false }
 try FileHandle.standardError.write(contentsOf: Data("Core ML \(cpuOnly ? "CPU" : "GPU"): load=\(loadSeconds)s, peak=\(peak / 1_048_576)MiB, baseline=\(beforeLoad / 1_048_576)MiB, loaded=\(afterLoad / 1_048_576)MiB\n".utf8))
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
     "passed":passed, "compute_units":cpuOnly ? "cpuOnly" : "cpuAndGPU",

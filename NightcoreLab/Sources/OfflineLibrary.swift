@@ -32,6 +32,7 @@ final class OfflineLibrary: ObservableObject {
     @Published private(set) var phases: [String: String] = [:]
 
     private let analysisCache = MusicAnalysisCache()
+    private var refreshTask: Task<Void, Never>?
     private var savingTasks: [String: Task<Void, Never>] = [:]
     private var savingGenerations: [String: UUID] = [:]
 
@@ -45,7 +46,8 @@ final class OfflineLibrary: ObservableObject {
 
     func refresh(_ tracks: [Track], downloader: AudioDownloadManager,
                  lyrics: LyricsPrefetcher) {
-        Task {
+        refreshTask?.cancel()
+        refreshTask = Task {
             var ready = Set<String>()
             var synced = Set<String>()
             for track in tracks {
@@ -61,6 +63,7 @@ final class OfflineLibrary: ObservableObject {
                     ready.insert(track.id)
                 }
             }
+            guard !Task.isCancelled else { return }
             readyIDs = ready
             lyricsReadyIDs = synced
         }

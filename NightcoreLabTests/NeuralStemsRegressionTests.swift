@@ -116,6 +116,38 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertLessThan(level(440), 0.0001, "Seeking a stem mix must not replay its beginning")
     }
 
+    func testCPUSelectionProtectsXRAndFourGBDevices() {
+        XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 3 * 1_024 * 1_024 * 1_024))
+        XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 4 * 1_024 * 1_024 * 1_024))
+        XCTAssertFalse(DemucsCoreMLModel.prefersCPU(physicalMemory: 6 * 1_024 * 1_024 * 1_024))
+    }
+
+    func testComplexPlanesRespectPaddedStridesWithoutFlatteningAllSources() throws {
+        let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        pointer.initialize(repeating: -999, count: 128)
+        defer { pointer.deallocate() }
+        let array = try MLMultiArray(dataPointer: pointer, shape: [1, 2, 2, 2, 3], dataType: .float32,
+                                    strides: [128, 64, 24, 8, 2], deallocator: { _ in })
+        let values: [Float] = [1, 2, 3, 4, 5, 6]
+        try DemucsCoreMLModel.writePlane(values, to: array, prefix: [0, 1, 1])
+        XCTAssertEqual(try DemucsCoreMLModel.readPlane(array, prefix: [0, 1, 1]), values)
+        XCTAssertEqual(pointer[89], -999)
+        XCTAssertEqual(try DemucsCoreMLModel.readPlane(array, prefix: [0, 0, 0]), Array(repeating: -999, count: 6))
+        XCTAssertThrowsError(try DemucsCoreMLModel.readPlane(array, prefix: [0, 2, 0]))
+    }
+
+    func testNeuralPlayersAllocateOnlyWhenActuallyConnected() {
+        let stems = NeuralStemPlayback()
+        XCTAssertTrue(stems.nodes.isEmpty, "Normal player startup must not instantiate eight extra audio units")
+        let engine = AVAudioEngine(), mixer = AVAudioMixerNode()
+        engine.attach(mixer)
+        stems.connect(engine: engine, mixer: mixer)
+        XCTAssertEqual(stems.nodes.count, 8)
+        XCTAssertTrue(stems.nodes.allSatisfy { $0.engine === engine })
+        stems.detach(from: engine)
+        XCTAssertTrue(stems.nodes.isEmpty)
+    }
+
     func testPaddedMultiArrayUsesAllStrides() throws {
         let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 16)
         pointer.initialize(repeating: -999, count: 16)
