@@ -1,0 +1,22 @@
+{
+  "model_id": "htdemucs-v4-core-fp16-v1",
+  "release": "gnarly-htdemucs-coreml-v1",
+  "asset": "gnarly-htdemucs-coreml-v1.zip",
+  "sha256": "601adca4133f1db70caace1bbd47f1b74dffd94ae33572f6d26ac783dfa1b687",
+  "license": "MIT",
+  "sources": [
+    "drums",
+    "bass",
+    "other",
+    "vocals"
+  ],
+  "sample_rate": 44100,
+  "segment_samples": 343980,
+  "minimum_model_ios": 18,
+  "upstream_port_commit": "8bc00d620eada4c75dc668c37704feb675be2f59",
+  "torch": "2.12.0",
+  "demucs": "4.1.0",
+  "coremltools": "9.0",
+  "surgery_max_error": 0.0,
+  "runtime_parity": "Required before IPA delivery"
+}

@@ -1,0 +1,39 @@
+name: Neural Stems Model Parity
+on:
+  push:
+    branches: ['feature/gnarly-build50-real-stems-final']
+    paths:
+      - 'scripts/neural-stems/**'
+      - 'NightcoreLab/Sources/NeuralStems/Demucs*'
+      - 'Package.swift'
+      - '.github/workflows/neural-stems.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: neural-model-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  parity:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/cache@v4
+        with:
+          path: .cache/gnarly-neural-model
+          key: neural-model-${{ runner.os }}-${{ hashFiles('scripts/neural-stems/model-manifest.json') }}
+      - name: Verify original PyTorch against Swift DSP and Core ML
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GNARLY_MODEL_REPO: ${{ github.repository }}
+        run: bash scripts/neural-stems/prepare-model.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Neural-Stems-Parity
+          path: NightcoreLab/Resources/NeuralStems/neural-parity.json
+          if-no-files-found: ignore
