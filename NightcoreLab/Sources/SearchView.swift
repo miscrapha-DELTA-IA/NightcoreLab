@@ -671,9 +671,8 @@ struct SearchView: View {
                 }
             }
         }
-
+        }
         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
-
     }
 
     var body: some View {
