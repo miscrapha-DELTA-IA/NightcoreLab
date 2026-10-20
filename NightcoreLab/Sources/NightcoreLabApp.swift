@@ -41,6 +41,10 @@ final class NightcoreAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
+        if identifier == StemModelDownload.backgroundIdentifier {
+            StemModelDownload.shared.setBackgroundCompletionHandler(completionHandler)
+            return
+        }
         guard identifier == AudioDownloadManager.backgroundIdentifier else {
             completionHandler()
             return
