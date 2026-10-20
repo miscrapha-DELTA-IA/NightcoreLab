@@ -635,8 +635,11 @@ class _YtdlpLog:
     def __init__(self, label: str) -> None:
         self.label = label
 
-    def debug(self, msg: str) -> None:   # progresso e mensagens informativas: silencia
-        pass
+    def debug(self, msg: str) -> None:
+        # Keep only the player client names needed to diagnose slow 403 responses.
+        # Full yt-dlp debug output can include URLs and request details.
+        if "player API JSON" in msg:
+            log.info("yt-dlp [%s]: %s", self.label, msg[:250])
 
     def info(self, msg: str) -> None:
         pass
