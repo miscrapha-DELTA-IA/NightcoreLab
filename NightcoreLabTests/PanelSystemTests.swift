@@ -29,14 +29,14 @@ final class PanelSystemTests: XCTestCase {
             defaults.set(true, forKey: "visiblePresets")
             defaults.set(true, forKey: "isZenMode")
             let store = PanelStore(defaults: defaults)
-            XCTAssertEqual(store.hidden, [.lyrics, .discover, .queue])
+            XCTAssertEqual(store.hidden, [.lyrics])
             XCTAssertFalse(store.isZen)
             for key in ["visibleDiscover", "visibleQueue", "visiblePresets", "isZenMode"] {
                 XCTAssertNil(defaults.object(forKey: key))
             }
             store.setVisible(true, for: .discover)
             let restored = PanelStore(defaults: defaults)
-            XCTAssertEqual(restored.hidden, [.lyrics, .queue])
+            XCTAssertEqual(restored.hidden, [.lyrics])
         }
     }
 
@@ -47,7 +47,7 @@ final class PanelSystemTests: XCTestCase {
                         "visiblePresets", "visibleControls", "visibleExport"]
             for key in keys { defaults.set(false, forKey: key) }
             let store = PanelStore(defaults: defaults)
-            XCTAssertEqual(store.hidden, [.discover, .queue, .presets, .controls, .export])
+            XCTAssertEqual(store.hidden, [.presets, .controls, .export])
             for key in keys { XCTAssertNil(defaults.object(forKey: key)) }
         }
     }
@@ -108,7 +108,7 @@ final class PanelSystemTests: XCTestCase {
             let store = PanelStore(defaults: defaults)
             store.apply(.balanced)
             XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }),
-                           [.header, .player, .omnibox, .discover, .queue, .controls])
+                           [.header, .player, .omnibox, .controls])
             store.apply(.listen)
             XCTAssertEqual(Set(PanelID.mainPanels.filter { store.isVisible($0) }), [.player, .presets, .controls])
             XCTAssertTrue(store.isVisible(.lyrics))
@@ -178,10 +178,10 @@ final class PanelSystemTests: XCTestCase {
     func testDiscoveryWorkspaceBulkToggleUpdatesAllPanelsAndKeepsUnrelatedChoices() {
         withDefaults { defaults in
             let store = PanelStore(defaults: defaults)
-            XCTAssertEqual(PanelID.discoveryPanels, [.omnibox, .discover, .queue])
+            XCTAssertEqual(PanelID.discoveryPanels, [.omnibox])
             XCTAssertEqual(PanelID.audioPanels, [.presets, .controls])
             store.setVisible(false, for: PanelID.discoveryPanels)
-            XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 3)
+            XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 1)
             XCTAssertTrue(store.isVisible(.player))
             XCTAssertTrue(store.isVisible(.presets))
             XCTAssertTrue(store.isVisible(.controls))
@@ -189,6 +189,43 @@ final class PanelSystemTests: XCTestCase {
             XCTAssertEqual(store.hiddenCount(in: PanelID.discoveryPanels), 0)
             XCTAssertTrue(PanelStore(defaults: defaults).hidden.isEmpty)
         }
+    }
+
+    @MainActor
+    func testEyeControlsOnlyBuscaWithoutChangingDiscoveryOrQueue() {
+        withDefaults { defaults in
+            defaults.set(["discover", "queue"], forKey: "ui.hiddenPanels")
+            let store = PanelStore(defaults: defaults)
+            XCTAssertEqual(PanelID.discoveryPanels, [.omnibox])
+            XCTAssertTrue(PanelID.mainPanels.contains(.omnibox))
+            XCTAssertFalse(PanelID.mainPanels.contains(.discover))
+            XCTAssertFalse(PanelID.mainPanels.contains(.queue))
+            XCTAssertTrue(store.isVisible(.discover), "Legacy eye choices must not hide recommendations forever")
+            XCTAssertTrue(store.isVisible(.queue), "Legacy eye choices must not hide the queue forever")
+            store.setVisible(false, for: PanelID.discoveryPanels)
+            XCTAssertFalse(store.isVisible(.omnibox))
+            XCTAssertTrue(store.isVisible(.discover))
+            XCTAssertTrue(store.isVisible(.queue))
+            store.setVisible(true, for: PanelID.discoveryPanels)
+            XCTAssertTrue(store.isVisible(.omnibox))
+            store.apply(.listen)
+            XCTAssertTrue(store.isVisible(.discover))
+            XCTAssertTrue(store.isVisible(.queue))
+            XCTAssertFalse(store.isVisible(.omnibox))
+        }
+    }
+
+    func testExistingOmniboxPositionAndIndependentEyeVisibility() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let nowPlaying = try String(contentsOf: root.appendingPathComponent("NowPlayingScreen.swift"))
+        let search = try String(contentsOf: root.appendingPathComponent("SearchView.swift"))
+        XCTAssertTrue(nowPlaying.contains(".offset(y: card.size.height - 3)"),
+                      "Existing drawer position must be unchanged")
+        XCTAssertTrue(search.contains(".hideablePanel(.omnibox, edge: .top)"),
+                      "Busca must still toggle only the existing in-place omnibox")
+        XCTAssertFalse(nowPlaying.contains("panels.setVisible(true, for: .omnibox)"),
+                       "Opening the drawer must not override the eye's hidden preference")
     }
 
     @MainActor
