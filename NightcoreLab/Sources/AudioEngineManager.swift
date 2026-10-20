@@ -36,6 +36,20 @@ enum AudioEngineError: LocalizedError {
     }
 }
 
+private enum KaraokeInputError: LocalizedError {
+    case unavailable
+    case invalidHardwareFormat
+    case engineStopped
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: return "Nenhuma entrada de microfone está disponível nesta rota de áudio."
+        case .invalidHardwareFormat: return "O iPhone não forneceu um formato de captura válido para o microfone."
+        case .engineStopped: return "O motor de áudio parou ao ativar o microfone."
+        }
+    }
+}
+
 /// Snapshot dos parâmetros usados no export offline (Sendable para cruzar threads).
 struct RenderSettings: Sendable {
     let speed: Float
@@ -157,6 +171,7 @@ final class AudioEngineManager {
     @ObservationIgnored private let vocalGate = AVAudioMixerNode()
     @ObservationIgnored private var microphoneCapture: KaraokeMicrophoneCapture?
     private(set) var karaokeCaptureActive = false
+    private(set) var karaokeMicrophoneFailure: String?
     @ObservationIgnored private var karaokeCapture: KaraokeMicrophoneCapture?
     @ObservationIgnored private var karaokeInput: AVAudioInputNode?
     @ObservationIgnored private var karaokeGeneration = 0
@@ -471,12 +486,13 @@ final class AudioEngineManager {
         else { scheduleIdleStop() }
     }
 
-    /// Scoring only: native input tap on the existing engine. Keep the player
-    /// running when its graph survives input activation; recover its source
-    /// position if the hardware restarts the graph.
+    /// Scoring only: rebuild the existing engine with its hardware input tap,
+    /// then resume the same song position. Creating inputNode on a running
+    /// playback-only graph can stop its I/O unit without starting the tap.
     var karaokeMicrophoneActive: Bool { karaokeCaptureActive || vocalCaptureActive }
     func beginKaraokeMicrophone() async -> Bool {
         if karaokeMicrophoneActive { return true }
+        karaokeMicrophoneFailure = nil
         karaokeGeneration &+= 1
         let requested = karaokeGeneration
         let sourceRevision = playbackSourceRevision
@@ -485,11 +501,9 @@ final class AudioEngineManager {
             (permission == .undetermined ? await AVAudioApplication.requestRecordPermission() : false)
         guard allowed, requested == karaokeGeneration,
               sourceRevision == playbackSourceRevision, !Task.isCancelled else { return false }
-        let wasPlaying = isPlaying
-        let position = currentTime
-        let wasReconfiguringGraph = isReconfiguringGraph
-        isReconfiguringGraph = true // Ignore stale player completions during route negotiation.
-        defer { isReconfiguringGraph = wasReconfiguringGraph }
+        let resume = isPlaying
+        beginGraphReconfiguration()
+        defer { finishGraphReconfiguration(resume: resume) }
         let session = AVAudioSession.sharedInstance()
         let capture = KaraokeMicrophoneCapture()
         var tappedInput: AVAudioInputNode?
@@ -501,12 +515,14 @@ final class AudioEngineManager {
                     options: [.defaultToSpeaker, .allowBluetoothA2DP])
             }
             try session.setActive(true)
-            guard session.isInputAvailable else { throw AudioEngineError.unsupportedAudio }
+            guard session.isInputAvailable else { throw KaraokeInputError.unavailable }
             let input = engine.inputNode
+            let hardware = input.inputFormat(forBus: 0)
             let native = input.outputFormat(forBus: 0)
-            guard native.sampleRate.isFinite, native.sampleRate > 0,
-                  native.channelCount > 0 else {
-                throw AudioEngineError.unsupportedAudio
+            guard hardware.sampleRate.isFinite, hardware.sampleRate > 0,
+                  hardware.channelCount > 0, native.sampleRate.isFinite,
+                  native.sampleRate > 0, native.channelCount > 0 else {
+                throw KaraokeInputError.invalidHardwareFormat
             }
             if let previous = karaokeInput { previous.removeTap(onBus: 0) }
             let scoringClock = lyricsClock
@@ -520,12 +536,8 @@ final class AudioEngineManager {
                 input.removeTap(onBus: 0); capture.stop(); return false
             }
             cancelIdleStop()
-            restorePlaybackAfterKaraokeInputChange(wasPlaying: wasPlaying,
-                at: position, sourceRevision: sourceRevision)
-            if !engine.isRunning { try engine.start() }
-            guard engine.isRunning, !wasPlaying || isPlaying else {
-                throw AudioEngineError.renderFailed
-            }
+            try engine.start()
+            guard engine.isRunning else { throw KaraokeInputError.engineStopped }
             karaokeInput = input
             karaokeCapture = capture
             karaokeCaptureActive = true
@@ -533,9 +545,7 @@ final class AudioEngineManager {
         } catch {
             tappedInput?.removeTap(onBus: 0)
             capture.stop()
-            restorePlaybackAfterKaraokeInputChange(wasPlaying: wasPlaying,
-                at: position, sourceRevision: sourceRevision)
-            if !wasPlaying { scheduleIdleStop() }
+            karaokeMicrophoneFailure = error.localizedDescription
             // An audio route or format failure must not report permissionDenied.
             NSLog("Karaoke microphone hardware initialization failed: %@", error.localizedDescription)
             return false
