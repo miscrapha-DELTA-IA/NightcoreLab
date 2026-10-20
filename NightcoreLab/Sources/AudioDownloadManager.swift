@@ -52,6 +52,8 @@ final class AudioDownloadManager: ObservableObject {
         configuration.timeoutIntervalForRequest = 180
         configuration.timeoutIntervalForResource = 900
         configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
         transfers = DownloadKit.DownloadManager(sessionConfiguration: configuration)
         transfers.setDelegate(self)
         // Foreground selection + one background prefetch at a time.
@@ -419,6 +421,22 @@ final class AudioDownloadManager: ObservableObject {
     }
 
 
+    nonisolated static func isTrustedDeliveryURL(_ url: URL, serverURL: String) -> Bool {
+        guard let server = URLComponents(string: serverURL),
+              let destination = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let sourceHost = server.host?.lowercased(),
+              let host = destination.host?.lowercased(),
+              destination.user == nil, destination.password == nil else { return false }
+        if host == sourceHost {
+            return destination.scheme?.lowercased() == server.scheme?.lowercased()
+        }
+        // Only S3's account-scoped Cloudflare R2 HTTPS endpoint may receive a 302.
+        return destination.scheme?.lowercased() == "https"
+            && destination.port == nil
+            && host.range(of: "^[a-f0-9]{32}\\.r2\\.cloudflarestorage\\.com$",
+                          options: .regularExpression) != nil
+    }
+
     nonisolated static func looksLikeYouTube(_ link: String) -> Bool {
         youtubeVideoURL(from: link) != nil
     }
@@ -511,6 +529,15 @@ extension AudioDownloadManager: DownloadManagerDelegate {
 
     func download(_ download: Download, didFinishDownloadingTo location: URL) async {
         guard var track = tracks[download.id] else { return }
+        let finalURL = tasks[download.id]?.response?.url ?? download.url
+        guard Self.isTrustedDeliveryURL(finalURL, serverURL: Self.apiBaseURL) else {
+            fail(track, message: "O servidor redirecionou para um destino não permitido.")
+            tracks[download.id] = nil
+            tasks[download.id] = nil
+            persistPending()
+            serialize { await self.transfers.remove(download) }
+            return
+        }
         if let response = tasks[download.id]?.response as? HTTPURLResponse {
             let title = response.suggestedFilename.map { ($0 as NSString).deletingPathExtension }
                 .flatMap { $0.lowercased() == "audio" ? nil : $0 }
