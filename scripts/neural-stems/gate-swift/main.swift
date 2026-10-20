@@ -1,4 +1,5 @@
 import CoreML
+import Darwin
 import Foundation
 import GnarlyNeuralDSP
 
@@ -11,7 +12,17 @@ let root = URL(fileURLWithPath: CommandLine.arguments[1])
 let modelURL = root.appendingPathComponent("htdemucs_core.mlmodelc")
 let input = try floats(root.appendingPathComponent("golden/mix.f32"))
 let reference = try floats(root.appendingPathComponent("golden/reference.f32"))
-let model = try DemucsCoreMLModel(url: modelURL, cpuOnly: false)
+let cpuOnly = CommandLine.arguments.contains("--cpu-only")
+func peakMemoryBytes() -> Int64 {
+    var usage = rusage()
+    getrusage(RUSAGE_SELF, &usage)
+    return Int64(usage.ru_maxrss)
+}
+let beforeLoad = peakMemoryBytes()
+let loadStarted = Date()
+let model = try DemucsCoreMLModel(url: modelURL, cpuOnly: cpuOnly)
+let loadSeconds = Date().timeIntervalSince(loadStarted)
+let afterLoad = peakMemoryBytes()
 let started = Date()
 let actual = try model.separate(input)
 guard actual.count == reference.count else { fatalError("Different tensor sizes") }
@@ -77,10 +88,13 @@ if !passed {
         }
     }
 }
+let peak = peakMemoryBytes()
+try FileHandle.standardError.write(contentsOf: Data("Core ML \(cpuOnly ? "CPU" : "GPU"): load=\(loadSeconds)s, peak=\(peak / 1_048_576)MiB, baseline=\(beforeLoad / 1_048_576)MiB, loaded=\(afterLoad / 1_048_576)MiB\n".utf8))
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
-    "passed":passed, "seconds":Date().timeIntervalSince(started), "sources":report,
+    "passed":passed, "compute_units":cpuOnly ? "cpuOnly" : "cpuAndGPU",
+    "peak_memory_bytes":peak, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":report,
     "stft_max_error":spectralError, "diagnostics":diagnostics], options: [.prettyPrinted,.sortedKeys])
-try data.write(to: root.appendingPathComponent("neural-parity.json"))
+try data.write(to: root.appendingPathComponent(cpuOnly ? "neural-parity-cpu.json" : "neural-parity.json"))
 guard passed else {
     try FileHandle.standardError.write(contentsOf: Data("NEURAL PARITY GATE FAILED; do not ship\n".utf8))
     exit(1)
