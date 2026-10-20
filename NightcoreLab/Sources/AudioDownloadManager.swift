@@ -469,7 +469,7 @@ private struct AccessTicketReply: Decodable {
 
 // Prevent a malicious/misconfigured backend from forwarding invitation headers
 // across a 301/302. This delegate is used ONLY for POST /access-ticket.
-private final class AccessTicketRedirectBlocker: NSObject, URLSessionTaskDelegate {
+final class AccessTicketRedirectBlocker: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession,
                     task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
