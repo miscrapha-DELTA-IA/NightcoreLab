@@ -539,6 +539,31 @@ def _rss_bytes() -> int:
                     return value
     except OSError:
         pass
+    if os.name == "nt":  # Local Windows benchmark; production uses /proc on Linux.
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class MemoryCounters(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            counters = MemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            current_process = ctypes.windll.kernel32.GetCurrentProcess
+            current_process.restype = wintypes.HANDLE
+            memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+            memory_info.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+            memory_info.restype = wintypes.BOOL
+            if memory_info(current_process(), ctypes.byref(counters), counters.cb):
+                value = counters.WorkingSetSize
+                _peak_rss_bytes = max(_peak_rss_bytes, value)
+                return value
+        except (AttributeError, OSError):
+            pass
     return 0
 
 
@@ -548,7 +573,7 @@ def metrics():
     cookie_status = ("missing" if not cookie.get("found") else
                      "invalid" if not cookie.get("netscape_header") or not cookie.get("youtube_domain") else
                      "logged_in" if cookie.get("logged_in") else "present")
-    return {"queue_depth": len(in_flight_downloads),
+    return {"pid": os.getpid(), "queue_depth": len(in_flight_downloads),
             "active_jobs": sum(not item.task.done() for item in in_flight_downloads.values()),
             "rss_bytes": _rss_bytes(), "peak_rss_bytes": _peak_rss_bytes,
             "r2_enabled": r2_cache is not None,

@@ -13,19 +13,19 @@ Data: 20/10/2026. Branch: `feat/backend-r2-offload`, derivada de `b3cbb87`. Nenh
 
 | Medida | Produção antes (`b3cbb87`) | Checkout depois, local Windows | R2 em produção |
 |---|---:|---:|---|
-| Faixa curta, primeiro byte | 22,75 s | 3,406 s no vídeo de smoke de 19 s | Pendente de deploy |
-| Faixa curta, total | 31,985 s / 2.806.503 bytes | 3,406 s / 309.288 bytes, vídeo diferente | Pendente de deploy |
-| 597 s, primeiro byte/total | 22,047 / 35,687 s; 9.647.865 bytes | Não repetido após mudanças | Pendente de deploy |
+| Faixa curta, primeiro byte | 22,75 s | 8,562 s com cache vazio | Pendente de deploy |
+| Faixa curta, total | 31,985 s / 2.806.503 bytes | 8,578 s / 3.731.016 bytes, formato/bitrate da origem pode variar | Pendente de deploy |
+| 597 s, primeiro byte/total | 22,047 / 35,687 s; 9.647.865 bytes | 19,250 / 19,312 s; 9.655.276 bytes, cache vazio | Pendente de deploy |
 | Hit local | Não medido isoladamente | 0,016 s no smoke repetido | Pendente |
-| 20 usuários, pico 5, mesmo vídeo em cache | Não medido | 0% erro; p95 0,062 s; 6.185.760 bytes totais | Pendente |
-| RSS/CPU por teste | Render chegou a ~268 MB e 0,116 core numa janela com deploy; sem atribuição por faixa | Indisponível: `/proc` não existe no Windows | Pendente |
-| Boot até health | Cold start Render não capturado | 2,718 s antes / 4,281 s depois em execuções locais diferentes | Pendente |
+| 20 usuários, pico 5, mesmo vídeo em cache | Não medido | 0% erro; p95 0,047 s; 6.185.760 bytes totais | Pendente |
+| RSS/CPU por teste | Render chegou a ~268 MB e 0,116 core numa janela com deploy; sem atribuição por faixa | Pico 104,1 MB e 1,438 s de CPU nas duas extrações frias; pico 80,9 MB no teste de carga quente | Pendente |
+| Boot até health | Cold start Render não capturado | 2,718 s antes / 2,140 s depois em execuções locais diferentes | Pendente |
 
-Fontes: `docs/bench-backend-before.json`, `docs/bench-backend-local-smoke.json`, `docs/load-test-local.json`. As faixas e ambientes diferem; **não interpretar a diferença de latência como aceleração comprovada da produção**. O p95 local mediu um hit no cache `/tmp`, sem R2 e sem concorrência de extrações. O alvo de RSS <400 MiB ainda não foi comprovado pelo teste de carga; 0 reportado no Windows significa **indisponível**, não uso zero. O teste não mostrou OOM local.
+Fontes: `docs/bench-backend-before.json`, `docs/bench-backend-after-local-cold.json`, `docs/bench-backend-local-smoke.json`, `docs/bench-backend-local-after.json`, `docs/load-test-local.json`, `docs/load-test-cold-local.json`. Os ambientes e possivelmente os formatos/bitrates da origem diferem; **não interpretar a diferença de latência como aceleração comprovada da produção**. O p95 do teste de carga fria mediu uma única extração compartilhada por 20 pedidos, sem R2. O alvo de RSS <400 MiB foi cumprido nos testes locais; falta medir na instância Render.
 
 ## Projeção de banda e custo
 
-Cada hit R2 deve trocar os 2,8–9,6 MB de áudio pela resposta 302 do Render. O telefone continua baixando o arquivo completo, agora do R2. Com 80% hits, o consumo de banda de áudio do Render cai aproximadamente 80% e o teto teórico da franquia de 5 GB sobe ~5 vezes; essa taxa de hit é **hipótese**, ainda não observada. Misses ainda consomem CPU, download da origem e upload ao R2. R2 Standard oferece 10 GB-mês, 1M operações Class A e 10M Class B gratuitos; não existe garantia de custo zero para volume arbitrário. Ver [preços R2](https://developers.cloudflare.com/r2/pricing/) e [banda Render](https://render.com/docs/outbound-bandwidth).
+Cada hit R2 deve trocar os 2,8–9,6 MB de áudio pela resposta 302 do Render. O telefone continua baixando o arquivo completo, agora do R2. Um miss envia o arquivo ao primeiro usuário **e o envia novamente ao R2**; ambos os fluxos podem contar na banda de saída do Render. Com 80% hits, isso projeta ~40% da banda anterior, economia de ~60% e teto teórico da franquia 5 GB ~2,5 vezes maior. Essa taxa de hit é **hipótese**, ainda não observada; com menos de 50% hits, o offload pode piorar o consumo de banda do Render. Misses ainda consomem CPU. R2 Standard oferece 10 GB-mês, 1M operações Class A e 10M Class B gratuitos; não existe garantia de custo zero para volume arbitrário. Ver [preços R2](https://developers.cloudflare.com/r2/pricing/) e [banda Render](https://render.com/docs/outbound-bandwidth).
 
 ## Compatibilidade e limites conscientes
 
@@ -36,7 +36,7 @@ Cada hit R2 deve trocar os 2,8–9,6 MB de áudio pela resposta 302 do Render. O
 
 ## Verificações
 
-`python -m pytest -q backend`: 79 testes aprovados, 1 pulado (exige ffmpeg no host), 23 subtests. Smoke local de M4A: HTTP 200 com 309.288 bytes; segunda leitura com hit de cache em 0,016 s. Teste de carga local: 20/20 HTTP 200, pico configurado de cinco, sem R2. O workflow CI realiza o mesmo pytest e smoke de produção após merge.
+`python -m pytest -q backend`: 79 testes aprovados, 1 pulado (exige ffmpeg no host), 23 subtests. Extrações frias locais de faixa curta e 597 s: ambas HTTP 200/M4A. Teste de carga fria: 20/20 HTTP 200, pico configurado de cinco, p95 3,282 s, RSS máximo 98,3 MB e apenas uma estratégia yt-dlp bem-sucedida (single-flight); teste quente: p95 0,047 s, RSS máximo 80,9 MB. O workflow CI realiza o pytest e smoke de produção após merge.
 
 ## Operação após deploy
 
