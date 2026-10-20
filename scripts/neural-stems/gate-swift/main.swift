@@ -11,7 +11,7 @@ let root = URL(fileURLWithPath: CommandLine.arguments[1])
 let modelURL = root.appendingPathComponent("htdemucs_core.mlmodelc")
 let input = try floats(root.appendingPathComponent("golden/mix.f32"))
 let reference = try floats(root.appendingPathComponent("golden/reference.f32"))
-let model = try DemucsCoreMLModel(url: modelURL, cpuOnly: true)
+let model = try DemucsCoreMLModel(url: modelURL, cpuOnly: false)
 let started = Date()
 let actual = try model.separate(input)
 guard actual.count == reference.count else { fatalError("Different tensor sizes") }

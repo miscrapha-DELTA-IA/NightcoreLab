@@ -1,5 +1,9 @@
 import XCTest
+#if canImport(NightcoreLab)
 @testable import NightcoreLab
+#else
+@testable import GnarlyNeuralDSP
+#endif
 
 /// Parity of the Swift DSP with the Python reference (`convert/stemcommon.py`).
 /// Golden values were produced by PyTorch — see docs/spike-report.ru.md.

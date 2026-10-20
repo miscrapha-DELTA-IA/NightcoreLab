@@ -8,6 +8,7 @@ python3 "$script_dir/verify-model.py" "$model_cache"
 rm -rf "$model_cache/htdemucs_core.mlmodelc"
 xcrun coremlcompiler compile "$model_cache/htdemucs_core.mlpackage" "$model_cache"
 cd "$repo_root"
+swift test -c release --filter DemucsDSPTests
 swift run -c release NeuralStemGate "$model_cache"
 model_dest="$repo_root/NightcoreLab/Resources/NeuralStems"
 mkdir -p "$model_dest"

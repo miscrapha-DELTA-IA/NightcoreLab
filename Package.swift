@@ -9,5 +9,7 @@ let package = Package(
                 exclude: ["NeuralStemWorker.swift", "StemGainAudioUnit.swift"],
                 sources: ["DemucsDSP.swift", "DemucsOverlapAdd.swift", "DemucsCoreMLModel.swift"]),
         .executableTarget(name: "NeuralStemGate", dependencies: ["GnarlyNeuralDSP"],
-                          path: "scripts/neural-stems/gate-swift")
+                          path: "scripts/neural-stems/gate-swift"),
+        .testTarget(name: "GnarlyNeuralDSPTests", dependencies: ["GnarlyNeuralDSP"],
+                    path: "NightcoreLabTests", sources: ["DemucsDSPTests.swift"])
     ])
