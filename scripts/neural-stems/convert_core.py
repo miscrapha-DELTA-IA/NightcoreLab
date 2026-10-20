@@ -122,16 +122,20 @@ def main():
     hd.pad1d = sc.pad1d_safe
     htd.pad1d = sc.pad1d_safe
     import json
+    import hashlib
     import pathlib
     import yaml
     from huggingface_hub import hf_hub_download
     from demucs.hf import load_safetensors_model
     manifest = json.loads((pathlib.Path(__file__).parent / "model-manifest.json").read_text())
     repo, revision = manifest["huggingface_repo"], manifest["huggingface_revision"]
-    with open(hf_hub_download(repo, "htdemucs.yaml", revision=revision)) as source:
+    config_path = hf_hub_download(repo, "htdemucs.yaml", revision=revision)
+    assert hashlib.sha256(pathlib.Path(config_path).read_bytes()).hexdigest() == manifest["source_files"]["htdemucs.yaml"]
+    with open(config_path) as source:
         bag = yaml.safe_load(source)
     assert len(bag["models"]) == 1
     checkpoint = hf_hub_download(repo, bag["models"][0] + ".safetensors", revision=revision)
+    assert hashlib.sha256(pathlib.Path(checkpoint).read_bytes()).hexdigest() == manifest["source_files"][bag["models"][0] + ".safetensors"]
     model = load_safetensors_model(checkpoint).eval()
     assert model.sources == ["drums", "bass", "other", "vocals"]
     core = HTDemucsCore(model).eval()
@@ -191,6 +195,11 @@ def main():
     fixture.mkdir(exist_ok=True)
     mix.numpy().tofile(fixture / "mix.f32")
     ref.tofile(fixture / "reference.f32")
+    weight = pathlib.Path(out) / "Data/com.apple.CoreML/weights/weight.bin"
+    evidence = {"model_id": manifest["model_id"], "source_revision": revision,
+                "source_files": manifest["source_files"], "surgery_max_error": float(err),
+                "converted_sha256": hashlib.sha256(weight.read_bytes()).hexdigest()}
+    (pathlib.Path(out).parent / "conversion-evidence.json").write_text(json.dumps(evidence, indent=2))
     if args.convert_only:
         print("CONVERTED; runtime gate must run on macOS before delivery")
         return 0

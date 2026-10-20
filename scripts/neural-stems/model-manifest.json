@@ -16,7 +16,11 @@
   "coremltools": "9.0",
   "surgery_max_error": 0.0,
   "runtime_parity": "Required before IPA delivery",
-  "weights_sha256": "4551623b849263d638252fb0a07315ca042491e8d9700eb53d416253f8977caf",
   "huggingface_repo": "adefossez/HTDemucs",
-  "huggingface_revision": "cbc8a9b1a87023b7fd74e7b3412e6321c0eab003"
+  "huggingface_revision": "cbc8a9b1a87023b7fd74e7b3412e6321c0eab003",
+  "reference_converted_weights_sha256": "4551623b849263d638252fb0a07315ca042491e8d9700eb53d416253f8977caf",
+  "source_files": {
+    "htdemucs.yaml": "239c445d0b14454d541ad8bd9bb271c9e536d267e8a4625208744cbb2e7bb66c",
+    "955717e8.safetensors": "d9fa14133cfcc034a6758923bb3a8ca9f8dfd0b582134643bbf83f72c17576dd"
+  }
 }
