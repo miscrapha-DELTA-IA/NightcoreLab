@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ImageIO
 
 /// The index lives alongside the audio in Caches. Missing/evicted files are never cache hits.
 struct TrackAudioCache {
@@ -147,10 +148,42 @@ struct TrackAudioCache {
         entries[id].map { folder.appendingPathComponent($0.relativePath) }
     }
 
+    /// A sidecar lives with the downloaded audio, outside expiring HTTP caches.
+    func artworkURL(for id: String) -> URL? {
+        guard entries[id] != nil, let directory = trackDirectory(for: id) else { return nil }
+        let url = directory.appendingPathComponent("artwork.image")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func trackDirectory(for id: String) -> URL? {
+        let directory = folder.appendingPathComponent(id, isDirectory: true).standardizedFileURL
+        guard !id.isEmpty, directory.deletingLastPathComponent().path == folder.standardizedFileURL.path else { return nil }
+        return directory
+    }
+
+    @discardableResult
+    mutating func storeArtwork(_ data: Data, for id: String) throws -> URL? {
+        guard let entry = entries[id], let directory = trackDirectory(for: id), data.count <= 6 * 1024 * 1024,
+              let image = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(image) > 0,
+              CGImageSourceCreateThumbnailAtIndex(image, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1
+              ] as CFDictionary) != nil else { return nil }
+        let audio = folder.appendingPathComponent(entry.relativePath)
+        guard FileManager.default.fileExists(atPath: audio.path) else { return nil }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("artwork.image")
+        try data.write(to: destination, options: .atomic)
+        let audioBytes = (try? audio.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        entries[id]?.diskBytes = Int64(audioBytes + data.count)
+        try persist()
+        return destination
+    }
+
     mutating func remove(_ id: String) throws {
         if let entry = entries[id] {
-            let file = folder.appendingPathComponent(entry.relativePath)
-            if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+            try removeFiles(for: id, entry: entry)
         }
         entries[id] = nil
         pinnedIDs.remove(id)
@@ -160,14 +193,17 @@ struct TrackAudioCache {
     mutating func trim(protecting ids: Set<String>) {
         // Enforce a 20-track / 100 MiB disposable quota without evicting pinned offline audio.
         let sizes = entries.mapValues { entry -> Int in
-            let values = try? folder.appendingPathComponent(entry.relativePath).resourceValues(forKeys: [.fileSizeKey])
-            return values?.fileSize ?? 0
+            let audio = folder.appendingPathComponent(entry.relativePath)
+            let values = try? audio.resourceValues(forKeys: [.fileSizeKey])
+            let cover = try? trackDirectory(for: entry.track.id)?.appendingPathComponent("artwork.image")
+                .resourceValues(forKeys: [.fileSizeKey])
+            return (values?.fileSize ?? 0) + (cover?.fileSize ?? 0)
         }
         var bytes = sizes.values.reduce(0, +)
         for (id, entry) in entries.sorted(by: { $0.value.accessedAt < $1.value.accessedAt }) {
             guard entries.count > Self.maxCachedTracks || Int64(bytes) > Self.maxDiskBytes else { break }
             guard !ids.contains(id), !pinnedIDs.contains(id) else { continue }
-            try? FileManager.default.removeItem(at: folder.appendingPathComponent(entry.relativePath).deletingLastPathComponent())
+            try? removeFiles(for: id, entry: entry)
             entries[id] = nil
             bytes -= sizes[id] ?? 0
         }
@@ -179,11 +215,23 @@ struct TrackAudioCache {
     /// AVAudioPlayerNode buffer or the current song file.
     mutating func evictUnprotected(protecting ids: Set<String>) {
         for (id, entry) in entries where !ids.contains(id) && !pinnedIDs.contains(id) {
-            let url = folder.appendingPathComponent(entry.relativePath)
-            try? FileManager.default.removeItem(at: url)
+            try? removeFiles(for: id, entry: entry)
             entries[id] = nil
         }
         try? persist()
+    }
+
+    private func removeFiles(for id: String, entry: Entry) throws {
+        let audio = folder.appendingPathComponent(entry.relativePath).standardizedFileURL
+        // An older index may point to an audio file directly under the cache
+        // root. Its parent is shared; remove only that file and this ID's folder.
+        if audio.deletingLastPathComponent() != trackDirectory(for: id),
+           FileManager.default.fileExists(atPath: audio.path) {
+            try FileManager.default.removeItem(at: audio)
+        }
+        if let directory = trackDirectory(for: id), FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
     }
 
     private func persist() throws {

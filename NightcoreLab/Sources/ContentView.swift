@@ -5,7 +5,25 @@ import SDWebImageSwiftUI
 
 @MainActor
 final class PlaybackQueue: ObservableObject {
-    @Published private(set) var upNextQueue: [Track] = []
+    @Published private(set) var upNextQueue: [Track] = [] {
+        didSet {
+            if let defaults, let data = try? JSONEncoder().encode(upNextQueue) {
+                defaults.set(data, forKey: Self.storageKey)
+            }
+        }
+    }
+    static let storageKey = "gnarly.upNextQueue.v1"
+    private let defaults: UserDefaults?
+
+    /// Tests and temporary queues stay isolated; the app opts into persistence.
+    init(defaults: UserDefaults? = nil) {
+        self.defaults = defaults
+        if let data = defaults?.data(forKey: Self.storageKey),
+           let tracks = try? JSONDecoder().decode([Track].self, from: data) {
+            var seen = Set<String>()
+            upNextQueue = tracks.filter { seen.insert($0.id).inserted }
+        }
+    }
     var tracks: [Track] { upNextQueue }
 
     func replace(with candidates: [Track], excluding currentID: String) {
@@ -115,7 +133,7 @@ struct ContentView: View {
     // Download por link do YouTube (via microserviço)
     @StateObject private var downloader = AudioDownloadManager.shared
     @StateObject private var offlineLibrary = OfflineLibrary()
-    @StateObject private var playbackQueue = PlaybackQueue()
+    @StateObject private var playbackQueue = PlaybackQueue(defaults: .standard)
     @StateObject private var playbackTransition = PlaybackCoordinator()
     @StateObject private var navigationHistory = PlaybackNavigationHistory()
     @State private var remoteRelay = RemotePlaybackRelay()
@@ -188,6 +206,10 @@ struct ContentView: View {
 
     var body: some View { playerPresentations }
 
+    private var nextTrackSelection: PlaybackCoordinator.NextSelection? {
+        playbackTransition.nextSelection(navigation: navigationHistory, queue: playbackQueue)
+    }
+
     /// O motor permanece nesta View; AnyLayout altera apenas sua apresentação.
     private var playerCanvas: some View {
         NowPlayingScreen(
@@ -199,8 +221,7 @@ struct ContentView: View {
             isTrackLoaded: hasTrack,
             canShowKaraoke: currentTrack != nil,
             hasPreviousTrack: navigationHistory.previousTrack != nil,
-            canSkipNext: navigationHistory.forwardTrack != nil ||
-                !playbackQueue.upNextQueue.isEmpty,
+            canSkipNext: !audio.isExporting && nextTrackSelection != nil,
             appTheme: $currentTheme,
             isKaraokeMode: $showLyrics,
             lyricsCleanMode: $lyricsCleanMode,
@@ -261,6 +282,12 @@ struct ContentView: View {
                         downloader: downloader, lyrics: lyricsPrefetcher)
                 }
             }
+            .onChange(of: downloader.isCacheReady) { _, ready in
+                if ready { restoreLastSession() }
+            }
+            .onChange(of: downloader.artworkRevision) { _, _ in
+                refreshCurrentArtwork()
+            }
     }
 
     private var playerLifecycle: some View {
@@ -279,6 +306,9 @@ struct ContentView: View {
             synchronizeRemoteAvailability()
         }
         .onDisappear {
+            // The system player must retain queue navigation when this screen
+            // is covered or the app leaves the foreground, even while paused.
+            guard !hasTrack else { return }
             audio.connectRemoteCommands(nil)
             remoteRelay.disconnect()
         }
@@ -593,7 +623,10 @@ struct ContentView: View {
                                                lyrics: lyricsPrefetcher)
                     },
                     onPlayQueue: { track in selectFromDrawer(track) },
-                    onRemoveQueue: { track in _ = playbackQueue.remove(track) }
+                    onRemoveQueue: { track in
+                        _ = playbackQueue.remove(track)
+                        synchronizeRemoteAvailability()
+                    }
                 )
                 relatedSection.hideablePanel(.queue)
             }
@@ -1236,8 +1269,7 @@ struct ContentView: View {
             playbackTransition.togglePlayback(audio: audio, trackID: playingTrackID)
             return true
         case .next:
-            guard navigationHistory.forwardTrack != nil ||
-                  !playbackQueue.upNextQueue.isEmpty else { return false }
+            guard nextTrackSelection != nil else { return false }
             goToNextTrack()
             return true // Playback is confirmed asynchronously before queue commit.
         case .previous:
@@ -1254,10 +1286,8 @@ struct ContentView: View {
 
     private func synchronizeRemoteAvailability() {
         audio.updateRemoteCommandAvailability(
-            canSkipNext: !audio.isExporting &&
-                (navigationHistory.forwardTrack != nil ||
-                 !playbackQueue.upNextQueue.isEmpty),
-            canSkipPrevious: !audio.isExporting && hasTrack)
+            canSkipNext: nextTrackSelection != nil,
+            canSkipPrevious: hasTrack)
     }
 
     private func applyPitch() {
@@ -1297,17 +1327,16 @@ struct ContentView: View {
     /// the recommendation queue. Neither history action consumes queue items.
     private func goToNextTrack() {
         guard !audio.isExporting else { return }
-        if let forward = navigationHistory.forwardTrack {
-            playTrack(forward, navigation: .forward)
-        } else if let next = playbackQueue.upNextQueue.first {
-            playFromQueue(next)
+        if let next = nextTrackSelection {
+            playTrack(next.track, navigation: next.direction, initiatedByNextButton: true)
         }
     }
 
     /// Playback is deliberately independent from radio discovery and queue
     /// replacement. All queue edits happen after play() really starts.
     private func playTrack(_ track: Track, automaticAdvance: Bool = false,
-                           navigation: PlaybackNavigationHistory.Direction = .regular) {
+                           navigation: PlaybackNavigationHistory.Direction = .regular,
+                           initiatedByNextButton: Bool = false) {
         guard !audio.isExporting else { return }
         if !automaticAdvance {
             autoplayWhenRadioReady = false
@@ -1356,14 +1385,18 @@ struct ContentView: View {
                                           excluding: track.id)
                     self.pendingMix = nil
                 }
-                coverURL = downloadedCoverURL ?? track.thumbnailURL
+                coverURL = downloader.cachedArtworkURL(for: committedTrack) ??
+                    downloadedCoverURL ?? committedTrack.thumbnailURL
                 audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL)
                 playingTrackID = track.id
                 currentTrack = committedTrack
+                // SwiftUI onChange may be deferred while the screen is locked.
+                // Remote command state follows the confirmed queue immediately.
+                synchronizeRemoteAvailability()
                 finishDrawerSelection(track.id)
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
-                    let isManualSkip = !automaticAdvance && navigation == .regular &&
+                    let isManualSkip = !automaticAdvance && !initiatedByNextButton && navigation == .regular &&
                         priorTrack != nil && priorTrack?.id != currentTrack.id
                     finishDiscovery(reason: isManualSkip ? .manualSelection :
                                     (automaticAdvance ? .completed : .nextButton))
@@ -1406,7 +1439,7 @@ struct ContentView: View {
     }
 
     private func restoreLastSession() {
-        guard !didRestoreSession else { return }
+        guard downloader.isCacheReady, !didRestoreSession else { return }
         didRestoreSession = true
         guard !hasTrack, !downloader.isDownloading,
               let saved = playbackTransition.restoredSession() else { return }
@@ -1421,14 +1454,22 @@ struct ContentView: View {
             if saved.position > 0, saved.position < audio.duration {
                 audio.seek(to: saved.position)
             }
-            coverURL = saved.track.thumbnailURL
+            coverURL = downloader.cachedArtworkURL(for: saved.track) ?? saved.track.thumbnailURL
             audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local)
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
+            synchronizeRemoteAvailability()
             // AudioEngineManager.load() does not start playback.
         } catch {
             resumeTrack = saved.track
         }
+    }
+
+    private func refreshCurrentArtwork() {
+        guard let currentTrack,
+              let local = downloader.cachedArtworkURL(for: currentTrack), local != coverURL else { return }
+        coverURL = local
+        audio.loadNowPlayingArtwork(coverURL: local, mediaURL: audio.visualAnalysisURL)
     }
 
     private func lyricsMetadata(for track: Track, duration: TimeInterval?) -> TrackMetadata {
@@ -1511,6 +1552,7 @@ struct ContentView: View {
                 discovery: snapshot).map { (track.id, $0) }
         })
         playbackTransition.enqueue(ranked, excluding: playingTrackID, queue: playbackQueue)
+        synchronizeRemoteAvailability()
         prefetchUpcoming()
         if autoplayWhenRadioReady {
             autoplayWhenRadioReady = false
@@ -1552,6 +1594,7 @@ struct ContentView: View {
             resumeTrack = nil
             playbackTransition.clearSession()
             playbackTransition.clearQueue(playbackQueue)
+            synchronizeRemoteAvailability()
             navigationHistory.clear()
             playbackTransition.reset()
             downloader.cancelPlaybackSelection()
@@ -1713,9 +1756,9 @@ private struct VinylPlaybackArtwork: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: energyBudget.visualInterval, paused: !shouldSpin)) { context in
-            AsyncImage(url: coverURL) { phase in
+            PlayerArtworkImage(url: coverURL) { image in
                 ZStack {
-                    if let image = phase.image {
+                    if let image {
                         image.resizable().scaledToFill()
                             .frame(width: 64, height: 64)
                             .clipShape(Circle())
@@ -1730,8 +1773,8 @@ private struct VinylPlaybackArtwork: View {
 
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(phase.image != nil ? Color.white.opacity(0.8) : theme.onAccent)
-                        .shadow(color: .black.opacity(phase.image != nil ? 0.7 : 0),
+                        .foregroundStyle(image != nil ? Color.white.opacity(0.8) : theme.onAccent)
+                        .shadow(color: .black.opacity(image != nil ? 0.7 : 0),
                                 radius: 4)
                 }
                 .frame(width: 64, height: 64)

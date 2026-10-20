@@ -4,6 +4,7 @@ import Foundation
 import ImageIO
 import MediaPlayer
 import UIKit
+import SDWebImage
 
 /// Produces a bitmap-backed artwork image for the system player. This is kept
 /// separate from Share rendering and never changes the on-screen cover.
@@ -14,8 +15,8 @@ enum NowPlayingArtworkLoader {
     }
 
     static func load(coverURL: URL?, mediaURL: URL?) async -> MPMediaItemArtwork? {
-        if let coverURL, let data = await coverData(at: coverURL),
-           !Task.isCancelled, let image = image(from: data),
+        if let coverURL, let image = await coverImage(at: coverURL),
+           !Task.isCancelled,
            let cover = artwork(image) { return cover }
         if let mediaURL, mediaURL.isFileURL,
            ["mp4", "m4v", "mov"].contains(mediaURL.pathExtension.lowercased()),
@@ -28,13 +29,23 @@ enum NowPlayingArtworkLoader {
         return nil
     }
 
-    private static func coverData(at coverURL: URL) async -> Data? {
+    static func coverImage(at url: URL) async -> UIImage? {
+        guard let data = await coverData(at: url), !Task.isCancelled else { return nil }
+        return image(from: data)
+    }
+
+    static func coverData(at coverURL: URL) async -> Data? {
         let data: Data?
         if coverURL.isFileURL {
             data = await Task.detached(priority: .utility) {
                 try? Data(contentsOf: coverURL, options: .mappedIfSafe)
             }.value
         } else if coverURL.scheme == "https" {
+            // Reuse thumbnails already seen by WebImage in search/library,
+            // including their disk cache when upgrading while offline.
+            if let cached = await Task.detached(priority: .utility, operation: {
+                SDImageCache.shared.imageFromCache(forKey: coverURL.absoluteString)?.pngData()
+            }).value { return cached }
             var request = URLRequest(url: coverURL, cachePolicy: .returnCacheDataElseLoad,
                                      timeoutInterval: 8)
             request.setValue("image/*", forHTTPHeaderField: "Accept")
@@ -43,6 +54,9 @@ enum NowPlayingArtworkLoader {
                 data = received
             } else { data = nil }
         } else { data = nil }
+        if let data, coverURL.scheme == "https", let decoded = image(from: data) {
+            SDImageCache.shared.store(decoded, forKey: coverURL.absoluteString, completion: nil)
+        }
         return data
     }
 

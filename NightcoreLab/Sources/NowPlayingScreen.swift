@@ -1280,11 +1280,10 @@ private struct Transport: View {
 private struct CoverArt: View {
     let url: URL?
     var body: some View {
-        AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.3))) { phase in
-            switch phase {
-            case .success(let image):
+        PlayerArtworkImage(url: url) { image in
+            if let image {
                 image.resizable().scaledToFill()
-            default:
+            } else {
                 GnarlyArtworkPlaceholder()
             }
         }
@@ -1345,11 +1344,11 @@ private struct BlurredCover: View {
 
     var body: some View {
         GeometryReader { viewport in
-            AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.45))) { phase in
+            PlayerArtworkImage(url: url) { image in
                 ZStack {
                     Color.black
 
-                    if case .success(let image) = phase {
+                    if let image {
                         // Ambient fill can crop, since it is intentionally blurred.
                         // Bound it to the viewport BEFORE the blur; never zoom the whole image.
                         image.resizable()

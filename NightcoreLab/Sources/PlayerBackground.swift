@@ -1,5 +1,4 @@
 import SwiftUI
-import SDWebImageSwiftUI
 
 // MARK: - Estilo do fundo
 
@@ -135,10 +134,11 @@ private struct CoverFill: View {
 
     var body: some View {
         GeometryReader { geometry in
-            WebImage(url: url)
-                .resizable()
-                .transition(.fade(duration: 0.2))
-                .scaledToFill()
+            PlayerArtworkImage(url: url) { image in
+                if let image { image.resizable().scaledToFill() }
+                else { GnarlyArtworkPlaceholder() }
+            }
+                .transition(.opacity)
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .background(GnarlyArtworkPlaceholder())
                 .clipped()
@@ -183,10 +183,11 @@ private struct MarqueeCover: View {
     }
 
     private func tile(in size: CGSize) -> some View {
-        WebImage(url: url)
-            .resizable()
-            .transition(.fade(duration: 0.2))
-            .scaledToFill()
+        PlayerArtworkImage(url: url) { image in
+            if let image { image.resizable().scaledToFill() }
+            else { GnarlyArtworkPlaceholder() }
+        }
+            .transition(.opacity)
             .frame(width: size.width, height: size.height)
             .background(GnarlyArtworkPlaceholder())
             .clipped()

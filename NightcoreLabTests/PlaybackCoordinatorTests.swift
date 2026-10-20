@@ -133,4 +133,52 @@ final class PlaybackCoordinatorTests: XCTestCase {
         XCTAssertNil(object["source"], "Old sessions must not gain a mandatory field")
         XCTAssertEqual(try JSONDecoder().decode(Track.self, from: encoded), original)
     }
+
+    func testRestoredQueueHasNextWithoutHistoryAndOnlyConsumesConfirmedPlayback() throws {
+        let name = "GnarlyQueueTest-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let first = track("aaaaaaaaaaa"), second = track("bbbbbbbbbbb")
+        let queue = PlaybackQueue(defaults: defaults)
+        queue.replace(with: [first, second], excluding: "current")
+        let restored = PlaybackQueue(defaults: defaults)
+        let navigation = PlaybackNavigationHistory()
+        let coordinator = PlaybackCoordinator()
+        let next = try XCTUnwrap(coordinator.nextSelection(navigation: navigation, queue: restored))
+        XCTAssertEqual(next.track, first)
+        XCTAssertEqual(next.direction, .regular)
+        let failed = coordinator.begin(trackID: first.id)
+        XCTAssertTrue(coordinator.didFail(failed, trackID: first.id))
+        XCTAssertEqual(PlaybackQueue(defaults: defaults).tracks.map(\.id), [first.id, second.id])
+        let retry = coordinator.begin(trackID: first.id)
+        XCTAssertTrue(coordinator.didStart(retry, trackID: first.id))
+        coordinator.commitStarted(first, replacing: nil, direction: next.direction,
+                                  queue: restored, navigation: navigation)
+        let afterStart = PlaybackQueue(defaults: defaults)
+        XCTAssertEqual(coordinator.nextSelection(navigation: navigation, queue: afterStart)?.track, second)
+        afterStart.clear()
+        XCTAssertNil(coordinator.nextSelection(navigation: navigation,
+                                              queue: PlaybackQueue(defaults: defaults)))
+    }
+
+    func testNextReturnsForwardThenContinuesInVisibleQueueOrder() throws {
+        let coordinator = PlaybackCoordinator(), navigation = PlaybackNavigationHistory()
+        let queue = PlaybackQueue()
+        let old = track("old"), forward = track("forward"), first = track("first"), last = track("last")
+        navigation.commitStarted(old, replacing: nil)
+        navigation.commitStarted(forward, replacing: old)
+        navigation.commitStarted(old, replacing: forward, direction: .backward)
+        queue.replace(with: [first, last], excluding: old.id)
+        let historyTarget = try XCTUnwrap(coordinator.nextSelection(navigation: navigation, queue: queue))
+        XCTAssertEqual(historyTarget.track, forward)
+        XCTAssertEqual(historyTarget.direction, .forward)
+        coordinator.commitStarted(forward, replacing: old, direction: historyTarget.direction,
+                                  queue: queue, navigation: navigation)
+        let queueTarget = try XCTUnwrap(coordinator.nextSelection(navigation: navigation, queue: queue))
+        XCTAssertEqual(queueTarget.track, first)
+        XCTAssertEqual(queueTarget.direction, .regular)
+        coordinator.commitStarted(first, replacing: forward, direction: queueTarget.direction,
+                                  queue: queue, navigation: navigation)
+        XCTAssertEqual(queue.tracks.map(\.id), [last.id])
+    }
 }

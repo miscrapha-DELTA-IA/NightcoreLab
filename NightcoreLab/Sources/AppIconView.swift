@@ -95,10 +95,12 @@ struct TrackIdentityPill: View {
         if let artwork {
             Image(uiImage: artwork).resizable().scaledToFill()
         } else if let artworkURL {
-            AsyncImage(url: artworkURL) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                GnarlyArtworkPlaceholder()
+            PlayerArtworkImage(url: artworkURL) { image in
+                if let image {
+                    image.resizable().scaledToFill()
+                } else {
+                    GnarlyArtworkPlaceholder()
+                }
             }
         } else {
             GnarlyArtworkPlaceholder()

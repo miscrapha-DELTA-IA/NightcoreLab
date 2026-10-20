@@ -69,7 +69,7 @@ targets:
         INFOPLIST_FILE: NightcoreLab/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "50"
+        CURRENT_PROJECT_VERSION: "51"
         TARGETED_DEVICE_FAMILY: "1"          # iPhone
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO

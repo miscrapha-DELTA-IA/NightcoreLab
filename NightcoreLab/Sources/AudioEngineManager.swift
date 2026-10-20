@@ -101,7 +101,9 @@ final class AudioEngineManager {
     /// Never serialized with events or exported as a private file path.
     private(set) var playbackSourceRevision = 0
     private(set) var duration: TimeInterval = 0
-    private(set) var isExporting = false
+    private(set) var isExporting = false {
+        didSet { updateRemoteCommandAvailability() }
+    }
     private(set) var exportProgress: Double = 0
 
     private(set) var speed: Float = 1.0
