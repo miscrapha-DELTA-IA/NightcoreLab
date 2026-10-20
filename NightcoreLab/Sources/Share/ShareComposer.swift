@@ -65,7 +65,7 @@ struct ShareCardView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                         .foregroundStyle(.white)
-                    Text(snapshot.artist ?? "Música no Nightcore Lab")
+                    Text(snapshot.artist ?? "Música no Gnarly")
                         .font(.system(size: 23, weight: .medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
@@ -128,15 +128,7 @@ struct ShareCardView: View {
         if let artwork {
             Image(uiImage: artwork).resizable().scaledToFill()
         } else {
-            Rectangle()
-                .fill(Color.black.opacity(0.35))
-                .overlay {
-                    Image(systemName: "music.note")
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundStyle(snapshot.theme.accent)
-                        .padding(130)
-                }
+            GnarlyArtworkPlaceholder()
         }
     }
 }

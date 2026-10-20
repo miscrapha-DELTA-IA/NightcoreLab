@@ -384,9 +384,7 @@ struct StorySceneView: View {
         if let artwork {
             Image(uiImage: artwork).resizable().scaledToFill()
         } else {
-            Rectangle().fill(.black.opacity(0.40))
-                .overlay(Image(systemName: "music.note")
-                    .font(.system(size: 70)).foregroundStyle(request.theme.accent))
+            GnarlyArtworkPlaceholder()
         }
     }
 

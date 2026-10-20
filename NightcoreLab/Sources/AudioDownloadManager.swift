@@ -424,7 +424,7 @@ final class AudioDownloadManager: ObservableObject {
             guard http.statusCode == 200,
                   let health = try? JSONDecoder().decode(HealthResponse.self, from: data),
                   health.status == "ok" else {
-                return (false, "O endereço respondeu (\(http.statusCode)), mas não é o servidor do Nightcore Lab.")
+                return (false, "O endereço respondeu (\(http.statusCode)), mas não é o servidor do Gnarly.")
             }
             let ffmpeg = health.ffmpeg == true ? "com FFmpeg" : "sem FFmpeg"
             let version = health.ytdlp.map { " · yt-dlp \($0)" } ?? ""

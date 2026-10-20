@@ -170,10 +170,12 @@ struct KaraokeScoringControls: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .accessibilityLabel("Pontuação do karaokê")
-        .alert("Permissão do microfone desativada", isPresented: Binding(get: { showsError && audio.microphonePermissionDenied }, set: { showsError = $0 })) {
+        .alert("Microfone indisponível", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Autorize o microfone nos Ajustes ou escolha Experimentar simulação. Nenhum resultado simulado é apresentado como canto real.")
+            Text(audio.microphonePermissionDenied
+                ? "Autorize o microfone nos Ajustes ou escolha Experimentar simulação."
+                : (audio.karaokeMicrophoneFailure ?? "Não foi possível iniciar a captura do microfone."))
         }
         .onChange(of: audio.karaokeMicrophoneActive) { _, active in
             if !active, store.scoring.mode == .microphone, !store.scoring.snapshot.isFinished {
@@ -182,13 +184,6 @@ struct KaraokeScoringControls: View {
         }
         .onChange(of: store.scoring.mode) { _, mode in
             if mode == .off { audio.endKaraokeMicrophone() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for:
-            UIApplication.didBecomeActiveNotification)) { _ in
-            if !audio.microphonePermissionDenied { showsError = false }
-        }
-        .onDisappear {
-            request?.cancel()
         }
     }
 
@@ -203,7 +198,7 @@ struct KaraokeScoringControls: View {
             guard store.scoring.isPresented, audio.playbackSourceRevision == revision else {
                 audio.endKaraokeMicrophone(); return
             }
-            guard allowed else { showsError = audio.microphonePermissionDenied; return }
+            guard allowed else { showsError = true; return }
             store.scoring.start(mode: .microphone, lines: store.lines,
                                 at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
             store.scoring.microphoneFrame = { [weak audio] _ in audio?.karaokeVoiceFrame() ?? .silence }
@@ -219,7 +214,7 @@ enum KaraokeScoreShareComposer {
     static func text(_ snapshot: KaraokeScoreSnapshot, simulation: Bool) -> String {
         let mode = simulation ? "SIMULAÇÃO de karaokê" : "Canto ao vivo"
         return [
-            "Nightcore Lab · \(mode)",
+            "Gnarly · \(mode)",
             "Nota \(snapshot.rank) · \(Int(snapshot.accuracyPercentage.rounded()))%",
             "\(snapshot.totalScore) pontos · maior combo \(snapshot.bestCombo)x",
             snapshot.hasHarmonicReference ? "Ritmo e afinação" : "Avaliação rítmica"

@@ -200,6 +200,7 @@ struct SearchView: View {
                                     WebImage(url: track.thumbnailURL)
                                         .resizable().scaledToFill()
                                         .frame(width: 38, height: 38)
+                                        .background(GnarlyArtworkPlaceholder())
                                         .clipShape(RoundedRectangle(cornerRadius: 8))
                                     Text(track.title)
                                         .font(.caption.weight(.semibold))
@@ -247,6 +248,7 @@ struct SearchView: View {
                         WebImage(url: track.thumbnailURL)
                             .resizable().scaledToFill()
                             .frame(width: 34, height: 34)
+                            .background(GnarlyArtworkPlaceholder())
                             .clipShape(RoundedRectangle(cornerRadius: 7))
                         Text(track.title)
                             .font(.caption.weight(.semibold)).lineLimit(1)
@@ -332,6 +334,7 @@ struct SearchView: View {
             HStack(spacing: 10) {
                 WebImage(url: result.anchor.thumbnailURL)
                     .resizable().scaledToFill().frame(width: 52, height: 52)
+                    .background(GnarlyArtworkPlaceholder())
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(result.artistName ?? "Explorar músicas")
@@ -409,6 +412,7 @@ struct SearchView: View {
                 HStack(spacing: 8) {
                     WebImage(url: track.thumbnailURL)
                         .resizable().scaledToFill().frame(width: 40, height: 40)
+                        .background(GnarlyArtworkPlaceholder())
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track.cleanTitle ?? track.title)
@@ -616,6 +620,7 @@ struct SearchView: View {
                                                 .transition(.fade(duration: 0.2))
                                                 .scaledToFill()
                                                 .frame(width: 152, height: 100)
+                                                .background(GnarlyArtworkPlaceholder())
                                                 .clipped()
                                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                             Text(track.title)

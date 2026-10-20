@@ -6,7 +6,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>pt-BR</string>
 	<key>CFBundleDisplayName</key>
-	<string>Nightcore Lab</string>
+	<string>Gnarly</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -48,7 +48,12 @@
 
 	<!-- Obrigatório: sem isso o app abre em modo de compatibilidade (tarjas pretas) -->
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIImageName</key>
+		<string>GnarlyLaunchLogo</string>
+		<key>UIImageRespectsSafeAreaInsets</key>
+		<true/>
+	</dict>
 
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
@@ -87,7 +92,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Permite salvar vídeos Story na galeria para publicar no YouTube Shorts e em outras redes sociais.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>O Nightcore Lab acessa a rede local para baixar áudio do servidor de extração no seu computador.</string>
+	<string>O Gnarly acessa a rede local para baixar áudio do servidor de extração no seu computador.</string>
 
 	<!-- Sem criptografia própria: pula a pergunta de export compliance a cada build -->
 	<key>ITSAppUsesNonExemptEncryption</key>
