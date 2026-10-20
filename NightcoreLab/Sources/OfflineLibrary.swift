@@ -33,9 +33,11 @@ final class OfflineLibrary: ObservableObject {
 
     private let analysisCache = MusicAnalysisCache()
     private var savingTasks: [String: Task<Void, Never>] = [:]
+    private var savingGenerations: [String: UUID] = [:]
 
     func cancel(_ track: Track, downloader: AudioDownloadManager) {
         savingTasks.removeValue(forKey: track.id)?.cancel()
+        savingGenerations[track.id] = nil
         downloader.cancelOfflineAudio(track)
         savingIDs.remove(track.id)
         phases[track.id] = nil
@@ -69,7 +71,17 @@ final class OfflineLibrary: ObservableObject {
         guard savingIDs.insert(track.id).inserted else { return }
         failedIDs.remove(track.id)
         phases[track.id] = "Baixando áudio"
+        let generation = UUID()
+        savingGenerations[track.id] = generation
         savingTasks[track.id] = Task {
+            defer {
+                if savingGenerations[track.id] == generation {
+                    phases[track.id] = nil
+                    savingIDs.remove(track.id)
+                    savingTasks[track.id] = nil
+                    savingGenerations[track.id] = nil
+                }
+            }
             do {
                 let meta = TrackMetadata(videoID: track.id, rawTitle: track.title,
                     channel: nil, cleanArtist: track.cleanArtist,
@@ -96,9 +108,6 @@ final class OfflineLibrary: ObservableObject {
             } catch {
                 if !Task.isCancelled { failedIDs.insert(track.id) }
             }
-            phases[track.id] = nil
-            savingIDs.remove(track.id)
-            savingTasks[track.id] = nil
         }
     }
 

@@ -355,9 +355,12 @@ final class AudioDownloadManager: ObservableObject {
                 let requestedPriority = preparationPriorities.removeValue(forKey: track.id) ?? priority
                 preparations[track.id] = nil
                 serialize {
-                    guard self.preparationGenerations[track.id] == generation,
-                          self.selectedID == track.id || self.offlineWaiters[track.id] != nil else { return }
+                    guard self.preparationGenerations[track.id] == generation else { return }
                     self.preparationGenerations[track.id] = nil
+                    guard self.selectedID == track.id || self.offlineWaiters[track.id] != nil else {
+                        self.startNextOffline()
+                        return
+                    }
                     if let local = self.cache.indexedURL(for: track.id) {
                         self.completeOfflineAudio(track.id, result: .success(local))
                         self.deliver(local, track: track)

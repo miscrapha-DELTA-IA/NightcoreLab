@@ -427,8 +427,12 @@ struct SearchView: View {
     private func offlineControl(_ track: Track) -> some View {
         Group {
             if offline.readyIDs.contains(track.id) {
-                Text("✓ Offline").font(.caption2.weight(.bold))
-                    .foregroundStyle(.green)
+                Menu {
+                    Button("Remover áudio baixado", role: .destructive) { downloader.removeOfflineAudio(track) }
+                        .disabled(!downloader.canRemoveOfflineAudio(track))
+                } label: {
+                    Text("✓ Offline").font(.caption2.weight(.bold)).foregroundStyle(.green)
+                }
             } else if offline.savingIDs.contains(track.id) {
                 HStack(spacing: 5) {
                     ProgressView(value: offlineProgress(for: track))

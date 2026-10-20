@@ -51,6 +51,7 @@ final class KaraokeScoringSession {
     func start(mode: Mode, lines: [TimedLyricLine], at time: Double) {
         guard isPresented, mode != .off else { return }
         self.mode = mode
+        lastResult = nil
         message = nil
         engine = KaraokeScoringEngine()
         engine.key = mode == .passive ? nil : referenceKey
