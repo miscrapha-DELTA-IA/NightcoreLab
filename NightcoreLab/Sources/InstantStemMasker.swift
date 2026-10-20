@@ -1,4 +1,3 @@
-import Accelerate
 import AudioToolbox
 import AVFoundation
 
@@ -45,15 +44,16 @@ final class InstantStemMasker {
     private var low220L: Float = 0, low220R: Float = 0
     private var low3800L: Float = 0, low3800R: Float = 0
     private var low2500L: Float = 0, low2500R: Float = 0
-    private var fast: Float = 0, slow: Float = 0, coherence: Float = 0
-    private let absL = UnsafeMutablePointer<Float>.allocate(capacity: maximumFrames)
-    private let absR = UnsafeMutablePointer<Float>.allocate(capacity: maximumFrames)
+    private var fast: Float = 0, slow: Float = 0
+    private var inputPower: Float = 0, bassPower: Float = 0
+    private var formantPower: Float = 0, highPower: Float = 0, centerPower: Float = 0
+    private var bassMask: Float = 0, drumMask: Float = 0, vocalMask: Float = 0
+    private var gainStage: Double = 1, outputGain: Double = 1
 
     init(sampleRate: Double) {
         self.sampleRate = max(8_000, sampleRate)
         configure(sampleRate: self.sampleRate)
     }
-    deinit { absL.deallocate(); absR.deallocate() }
 
     func configure(sampleRate: Double) {
         self.sampleRate = max(8_000, sampleRate)
@@ -62,13 +62,20 @@ final class InstantStemMasker {
         bassR1 = BassBiquad(rate: self.sampleRate)
         bassR2 = BassBiquad(rate: self.sampleRate)
         sub20L = 0; sub20R = 0
+        low220L = 0; low220R = 0; low3800L = 0; low3800R = 0
+        low2500L = 0; low2500R = 0; fast = 0; slow = 0
+        inputPower = 0; bassPower = 0; formantPower = 0; highPower = 0; centerPower = 0
+        bassMask = 0; drumMask = 0; vocalMask = 0
     }
 
     func set(_ kind: StemKind, level: Float) {
         target[Self.index(kind)] = min(2, max(0, level.isFinite ? level : 1))
     }
 
-    var isDirect: Bool { current.allSatisfy { $0 == 1 } && target.allSatisfy { $0 == 1 } }
+    var isDirect: Bool {
+        current.allSatisfy { $0 == 1 } && target.allSatisfy { $0 == 1 } &&
+            gainStage == 1 && outputGain == 1
+    }
 
     private static func index(_ kind: StemKind) -> Int {
         switch kind {
@@ -95,10 +102,7 @@ final class InstantStemMasker {
     func process(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>,
                  frames: Int) {
         guard frames > 0 else { return }
-        let count = min(frames, Self.maximumFrames)
         if isDirect { return } // bit-transparent; never touch either buffer
-        vDSP_vabs(left, 1, absL, 1, vDSP_Length(count))
-        vDSP_vabs(right, 1, absR, 1, vDSP_Length(count))
 
         let rate = Float(sampleRate)
         let a20 = 1 - exp(-2 * Float.pi * 20 / rate)
@@ -107,16 +111,17 @@ final class InstantStemMasker {
         let a3800 = 1 - exp(-2 * Float.pi * 3_800 / rate)
         let aFast = 1 - exp(-1 / (0.0012 * rate))
         let aSlow = 1 - exp(-1 / (0.035 * rate))
-        let aPan = 1 - exp(-1 / (0.006 * rate))
+        let aEnvelope = 1 - exp(-1 / (0.025 * rate))
+        let aGain = 1 - exp(-1 / (0.01 * sampleRate))
         let ramp = 1 / max(1, Float(Self.rampSeconds) * rate)
 
-        for n in 0..<count {
+        for n in 0..<frames {
             for k in 0..<4 {
                 let delta = target[k] - current[k]
                 current[k] += min(ramp, max(-ramp, delta))
             }
             let l = left[n], r = right[n]
-            let amplitude = 0.5 * (absL[n] + absR[n])
+            let amplitude = 0.5 * (abs(l) + abs(r))
             let bassStageL = bassL1.process(l)
             let bassStageR = bassR1.process(r)
             let bassSampleL = bassL2.process(bassStageL)
@@ -134,25 +139,42 @@ final class InstantStemMasker {
 
             let formantL = low3800L - low220L
             let formantR = low3800R - low220R
-            let instantC = 2 * abs(formantL * formantR) /
-                (formantL * formantL + formantR * formantR + 1e-6)
-            coherence += aPan * (instantC - coherence)
-            let denominator = amplitude + 1e-5
-            let bassWeight = min(0.92, max(0,
-                (abs(bassSampleL - sub20L) + abs(bassSampleR - sub20R)) *
-                    0.5 / denominator))
-            let highEnergy = (abs(l - low2500L) + abs(r - low2500R)) * 0.5
+            let bassL = bassSampleL - sub20L, bassR = bassSampleR - sub20R
+            let highL = l - low2500L, highR = r - low2500R
+            // Ratios of instantaneous rectified samples explode at waveform
+            // zero crossings. Their audio-rate gain modulation was audible as
+            // buzz/hiss. Measure power envelopes before calculating any ratio.
+            inputPower += aEnvelope * (0.5 * (l * l + r * r) - inputPower)
+            bassPower += aEnvelope * (0.5 * (bassL * bassL + bassR * bassR) - bassPower)
+            formantPower += aEnvelope * (0.5 * (formantL * formantL + formantR * formantR) - formantPower)
+            highPower += aEnvelope * (0.5 * (highL * highL + highR * highR) - highPower)
+            centerPower += aEnvelope * (formantL * formantR - centerPower)
+            let denominator = max(inputPower, 1e-8)
+            let bassWeight = min(0.92, sqrt(max(0, bassPower) / denominator))
+            let highWeight = min(1, sqrt(max(0, highPower) / denominator))
             let transient = max(0, (fast - slow) / (fast + 1e-5))
-            let drumWeight = min(0.82, transient *
-                (0.35 + 0.65 * min(1, highEnergy / denominator)))
-            let formantEnergy = (abs(formantL) + abs(formantR)) * 0.5
-            let vocalWeight = coherence > 0.78
-                ? min(0.9, (coherence - 0.78) / 0.22) *
-                    min(1, formantEnergy / denominator) : 0
-            let gain = Self.gain(levels: current, bass: bassWeight,
-                                 drums: drumWeight, vocal: vocalWeight)
-            left[n] = l * gain
-            right[n] = r * gain
+            let drumWeight = min(0.82, transient * (0.35 + 0.65 * highWeight))
+            let coherence = min(1, max(0, centerPower / max(formantPower, 1e-8)))
+            let vocalWeight = min(0.9, max(0, (coherence - 0.78) / 0.22)) *
+                min(1, sqrt(max(0, formantPower) / denominator))
+            // Mask decisions and output gain are control signals, not audio.
+            // Smooth both to suppress harmonic/intermodulation sidebands. One
+            // shared positive gain preserves the original stereo relationship.
+            bassMask += aEnvelope * (bassWeight - bassMask)
+            drumMask += aEnvelope * (drumWeight - drumMask)
+            vocalMask += aEnvelope * (vocalWeight - vocalMask)
+            let equalLevels = current[0] == current[1] && current[1] == current[2] && current[2] == current[3]
+            let desired = Double(equalLevels ? current[0] :
+                Self.gain(levels: current, bass: bassMask, drums: drumMask, vocal: vocalMask))
+            gainStage += aGain * (desired - gainStage)
+            outputGain += aGain * (gainStage - outputGain)
+            if equalLevels && abs(gainStage - desired) < 1e-7 && abs(outputGain - desired) < 1e-7 {
+                // Settle exactly before entering the bit-transparent bypass;
+                // never jump from a still-attenuated tail to unity next block.
+                gainStage = desired; outputGain = desired
+            }
+            left[n] = l * Float(outputGain)
+            right[n] = r * Float(outputGain)
         }
     }
 }

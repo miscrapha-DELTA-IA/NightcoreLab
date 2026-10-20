@@ -215,15 +215,22 @@ final class PanelSystemTests: XCTestCase {
         }
     }
 
-    func testExistingOmniboxPositionAndIndependentEyeVisibility() throws {
+    func testCompleteOmniboxVisibilityKeepsExistingPosition() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
         let nowPlaying = try String(contentsOf: root.appendingPathComponent("NowPlayingScreen.swift"))
         let search = try String(contentsOf: root.appendingPathComponent("SearchView.swift"))
         XCTAssertTrue(nowPlaying.contains(".offset(y: card.size.height - 3)"),
                       "Existing drawer position must be unchanged")
-        XCTAssertTrue(search.contains(".hideablePanel(.omnibox, edge: .top)"),
-                      "Busca must still toggle only the existing in-place omnibox")
+        XCTAssertTrue(nowPlaying.contains(".hideablePanel(.omnibox, edge: .top)"),
+                      "Busca must hide the complete drawer, including the handle")
+        XCTAssertFalse(search.contains(".hideablePanel(.omnibox, edge: .top)"),
+                       "Visibility must wrap the container rather than just its text field")
+        let content = try String(contentsOf: root.appendingPathComponent("ContentView.swift"))
+        XCTAssertTrue(content.contains("musicWorkspace(focusRequest: 0)\n                            .hideablePanel(.omnibox, edge: .top)"),
+                      "The empty-player omnibox must obey the same preference")
+        XCTAssertTrue(nowPlaying.contains("searchDrawer.isOpen && panels.isVisible(.omnibox) ? 360 : 0"),
+                      "A hidden open drawer must not reserve empty space")
         XCTAssertFalse(nowPlaying.contains("panels.setVisible(true, for: .omnibox)"),
                        "Opening the drawer must not override the eye's hidden preference")
     }

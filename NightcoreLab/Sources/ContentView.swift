@@ -239,6 +239,12 @@ struct ContentView: View {
 
     private var offlineAwareCanvas: some View {
         playerCanvas
+            .onChange(of: panels.isVisible(.omnibox)) { _, visible in
+                if !visible {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(
                 for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                     lyricsStore.discardVolatileLyricCache()
@@ -517,7 +523,10 @@ struct ContentView: View {
     // Pull the long list out of body, keeping the view hierarchy unchanged.
     private var mainScrollContent: some View {
                 VStack(spacing: DS.Spacing.l) {
-                    if !hasTrack { musicWorkspace(focusRequest: 0) }
+                    if !hasTrack {
+                        musicWorkspace(focusRequest: 0)
+                            .hideablePanel(.omnibox, edge: .top)
+                    }
                     resumeSection
                     if downloader.isDownloading {
                         Text(downloadStatusText)
