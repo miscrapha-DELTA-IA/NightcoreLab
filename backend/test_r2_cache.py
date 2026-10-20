@@ -1,5 +1,6 @@
 """Offline contract tests; no credentials, network, or media downloads."""
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -184,3 +185,24 @@ def test_download_r2_redirect_and_local_fallback():
                 head = client.head("/download?url=https://www.youtube.com/watch?v=abcdefghijk")
                 assert head.status_code == 200
                 assert head.content == b""
+
+
+def test_r2_startup_diagnostic_logs_names_but_never_secret_values(caplog):
+    import os
+    keys = ("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID", "ACCESS_KEY_ID",
+            "R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY", "SECRET_ACCESS_KEY",
+            "R2_ENDPOINT_URL", "R2_ACCOUNT_ID", "S3_ENDPOINT_URL", "AWS_ENDPOINT_URL")
+    env = {name: "" for name in keys}
+    env.update({"R2_ACCESS_KEY_ID": "NEVER_LOG_ACCESS_123",
+                "R2_SECRET_ACCESS_KEY": "NEVER_LOG_SECRET_456",
+                "R2_ACCOUNT_ID": ACCOUNT})
+    with patch.dict(os.environ, env), patch.object(main, "r2_cache", None):
+        with TestClient(main.app) as client:
+            assert client.get("/health").json()["r2_enabled"] is False
+    logged = caplog.text
+    assert "R2 desativado; nomes de variáveis" in logged
+    assert "R2_ACCESS_KEY_ID" in logged
+    assert "R2_SECRET_ACCESS_KEY" in logged
+    assert "R2_ACCOUNT_ID" in logged
+    assert "NEVER_LOG_ACCESS_123" not in logged
+    assert "NEVER_LOG_SECRET_456" not in logged
