@@ -62,6 +62,7 @@ final class LyricsStore {
     @ObservationIgnored private var clock: PlaybackClock?
     @ObservationIgnored private var driver: DisplayLinkDriver?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadGeneration = UUID()
 
     init(offsetDefaults: UserDefaults = .standard) {
         self.offsetDefaults = offsetDefaults
@@ -94,7 +95,10 @@ final class LyricsStore {
 
     /// O prefetcher começa o trabalho antes do utilizador entrar em Karaokê.
     func beginLoading(trackID: String, clearExisting: Bool = false) {
+        // A second observer joining this track must not cancel its parser.
+        if trackID == self.trackID, !clearExisting { return }
         loadTask?.cancel()
+        loadGeneration = UUID()
         if trackID != self.trackID || clearExisting {
             scoring.resetForTrack()
             self.trackID = trackID
@@ -108,12 +112,26 @@ final class LyricsStore {
 
     func markUnavailable(trackID: String) {
         guard self.trackID == trackID else { return }
+        loadTask?.cancel()
+        loadGeneration = UUID()
         scoring.stop()
         status = .unavailable
         lines = []
         activeLineIndex = nil
         hasWordSync = false
         needsReview = false
+    }
+
+    /// Async producers cannot replace the track selected by the player.
+    func loadIfCurrent(trackID: String, rawLRC: String,
+                       needsReview: Bool = false, force: Bool = false) {
+        guard self.trackID == trackID else { return }
+        load(trackID: trackID, rawLRC: rawLRC, needsReview: needsReview, force: force)
+    }
+
+    func beginLoadingIfCurrent(trackID: String) {
+        guard self.trackID == trackID else { return }
+        beginLoading(trackID: trackID, clearExisting: true)
     }
 
     /// force=true é usado pela seleção manual (pin); o automático não a substitui.
@@ -124,6 +142,8 @@ final class LyricsStore {
             return
         }
         loadTask?.cancel()
+        loadGeneration = UUID()
+        let generation = loadGeneration
         scoring.stop()
         self.trackID = trackID
         self.needsReview = needsReview
@@ -136,7 +156,8 @@ final class LyricsStore {
             let parsed = EnhancedLRCParser.parse(rawLRC)
             if Task.isCancelled { return }
             await MainActor.run {
-                guard let self, self.trackID == trackID else { return }
+                guard let self, self.trackID == trackID,
+                      self.loadGeneration == generation else { return }
                 self.lines = parsed.lines
                 self.hasWordSync = parsed.hasWordSync
                 self.status = parsed.lines.isEmpty ? .unavailable : .ready
@@ -157,6 +178,7 @@ final class LyricsStore {
 
     func clear() {
         loadTask?.cancel()
+        loadGeneration = UUID()
         scoring.resetForTrack()
         trackID = nil; lines = []; activeLineIndex = nil; hasWordSync = false
         status = .idle; needsReview = false; isPlaying = false

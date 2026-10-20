@@ -123,6 +123,7 @@ struct LyricsView: View {
     }
 
     private func apply(_ selected: LyricsRecord, pin: Bool = false) {
+        guard lyricStore.trackID == track.id else { return }
         record = selected
         if let synced = selected.syncedLyrics, !synced.isEmpty {
             lyricStore.load(trackID: track.id, rawLRC: synced,
@@ -325,13 +326,13 @@ struct LyricsView: View {
                     .padding(.horizontal, 22)
                 }
 
-                if loading {
+                if loading && (lyricStore.trackID != track.id || lyricStore.lines.isEmpty) {
                     Spacer()
                     ProgressView("Buscando letras…")
                         .tint(theme.accent)
                         .foregroundStyle(.white)
                     Spacer()
-                } else if !lyricStore.lines.isEmpty {
+                } else if lyricStore.trackID == track.id, !lyricStore.lines.isEmpty {
                     synchronizedLyrics
                 } else if let text = record?.plainLyrics, !text.isEmpty {
                     ScrollView {
@@ -362,6 +363,9 @@ struct LyricsView: View {
             .padding(.top, inline ? 4 : 20)
         }
         .onAppear {
+            if lyricStore.trackID != track.id {
+                lyricStore.beginLoading(trackID: track.id, clearExisting: true)
+            }
             lyricStore.attach(clock: audio.lyricsClock)
             lyricStore.seekHandler = { position in audio.seek(to: position) }
             lyricStore.startTracking()
@@ -388,7 +392,7 @@ struct LyricsView: View {
             if let prefetcher {
                 // Reutiliza a busca que começou durante a reprodução.
                 let cached = await prefetcher.awaitChoice(for: track.id)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, lyricStore.trackID == track.id else { return }
                 if let cached {
                     candidates = cached.alternatives.map(\.asLegacyRecord)
                     if let selected = cached.selected {

@@ -8,20 +8,20 @@ struct KaraokeScoreHUD: View {
 
     var body: some View {
         if session.isHUDVisible {
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")
                             .font(.system(size: 9, weight: .bold))
                         Text(session.snapshot.totalScore, format: .number)
-                            .font(.title3.bold().monospacedDigit())
+                            .font(.subheadline.bold().monospacedDigit())
                             .contentTransition(.numericText())
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
                         Text("\(session.snapshot.multiplier)x · \(session.snapshot.streakCombo) combo")
                             .font(.caption.bold().monospacedDigit())
-                            .padding(.horizontal, 9).padding(.vertical, 5)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
                             .background(accent.opacity(0.22), in: Capsule())
                         Text(session.snapshot.hasHarmonicReference ? "Ritmo + afinação" : "Ritmo e presença · tom indisponível")
                             .font(.system(size: 9))
@@ -32,11 +32,8 @@ struct KaraokeScoreHUD: View {
                     .tint(accent)
                     .accessibilityLabel("Precisão vocal")
                     .accessibilityValue("\(Int(session.snapshot.vocalAccuracy * 100)) por cento")
-                if session.snapshot.isFinished {
-                    KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode == .simulation)
-                }
             }
-            .padding(12)
+            .padding(9)
             .foregroundStyle(.white)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.3)))
@@ -51,6 +48,7 @@ struct KaraokeScoreHUD: View {
                     .allowsHitTesting(false)
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.snapshot.totalScore)
+            .frame(maxWidth: 310)
             .padding(.horizontal, 18).padding(.top, 4)
             .accessibilityIdentifier("karaoke.scoreHUD")
         }
@@ -86,38 +84,70 @@ struct KaraokeScoringControls: View {
     @State private var request: Task<Void, Never>?
     @State private var requesting = false
     @State private var showsError = false
+    @State private var result: KaraokeScoringSession.Result?
+
+    private var microphoneOn: Bool {
+        store.scoring.mode == .microphone && !store.scoring.snapshot.isFinished
+    }
 
     var body: some View {
-        Menu {
-            Button("Pontuar com microfone", systemImage: "mic.badge.plus") { startMicrophone() }
-                .disabled(requesting || store.status != .ready)
-            Button("Experimentar simulação", systemImage: "play.rectangle") {
-                request?.cancel(); audio.endKaraokeMicrophone()
-                requesting = false
-                store.scoring.start(mode: .simulation, lines: store.lines,
-                                    at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
-                audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
+        HStack(spacing: 8) {
+            Button {
+                if microphoneOn || requesting { stopMicrophone() }
+                else { startMicrophone() }
+            } label: {
+                Label(requesting ? "Cancelar" : microphoneOn ? "Desligar mic" : "Ligar mic",
+                      systemImage: microphoneOn ? "mic.fill" : "mic.slash")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
-            .disabled(store.status != .ready)
-            Button("Desligar pontuação", systemImage: "mic.slash") {
-                request?.cancel(); requesting = false
-                audio.endKaraokeMicrophone(); store.scoring.stop()
+            .buttonStyle(.plain)
+            .disabled(store.status != .ready && !microphoneOn && !requesting)
+            .accessibilityLabel(microphoneOn ? "Desligar microfone" : requesting ? "Cancelar ativação do microfone" : "Ligar microfone")
+            .accessibilityValue(microphoneOn ? "Ligado" : "Desligado")
+            .accessibilityHint("Use fones para evitar captar a música no microfone")
+            .accessibilityIdentifier("karaoke.microphoneToggle")
+            .contextMenu {
+                Button("Experimentar simulação", systemImage: "play.rectangle") {
+                    stopMicrophone()
+                    store.scoring.start(mode: .simulation, lines: store.lines,
+                                        at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
+                    audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
+                }
+                .disabled(store.status != .ready)
             }
-            Text("Use fones para evitar captar a música no microfone.")
-        } label: {
-            Label(store.scoring.mode == .off ? "Cantar" : "Canto ativo",
-                  systemImage: store.scoring.mode == .off ? "mic.badge.plus" : "mic.fill")
+
+            if store.scoring.mode != .off || store.scoring.lastResult != nil {
+                Button("Ver resultado") {
+                    stopMicrophone()
+                    result = store.scoring.lastResult
+                }
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(accent)
-                .padding(.horizontal, 13)
-                .frame(height: 36)
-                .background(.ultraThinMaterial, in: Capsule())
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("karaoke.viewResult")
+            }
         }
-        .accessibilityLabel("Acompanhamento do canto")
+        .sheet(item: $result) { saved in
+            NavigationStack {
+                KaraokeScoreSummary(snapshot: saved.snapshot, simulation: saved.simulation)
+                    .padding(24)
+                    .navigationTitle(saved.simulation ? "Resultado · simulação" : "Resultado do canto")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Fechar") { result = nil }
+                        }
+                    }
+            }
+            .presentationDetents([.medium])
+        }
         .alert("Microfone indisponível", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Autorize o microfone nos Ajustes ou escolha Experimentar simulação. Nenhum resultado simulado é apresentado como canto real.")
+            Text("Autorize o microfone nos Ajustes para pontuar seu canto.")
         }
         .onChange(of: audio.karaokeMicrophoneActive) { _, active in
             if !active, store.scoring.mode == .microphone, !store.scoring.snapshot.isFinished {
@@ -127,9 +157,18 @@ struct KaraokeScoringControls: View {
         .onChange(of: store.scoring.mode) { _, mode in
             if mode == .off { audio.endKaraokeMicrophone() }
         }
-        .onDisappear {
-            request?.cancel(); audio.endKaraokeMicrophone()
+        .onChange(of: store.scoring.snapshot.isFinished) { _, finished in
+            if finished { audio.endKaraokeMicrophone() }
         }
+        .onDisappear {
+            stopMicrophone()
+        }
+    }
+
+    private func stopMicrophone() {
+        request?.cancel(); requesting = false
+        store.scoring.stop()
+        audio.endKaraokeMicrophone()
     }
 
     private func startMicrophone() {

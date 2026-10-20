@@ -67,6 +67,7 @@ MAX_CONCURRENT_DOWNLOADS = min(max(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "1"
 MAX_PENDING_DOWNLOADS = 4
 CONCURRENT_FRAGMENTS = 2
 MAX_CACHE_BYTES = 300 * 1024 * 1024
+R2_LOOKUP_TIMEOUT_SECONDS = 2.0
 CACHE_DIR = Path(os.getenv("AUDIO_CACHE_DIR", tempfile.gettempdir())) / "nightcore_audio_cache"
 COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
 
@@ -725,7 +726,9 @@ async def _try_r2(video_id: str, delivery: str, method: str = "GET"):
     if not r2_cache:
         return None
     try:
-        meta = await r2_cache.find(f"{video_id}/audio.m4a")
+        # A slow object-store HEAD must not add its 20s HTTP timeout to playback.
+        meta = await asyncio.wait_for(r2_cache.find(f"{video_id}/audio.m4a"),
+                                      timeout=R2_LOOKUP_TIMEOUT_SECONDS)
         if meta is None:
             return None
         signed = (r2_cache.presigned_head(f"{video_id}/audio.m4a") if method == "HEAD"
@@ -775,12 +778,10 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
     video_id = _youtube_video_id(url)
     if delivery not in {"audio", "url"}:
         raise HTTPException(status_code=400, detail="Modo de entrega inválido.")
-    if redirect_cache:
-        remote = await _try_r2(video_id, delivery, r2_method)
-        if remote is not None:
-            return remote
     entry = in_flight_downloads.get(video_id)
-    if entry is None:
+    # Serve an already resident file immediately. URL delivery explicitly asks
+    # for a signed object-store URL and therefore still checks R2 first.
+    if entry is None and delivery == "audio":
         # Pin the cache entry atomically with lookup: pruning runs under the same lock.
         hit = await asyncio.to_thread(_pin_cached_audio, video_id)
         entry = in_flight_downloads.get(video_id)
@@ -792,6 +793,13 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
             return _audio_response(audio_path, title, thumbnail, background_tasks)
         if hit is not None:
             _release_cached_reader(video_id)
+    if redirect_cache and entry is None:
+        remote = await _try_r2(video_id, delivery, r2_method)
+        if remote is not None:
+            return remote
+        # The lookup awaited network IO; another request may have started this
+        # video's extraction meanwhile. Join it instead of overwriting its task.
+        entry = in_flight_downloads.get(video_id)
     if entry is None:
         if not audio_sources.can_recover(video_id):
             _check_youtube_cooldown()

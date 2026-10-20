@@ -69,6 +69,8 @@ final class PlaybackQueue: ObservableObject {
 
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
+    @State private var searchSession = SearchSession()
+    @State private var showsDownloads = false
 
     @State private var speed: Float = 1.0
     @State private var reverb: Float = 0
@@ -480,9 +482,19 @@ struct ContentView: View {
             .accessibilityLabel("Área de busca, descoberta e fila")
             .accessibilityValue(isMusicWorkspaceExpanded ? "Expandida" : "Recolhida")
 
+            Button { showsDownloads = true } label: {
+                Label("Downloads · \(downloader.cachedIDs.count)", systemImage: "arrow.down.circle")
+                    .font(.caption.weight(.semibold))
+                    .frame(minHeight: 44)
+            }
+            .accessibilityIdentifier("music.downloads")
+            .sheet(isPresented: $showsDownloads) {
+                DownloadsView(downloader: downloader, onPlay: { playTrack($0) })
+            }
+
             VStack(alignment: .leading, spacing: 10) {
                 SearchView(
-                    downloader: downloader, theme: currentTheme,
+                    downloader: downloader, session: searchSession, theme: currentTheme,
                     isEnabled: !audio.isExporting,
                     suggestedTracks: relatedVideos,
                     suggestionReasons: suggestionReasons,
@@ -1167,6 +1179,8 @@ struct ContentView: View {
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
+                // Invalidate the old lyrics synchronously before the new view can render.
+                lyricsStore.beginLoading(trackID: committedTrack.id, clearExisting: true)
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
                     let isManualSkip = !automaticAdvance && navigation == .regular &&
@@ -1224,6 +1238,8 @@ struct ContentView: View {
             coverURL = saved.track.thumbnailURL
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
+            lyricsStore.beginLoading(trackID: saved.track.id, clearExisting: true)
+            startLyricsPrefetch(for: saved.track)
             // AudioEngineManager.load() does not start playback.
         } catch {
             resumeTrack = saved.track

@@ -74,6 +74,16 @@ struct TrackAudioCache {
         try? persist()
     }
 
+    mutating func remove(_ id: String) throws {
+        guard let entry = entries[id] else { return }
+        let directory = folder.appendingPathComponent(entry.relativePath).deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+        entries[id] = nil
+        try persist()
+    }
+
     private func persist() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try JSONEncoder().encode(entries).write(to: folder.appendingPathComponent("index.json"), options: .atomic)
