@@ -49,11 +49,11 @@ actor StemSeparationService {
         defer { isSeparating = false }
         do {
             let version = await backend.modelVersion
-            let stemsRoot = try supportDirectory().appendingPathComponent("Stems", isDirectory: true)
+            var stemsRoot = try supportDirectory().appendingPathComponent("Stems", isDirectory: true)
             try FileManager.default.createDirectory(at: stemsRoot, withIntermediateDirectories: true)
             var backupValues = URLResourceValues(); backupValues.isExcludedFromBackup = true
             try stemsRoot.setResourceValues(backupValues)
-            let root = stemsRoot
+            var root = stemsRoot
                 .appendingPathComponent(Self.safeTrackID(trackID), isDirectory: true)
                 .appendingPathComponent(version, isDirectory: true)
             if let cached = Self.cachedStems(at: root) {
@@ -90,7 +90,7 @@ actor StemSeparationService {
         let version = await backend.modelVersion
         let descriptor = await backend.modelDescriptor
         let support = try supportDirectory()
-        let modelRoot = support.appendingPathComponent("StemModels", isDirectory: true)
+        var modelRoot = support.appendingPathComponent("StemModels", isDirectory: true)
             .appendingPathComponent(version, isDirectory: true)
         let compiled = modelRoot.appendingPathComponent("\(descriptor.packageName).mlmodelc", isDirectory: true)
         if FileManager.default.fileExists(atPath: compiled.path) {
