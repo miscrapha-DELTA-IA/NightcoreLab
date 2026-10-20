@@ -67,6 +67,10 @@ def test_head_ttl_and_hot_index():
             assert await cache.find("abcdefghijk/audio.m4a") == {"title": "Song"}
             assert await cache.find("abcdefghijk/audio.m4a") == {"title": "Song"}
             assert len(seen) == 1
+            modified_at, _, meta = cache._hot["abcdefghijk/audio.m4a"]
+            cache._hot["abcdefghijk/audio.m4a"] = (modified_at, 0, meta)
+            assert await cache.find("abcdefghijk/audio.m4a") == {"title": "Song"}
+            assert len(seen) == 2
             cache._hot.clear()
             modified = datetime.now(timezone.utc) - timedelta(seconds=TTL_SECONDS + 10)
             assert await cache.find("abcdefghijk/audio.m4a") is None

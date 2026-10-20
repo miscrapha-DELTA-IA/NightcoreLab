@@ -26,6 +26,7 @@ import httpx
 
 TTL_SECONDS = 7 * 24 * 3600
 SIGNED_URL_SECONDS = 3600
+HOT_RECHECK_SECONDS = 300
 _EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 _NS = "http://s3.amazonaws.com/doc/2006-03-01/"
 
@@ -84,7 +85,7 @@ class R2Cache:
         self.config = config
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5), follow_redirects=False)
         self._owns_client = client is None
-        self._hot: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()
+        self._hot: OrderedDict[str, tuple[float, float, dict[str, str]]] = OrderedDict()
         self._hot_limit = 1024
 
     async def close(self) -> None:
@@ -143,7 +144,7 @@ class R2Cache:
                           now or datetime.now(timezone.utc), presign=True)[0]
 
     def _remember(self, key: str, last_modified: float, meta: dict[str, str]) -> None:
-        self._hot[key] = (last_modified, meta)
+        self._hot[key] = (last_modified, time.time(), meta)
         self._hot.move_to_end(key)
         if len(self._hot) > self._hot_limit:
             self._hot.popitem(last=False)
@@ -163,8 +164,8 @@ class R2Cache:
     async def find(self, key: str) -> dict[str, str] | None:
         now = time.time()
         if key in self._hot:
-            modified, meta = self._hot[key]
-            if now - modified < TTL_SECONDS:
+            modified, verified, meta = self._hot[key]
+            if now - modified < TTL_SECONDS and now - verified < HOT_RECHECK_SECONDS:
                 self._hot.move_to_end(key)
                 return meta
             self._hot.pop(key, None)
