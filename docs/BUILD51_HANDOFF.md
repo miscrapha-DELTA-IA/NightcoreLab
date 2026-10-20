@@ -1,6 +1,7 @@
 # Gnarly build 51 — offline artwork and queue continuation
 
-Status: IN_PROGRESS. Continue this branch, not main:
+Status: COMPLETE. Verified build 51 is available; do not duplicate the work.
+Delivery details follow at the end. Implementation branch, not main:
 `fix/gnarly-build51-offline-artwork-queue-final`.
 Baseline: verified build 50, app d4b39824, checkpoint head 056136d.
 The real local HTDemucs integration, omnibox, branding and all other features
@@ -54,3 +55,31 @@ All consumers of the player's resolved local URL now use PlayerArtworkImage:
 main/blurred/vinyl artwork, the TrackIdentityPill thumbnail, and static/marquee
 cover backgrounds. Brand logo/lockup and assets remain intact. Share already
 supports local files. Validate the latest head, not intermediate canceled runs.
+
+## Verified delivery — 2026-10-20
+
+Tested application source: 24d8053dbc6b686d87b83fad7fb00f5b0412a145.
+All checks passed: iOS Build, Karaoke Clean, Share Card, numerical Core ML
+parity, complete iOS neural runtime, 14 Metal/Share regressions and the full
+661-test suite (zero failures, 1 pre-existing skip). All six new offline cover,
+legacy cache, restored queue and MPRemote next regression tests passed.
+
+CI: https://github.com/miscrapha-DELTA-IA/NightcoreLab/actions/runs/39505507168
+Artifact ZIP with unsigned IPA:
+https://github.com/miscrapha-DELTA-IA/NightcoreLab/actions/runs/39505507168/artifacts/12305005566
+PR: https://github.com/miscrapha-DELTA-IA/NightcoreLab/pull/115
+
+Downloaded and inspected the actual IPA:
+- /workspace/gnarly-build51-delivery/Gnarly-build51.ipa
+- SHA256 b46334d49b59aaa9d7fbfe7e26924cf198358de76e00b551e75e134b8f49b3fa
+- 111,079,536 bytes; archive CRC verified.
+- Gnarly / build 51 / com.nightcorelab.app / iPhoneOS arm64.
+- Model htdemucs-v4-core-fp32-v1 included (209,746,277 bytes), MIT notices
+  and passing parity evidence included. App iOS 17+, neural stems iOS 18+.
+
+Old downloads whose cover bytes were never saved require an online visit to
+fetch the image; existing SDWebImage cached covers are also migrated. The
+button remains unavailable when neither queue nor forward history has a
+candidate. No physical iPhone test was performed. No main merge/backend deploy
+or new continuation automation was performed. The final checkpoint-only commit
+does not change the tested app source.
