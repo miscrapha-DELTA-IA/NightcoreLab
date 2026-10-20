@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import CoreML
 import XCTest
 @testable import NightcoreLab
@@ -142,6 +143,43 @@ final class NeuralStemsRegressionTests: XCTestCase {
         gain.set(0); render(); XCTAssertEqual(left.last, 0); XCTAssertEqual(right.last, 0)
         left = [Float](repeating: 0.25, count: 2_000); right = left
         render(); XCTAssertTrue(left.allSatisfy { $0 == 0 })
+    }
+
+    func testLiveParameterEventsReachIndependentGain() throws {
+        let engine = AVAudioEngine(), player = AVAudioPlayerNode()
+        let gain = StemGainAudioUnit.makeNode(initialGain: 1)
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        [player, gain].forEach { engine.attach($0) }
+        engine.connect(player, to: gain, format: format)
+        engine.connect(gain, to: engine.mainMixerNode, format: format)
+        let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100)!
+        input.frameLength = input.frameCapacity
+        for channel in 0..<2 {
+            for i in 0..<Int(input.frameLength) {
+                input.floatChannelData![channel][i] = 0.1 * sin(2 * .pi * 220 * Float(i) / 44_100)
+            }
+        }
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
+        let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096)!
+        player.scheduleBuffer(input, at: nil, options: .loops)
+        try engine.start(); player.play()
+        defer { player.stop(); engine.stop() }
+        func settledPeak() throws -> Float {
+            var peak: Float = -1
+            for _ in 0..<5 {
+                if try engine.renderOffline(4096, to: output) == .success {
+                    peak = (0..<Int(output.frameLength)).reduce(Float(0)) {
+                        max($0, abs(output.floatChannelData![0][$1]))
+                    }
+                }
+            }
+            return peak
+        }
+        XCTAssertEqual(try settledPeak(), 0.1, accuracy: 0.0001)
+        gain.auAudioUnit.scheduleParameterBlock(AUEventSampleTimeImmediate, 0, 0, 0)
+        XCTAssertEqual(try settledPeak(), 0, accuracy: 0.000001)
+        gain.auAudioUnit.scheduleParameterBlock(AUEventSampleTimeImmediate, 0, 0, 0.5)
+        XCTAssertEqual(try settledPeak(), 0.05, accuracy: 0.0001)
     }
 
     func testDeliveryContainsVerifiedNeuralModel() throws {
