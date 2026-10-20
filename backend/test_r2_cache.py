@@ -167,7 +167,7 @@ def test_download_r2_redirect_and_local_fallback():
             assert head.headers["location"].endswith("/signed-head")
             result = client.get("/download?url=https://www.youtube.com/watch?v=abcdefghijk&delivery=url")
             assert result.status_code == 200
-            assert result.json()["expires_in"] == 3600
+            assert result.json()["expires_in"] == 900
 
     class FailedR2:
         async def find(self, _key):
