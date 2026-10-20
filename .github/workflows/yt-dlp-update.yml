@@ -65,15 +65,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          branch=chore/yt-dlp-weekly
+          branch=chore/yt-dlp-${{ steps.version.outputs.version }}
+          if gh pr view "$branch" >/dev/null 2>&1; then
+            echo "PR de $branch já existe"
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -B "$branch"
+          git checkout -b "$branch"
           git add backend/requirements.txt
           git commit -m "Atualizar yt-dlp para ${{ steps.version.outputs.version }} [skip ios]"
-          git push --force-with-lease origin "$branch"
-          if ! gh pr view "$branch" >/dev/null 2>&1; then
-            gh pr create --base main --head "$branch" \
-              --title "Atualizar yt-dlp para ${{ steps.version.outputs.version }}" \
-              --body "Bump semanal após pytest offline e smoke local M4A. Revisar antes de mesclar. [skip ios]"
-          fi
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "Atualizar yt-dlp para ${{ steps.version.outputs.version }}" \
+            --body "Bump semanal após pytest offline e smoke local M4A. Revisar antes de mesclar. [skip ios]"
