@@ -1,0 +1,35 @@
+{
+  "base_host": "nightcorelab.onrender.com",
+  "started_utc": "2026-10-20T03:44:04Z",
+  "measurement_scope": "HTTP client; optional process-only /proc sampling",
+  "health": {
+    "status": 200,
+    "ttfb_seconds": 1.625,
+    "total_seconds": 1.64,
+    "bytes_received": 450,
+    "r2_redirect_followed": false
+  },
+  "cases": {
+    "three_minute": {
+      "status": 200,
+      "ttfb_seconds": 22.75,
+      "total_seconds": 31.985,
+      "bytes_received": 2806503,
+      "r2_redirect_followed": false
+    },
+    "near_ten_minute_597s": {
+      "status": 200,
+      "ttfb_seconds": 22.047,
+      "total_seconds": 35.687,
+      "bytes_received": 9647865,
+      "r2_redirect_followed": false
+    },
+    "invalid_host": {
+      "status": 400,
+      "ttfb_seconds": 0.516,
+      "total_seconds": 0.516,
+      "bytes_received": 0
+    }
+  },
+  "process_sample": null
+}
