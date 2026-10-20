@@ -1,6 +1,8 @@
 # Gnarly: real neural stems — continuation checkpoint
 
-Status: IN_PROGRESS. User requires zero paid services; use genuine open-source
+Status: COMPLETE. Correct build 50 IPA generated and inspected; delivery and
+verification details are recorded at the end of this checkpoint. Do not redo.
+User requires zero paid services; use genuine open-source
 separation, never label the approximate InstantStemMasker as real isolation.
 Baseline: build 49, commit 1302a054e96de04fbf715e728d809459fe09c557.
 Working branch: feature/gnarly-build50-real-stems-final. Never restart from main.
@@ -152,3 +154,46 @@ Bundled MIT notices now describe the actual distributed components precisely.
 Next inspect the new CI run; resolve any remaining conversion/runtime failure
 without weakening meaningful tests. Do not deliver until the IPA exists and
 its identity, neural model and parity evidence have been inspected.
+
+## COMPLETE — verified build 50 delivery, 2026-10-20
+
+Tested application source commit: d4b39824b5023632a9b332493f80f005e885e4bb.
+Final checkpoint-only documentation commit does not alter the tested app.
+
+All checks PASSED:
+- Full model/DSP PyTorch parity, with unchanged strict per-source thresholds.
+- iOS runtime: actual bundled model performs complete separation, writes four
+  validated files and reuses the committed cache without loading a model.
+- Targeted neural suite: 12 tests (7 integration + 5 DSP), zero failures.
+- Existing targeted Metal/Share suite: 14 tests, zero failures.
+- Unfiltered full suite: 655 tests, 1 pre-existing skip, zero failures.
+- Separate iOS compile and Karaoke Clean checks; Release iPhoneOS build.
+
+Successful complete delivery workflow:
+https://github.com/miscrapha-DELTA-IA/NightcoreLab/actions/runs/39492886677
+Download artifact (ZIP containing unsigned IPA):
+https://github.com/miscrapha-DELTA-IA/NightcoreLab/actions/runs/39492886677/artifacts/12298750684
+PR: https://github.com/miscrapha-DELTA-IA/NightcoreLab/pull/114
+
+Downloaded and independently inspected the actual artifact:
+- Local IPA: /workspace/gnarly-build50-delivery/Gnarly-build50.ipa
+- SHA-256: 997c5c79a21e9e6b44d3785c43143cc2fd00b335f17d1da2d3442975302a343a
+- 111,050,014 bytes; ZIP CRC verified.
+- Gnarly / build 50 / com.nightcorelab.app / iPhoneOS / arm64.
+- App minimum iOS 17; neural separation requires iOS 18+.
+- Compiled model embedded (209,746,277 bytes), MIT notices and verified parity
+  evidence included; model identifier htdemucs-v4-core-fp32-v1.
+- Original build 49 icons, brand lockup, NowPlayingScreen and lyric settings
+  remain unchanged; only the neural preparation lifecycle is added to scene state.
+
+Use: Música → Stems → Separar música, keeping the app open. Four independent
+sources become available when preparation completes; all 100% uses the original.
+No server, paid API, account or separate computer is needed for stems. REA is
+not required. The music must already be available locally.
+
+No physical iPhone was available. Real-device time, thermals and memory remain
+to be evaluated by the user's test group. Neural separation quality depends
+on the recording; do not promise perfect isolation for every song. Model and
+four lossless cached tracks consume local storage. Distribution IPA is unsigned.
+No main merge or backend deployment was performed. Pause the scheduled
+continuation after final delivery to avoid duplicate work.
