@@ -1,0 +1,72 @@
+name: Neural Stems Model Parity
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: neural-model-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/cache@v4
+        id: converted
+        with:
+          path: .cache/gnarly-neural-model
+          key: neural-converted-v1-${{ hashFiles('scripts/neural-stems/model-manifest.json', 'scripts/neural-stems/convert_core.py', 'scripts/neural-stems/stemcommon.py', 'scripts/neural-stems/requirements.txt') }}
+      - name: Convert pinned MIT HTDemucs weights
+        if: steps.converted.outputs.cache-hit != 'true'
+        env:
+          TORCH_HOME: ${{ github.workspace }}/.cache/torch
+          HF_HOME: ${{ github.workspace }}/.cache/huggingface
+          OMP_NUM_THREADS: '2'
+          OPENBLAS_NUM_THREADS: '2'
+        run: |
+          pip install torch==2.12.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r scripts/neural-stems/requirements.txt
+          mkdir -p .cache/gnarly-neural-model
+          python scripts/neural-stems/convert_core.py --convert-only --output .cache/gnarly-neural-model/htdemucs_core.mlpackage
+      - name: Verify converted weights
+        run: python scripts/neural-stems/verify-model.py .cache/gnarly-neural-model
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Neural-Stems-Converted
+          path: .cache/gnarly-neural-model
+          include-hidden-files: true
+          retention-days: 7
+  parity:
+    needs: convert
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: Neural-Stems-Converted
+          path: .cache/gnarly-neural-model
+      - name: Verify original PyTorch against Swift DSP and Core ML
+        run: bash scripts/neural-stems/prepare-model.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Neural-Stems-Diagnostics
+          path: .cache/gnarly-neural-model/neural-parity.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gnarly-Neural-Model
+          path: |
+            NightcoreLab/Resources/NeuralStems/htdemucs_core.mlmodelc
+            NightcoreLab/Resources/NeuralStems/neural-parity.json
+            NightcoreLab/Resources/NeuralStems/model-manifest.json
+          retention-days: 7

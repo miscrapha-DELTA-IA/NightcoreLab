@@ -38,3 +38,10 @@ __pycache__/
 .venv-demucs/
 .venv-demucs-*/
 venv/
+
+# Generated neural model resources are verified by the pinned-source CI pipeline.
+.cache/
+.build/
+NightcoreLab/Resources/NeuralStems/*.mlmodelc/
+NightcoreLab/Resources/NeuralStems/neural-parity.json
+NightcoreLab/Resources/NeuralStems/model-manifest.json

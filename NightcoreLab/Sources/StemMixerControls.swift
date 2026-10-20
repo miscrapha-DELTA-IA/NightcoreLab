@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Four instant, phase-preserving masking controls in Música.
+/// Controls the actual cached neural sources, never a proxy on the original mix.
 struct StemMixerControls: View {
     let audio: AudioEngineManager
 
@@ -13,8 +13,60 @@ struct StemMixerControls: View {
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("stem.reset")
             }
-            Text("Ajuste instantâneo ao vivo · sem preparar a música")
-                .font(.caption2).foregroundStyle(.secondary)
+            Text("Separação real por IA · no iPhone")
+                .font(.caption.weight(.semibold))
+            if audio.isPreparingStems {
+                ProgressView(value: audio.stemPreparationProgress) {
+                    Text(audio.stemPreparationMessage).font(.caption)
+                }
+                .accessibilityIdentifier("stem.preparationProgress")
+                HStack {
+                    Text("\(Int(audio.stemPreparationProgress * 100))%")
+                        .font(.caption.monospacedDigit())
+                    Spacer()
+                    Button("Cancelar") { audio.cancelStemPreparation(message: "Separação cancelada.") }
+                        .font(.caption.weight(.semibold))
+                }
+                Text("Mantenha o app aberto. O tempo varia conforme a música e o iPhone.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else if audio.stemsAvailable {
+                Label("Demucs · stems salvos neste iPhone", systemImage: "checkmark.circle.fill")
+                    .font(.caption2).foregroundStyle(.green)
+                HStack(spacing: 12) {
+                    Button("Sem voz") { audio.applyStemPreset(.karaoke) }
+                    Button("Só voz") { audio.applyStemPreset(.acapella) }
+                    Button("Ritmo") { audio.applyStemPreset(.rhythm) }
+                }
+                .font(.caption.weight(.semibold))
+            } else {
+                Button {
+                    audio.prepareNeuralStems()
+                } label: {
+                    Label("Separar música", systemImage: "waveform.path")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!audio.hasStemSource || !audio.hasNeuralStemModel || audio.isExporting)
+                .accessibilityIdentifier("stem.prepareNeural")
+                if !audio.hasStemSource {
+                    Text("Escolha uma música para separar voz, bateria, baixo e outros instrumentos.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else if !audio.hasNeuralStemModel {
+                    Text("A separação neural requer iOS 18 ou superior e a versão do app com o modelo incluído.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("A música fica no aparelho. A separação funciona sem conta e sem internet.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if !audio.stemPreparationMessage.isEmpty {
+                    Text(audio.stemPreparationMessage).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if let error = audio.stemPreparationError {
+                Text(error).font(.caption).foregroundStyle(.orange)
+                    .accessibilityIdentifier("stem.preparationError")
+            }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -25,13 +77,12 @@ struct StemMixerControls: View {
                     }
                     Slider(value: Binding(
                         get: { Double(audio.stemLevels[kind] ?? 1) },
-                        set: { audio.setStemLevel(kind, level: Float($0)) }),
-                        in: 0...2)
+                        set: { audio.setStemLevel(kind, level: Float($0)) }), in: 0...2)
+                        .disabled(!audio.stemsAvailable)
                         .accessibilityIdentifier("stem.level.\(kind.rawValue)")
                 }
+                .opacity(audio.stemsAvailable ? 1 : 0.45)
             }
-            Text("Máscaras locais aproximadas. Algumas frequências e instrumentos podem se sobrepor.")
-                .font(.caption2).foregroundStyle(.secondary)
         }
         .accessibilityIdentifier("music.stemMixer")
     }

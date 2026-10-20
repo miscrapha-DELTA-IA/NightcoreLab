@@ -85,16 +85,17 @@ final class Stage41ExperienceTests: XCTestCase {
         XCTAssertEqual(Set(StemKind.allCases), Set([.vocal, .drums, .bass, .instrumental]))
     }
 
-    func testStage43InstantStemControlsReplaceDevUploadAndPreparation() throws {
+    func testNeuralStemControlsUseLocalPreparationAndIndependentGains() throws {
         let mixer = try String(contentsOf: sourceRoot
             .appendingPathComponent("StemMixerControls.swift"))
         let audio = try String(contentsOf: sourceRoot
             .appendingPathComponent("AudioEngineManager.swift"))
         XCTAssertTrue(mixer.contains("stem.reset"))
         XCTAssertTrue(mixer.contains("in: 0...2"))
-        XCTAssertFalse(mixer.contains("Preparar stems"))
-        XCTAssertFalse(mixer.contains("Demucs"))
+        XCTAssertTrue(mixer.contains("stem.prepareNeural"))
+        XCTAssertTrue(audio.contains("NeuralStemWorker.prepare"))
         XCTAssertTrue(audio.contains("stemMaskNode.auAudioUnit.scheduleParameterBlock"))
+        XCTAssertFalse(audio.contains("InstantStemAudioUnit.makeNode"))
         XCTAssertFalse(audio.contains("StemSplitterEngine.prepare"))
     }
 

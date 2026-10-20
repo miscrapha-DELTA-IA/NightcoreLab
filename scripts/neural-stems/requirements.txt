@@ -1,0 +1,5 @@
+torch==2.12.0
+demucs==4.1.0
+coremltools==9.0
+einops==0.8.2
+numpy==2.4.6
