@@ -268,6 +268,16 @@ async def _start_r2_lifecycle() -> None:
             handler.setFormatter(_JsonLogFormatter())
     _sweep_stale_work_dirs()
     await asyncio.to_thread(_prune_audio_cache)
+    if r2_cache is None:
+        # Diagnostic logs only variable *names*, never tokens, values or lengths.
+        groups = {
+            "access": ("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID", "ACCESS_KEY_ID"),
+            "secret": ("R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY", "SECRET_ACCESS_KEY"),
+            "endpoint": ("R2_ENDPOINT_URL", "R2_ACCOUNT_ID", "S3_ENDPOINT_URL", "AWS_ENDPOINT_URL"),
+        }
+        presence = {category: [name for name in names if os.getenv(name, "").strip()]
+                    for category, names in groups.items()}
+        log.warning("R2 desativado; nomes de variáveis efetivamente presentes (sem valores): %s", presence)
     if r2_cache:
         async def configure() -> None:
             try:
