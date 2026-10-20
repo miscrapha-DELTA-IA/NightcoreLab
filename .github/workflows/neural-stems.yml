@@ -64,6 +64,12 @@ jobs:
       - name: Verify original PyTorch against Swift DSP and Core ML
         run: bash scripts/neural-stems/prepare-model.sh
       - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Neural-Stems-Diagnostics
+          path: .cache/gnarly-neural-model/neural-parity.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
         with:
           name: Gnarly-Neural-Model
           path: |

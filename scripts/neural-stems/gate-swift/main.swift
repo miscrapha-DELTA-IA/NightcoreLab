@@ -17,6 +17,7 @@ let actual = try model.separate(input)
 guard actual.count == reference.count else { fatalError("Different tensor sizes") }
 let size = 2 * StemDSP.segmentSamples
 var report: [[String: Any]] = []
+var passed = true
 for source in 0..<4 {
     var sumX = 0.0, sumY = 0.0, xx = 0.0, yy = 0.0, xy = 0.0, error = 0.0
     for i in 0..<size {
@@ -27,13 +28,16 @@ for source in 0..<4 {
     let n = Double(size)
     let correlation = (xy-sumX*sumY/n) / sqrt(max(1e-30,(xx-sumX*sumX/n)*(yy-sumY*sumY/n)))
     let normalizedError = sqrt(error / max(xx, 1e-30))
-    print("\(DemucsCoreMLModel.sources[source]): corr=\(correlation), NRMSE=\(normalizedError)")
-    guard correlation > 0.98, normalizedError < 0.05 else {
-        fatalError("Core ML + Swift DSP differs from stock PyTorch; do not ship")
-    }
+    let line = "\(DemucsCoreMLModel.sources[source]): corr=\(correlation), NRMSE=\(normalizedError), rms=\(sqrt(xx/n))\n"
+    try FileHandle.standardError.write(contentsOf: Data(line.utf8))
+    if correlation <= 0.98 || normalizedError >= 0.05 { passed = false }
     report.append(["source":DemucsCoreMLModel.sources[source], "correlation":correlation, "nrmse":normalizedError])
 }
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
-    "passed":true, "seconds":Date().timeIntervalSince(started), "sources":report], options: [.prettyPrinted,.sortedKeys])
+    "passed":passed, "seconds":Date().timeIntervalSince(started), "sources":report], options: [.prettyPrinted,.sortedKeys])
 try data.write(to: root.appendingPathComponent("neural-parity.json"))
+guard passed else {
+    try FileHandle.standardError.write(contentsOf: Data("NEURAL PARITY GATE FAILED; do not ship\n".utf8))
+    exit(1)
+}
 print("NEURAL PARITY GATE PASSED")
