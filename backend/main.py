@@ -231,7 +231,7 @@ async def _limit_heavy_requests(request: Request, call_next):
                 return JSONResponse({"detail": error.detail}, status_code=error.status_code)
             failure = _access_control.check_ticket(ticket, client_ip, video_id)
         else:
-            token = request.headers.get("X-Gnarly-Token") or request.query_params.get("access_token")
+            token = request.headers.get("X-Gnarly-Token")
             failure = _access_control.check(token, client_ip)
         if failure:
             status, message, retry = failure
