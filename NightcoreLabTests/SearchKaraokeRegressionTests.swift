@@ -19,12 +19,12 @@ final class SearchKaraokeRegressionTests: XCTestCase {
         XCTAssertEqual(SearchSession(defaults: defaults).query, "")
     }
 
-    func testStoppedMicrophoneResultSurvivesClosingKaraokeUntilTrackChanges() throws {
+    func testResultSurvivesClosingKaraokeAndAutomaticTrackAdvance() throws {
         let session = KaraokeScoringSession()
         let lines = [TimedLyricLine(id: 0, start: 0, end: 2,
             words: [WordSync(id: 0, text: "Sing", start: 0, end: 2, spaceAfter: false)], precision: .word)]
         session.present(true)
-        session.start(mode: .simulation, lines: lines, at: 0)
+        session.start(mode: .simulation, lines: lines, at: 0, trackTitle: "First song")
         for step in 1...20 { session.advance(time: Double(step) / 20, playing: true, lines: lines) }
         session.stop()
         let result = try XCTUnwrap(session.lastResult)
@@ -37,7 +37,11 @@ final class SearchKaraokeRegressionTests: XCTestCase {
         XCTAssertEqual(session.lastResult?.id, result.id)
         XCTAssertEqual(session.lastResult?.snapshot, result.snapshot)
         session.resetForTrack()
-        XCTAssertNil(session.lastResult)
+        XCTAssertEqual(session.lastResult?.trackTitle, "First song")
+        XCTAssertEqual(session.lastResult?.snapshot, result.snapshot)
+        session.start(mode: .simulation, lines: lines, at: 0, trackTitle: "Next song")
+        session.finish()
+        XCTAssertEqual(session.lastResult?.trackTitle, "Next song")
     }
 
     func testLateLyricsCannotReplaceCurrentTrackAndNewTrackClearsImmediately() async throws {

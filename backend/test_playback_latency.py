@@ -37,6 +37,34 @@ def test_slow_remote_cache_has_a_bounded_lookup():
     asyncio.run(scenario())
 
 
+def test_audio_completed_during_remote_lookup_is_reused():
+    async def scenario():
+        tasks = BackgroundTasks()
+        hit = Path("cached.m4a"), "Song", None, ""
+        with patch.object(main, "_pin_cached_audio", side_effect=[None, hit]), \
+             patch.object(main, "_try_r2", AsyncMock(return_value=None)), \
+             patch.object(main, "_shared_extraction", AsyncMock()) as extract, \
+             patch.object(main, "_schedule_r2_upload"), \
+             patch.object(main, "_release_cached_reader"):
+            response = await main.download(main.DownloadRequest(url=URL), tasks)
+            assert response.path == Path("cached.m4a")
+            extract.assert_not_awaited()
+            await tasks()
+    asyncio.run(scenario())
+
+
+def test_resident_replays_do_not_reupload_an_existing_r2_object():
+    async def scenario():
+        remote = type("Remote", (), {"find": AsyncMock(return_value={"title": "Song"}),
+                                     "put": AsyncMock()})()
+        with patch.object(main, "r2_cache", remote), \
+             patch.object(main, "_release_cached_reader"), \
+             patch.object(main, "_prune_audio_cache"):
+            await main._upload_r2("abcdefghijk", Path("cached.m4a"), "Song", None)
+            remote.put.assert_not_awaited()
+    asyncio.run(scenario())
+
+
 def test_concurrent_remote_misses_share_one_extraction():
     async def scenario():
         remote_arrivals = 0

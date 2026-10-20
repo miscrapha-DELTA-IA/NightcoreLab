@@ -208,8 +208,8 @@ in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
 _search_slots = threading.BoundedSemaphore(1)
 _alignment_slots = threading.BoundedSemaphore(1)
-RELATED_LIMIT = 10
-RELATED_SCAN_LIMIT = 20
+RELATED_LIMIT = 30
+RELATED_SCAN_LIMIT = 60
 
 from backend_search import router as music_search_router
 
@@ -751,6 +751,12 @@ async def _upload_r2(video_id: str, path: Path, title: str, thumbnail: str | Non
     try:
         async with _r2_upload_slots:
             assert r2_cache is not None
+            # Resident-cache playback can schedule this repeatedly. Do not send
+            # the same audio back to R2 on every listen or renew its TTL forever.
+            existing = await asyncio.wait_for(r2_cache.find(f"{video_id}/audio.m4a"),
+                                              timeout=R2_LOOKUP_TIMEOUT_SECONDS)
+            if existing is not None:
+                return
             await r2_cache.put(f"{video_id}/audio.m4a", path, title, thumbnail)
             _counters["r2_uploads_ok"] += 1
     except Exception as error:
@@ -800,6 +806,18 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
         # The lookup awaited network IO; another request may have started this
         # video's extraction meanwhile. Join it instead of overwriting its task.
         entry = in_flight_downloads.get(video_id)
+        if entry is None and delivery == "audio":
+            # That extraction may already have finished and released its entry.
+            hit = await asyncio.to_thread(_pin_cached_audio, video_id)
+            entry = in_flight_downloads.get(video_id)
+            if hit is not None:
+                if entry is None:
+                    audio_path, title, thumbnail, _ = hit
+                    _counters["cache_local_hits"] += 1
+                    background_tasks.add_task(_release_cached_reader, video_id)
+                    _schedule_r2_upload(video_id, audio_path, title, thumbnail)
+                    return _audio_response(audio_path, title, thumbnail, background_tasks)
+                _release_cached_reader(video_id)
     if entry is None:
         if not audio_sources.can_recover(video_id):
             _check_youtube_cooldown()

@@ -105,6 +105,7 @@ struct SearchView: View {
             // Reveal results for this session without changing either preference.
             searchExpansionOverride = nil
             session.submittedQuery = value
+            session.omnibox.queryChanged(value)
             session.searchRequestID = UUID()
         }
     }

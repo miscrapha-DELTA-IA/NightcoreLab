@@ -10,6 +10,7 @@ final class KaraokeScoringSession {
         let id = UUID()
         let snapshot: KaraokeScoreSnapshot
         let simulation: Bool
+        let trackTitle: String?
     }
     private(set) var mode: Mode = .off
     private(set) var snapshot = KaraokeScoreSnapshot()
@@ -26,6 +27,7 @@ final class KaraokeScoringSession {
     @ObservationIgnored private var syntheticFrame: KaraokeVoiceFrame?
     @ObservationIgnored private var referenceKey: KeyAnalysisResult?
     @ObservationIgnored private var referenceMelody: MelodicFeatures?
+    @ObservationIgnored private var trackTitle: String?
 
     func present(_ presented: Bool) {
         isPresented = presented
@@ -38,9 +40,10 @@ final class KaraokeScoringSession {
         if mode == .off { engine.key = key; engine.melody = melody }
     }
 
-    func start(mode: Mode, lines: [TimedLyricLine], at time: Double) {
+    func start(mode: Mode, lines: [TimedLyricLine], at time: Double, trackTitle: String? = nil) {
         guard isPresented, mode != .off else { return }
         self.mode = mode
+        self.trackTitle = trackTitle
         message = nil
         engine = KaraokeScoringEngine()
         engine.key = referenceKey; engine.melody = referenceMelody
@@ -57,7 +60,9 @@ final class KaraokeScoringSession {
     }
 
     func resetForTrack() {
-        stop(); lastResult = nil; referenceKey = nil; referenceMelody = nil
+        // Auto-advance may replace the song immediately after finish. Keep the
+        // immutable result, including its title, available from the next song.
+        stop(); referenceKey = nil; referenceMelody = nil
     }
 
     /// Safe hardware-free injection; real microphone runs cannot accept it.
@@ -98,7 +103,7 @@ final class KaraokeScoringSession {
     func finish() {
         guard mode != .off else { return }
         engine.finish(); snapshot = engine.snapshot
-        lastResult = Result(snapshot: snapshot, simulation: mode == .simulation)
+        lastResult = Result(snapshot: snapshot, simulation: mode == .simulation, trackTitle: trackTitle)
         microphoneFrame = nil
     }
 }

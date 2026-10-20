@@ -21,10 +21,11 @@ struct RecContext {
 enum RecommendationRanker {
     enum Policy {
         static let batchSize = 10
-        static let recentTrackCount = 10
+        static let recentTrackCount = 30
         static let maxArtistRun = 2
+        static let maxArtistPerBatch = 3
         static let skipDecayDays = 21.0
-        static let maxFamiliarShare = 0.7
+        static let maxFamiliarShare = 0.3
         static let eventsForFullShare = 30.0
         static let fastSpeed: Float = 1.1
         static let slowSpeed: Float = 0.9
@@ -42,6 +43,14 @@ enum RecommendationRanker {
 
     static func familiarShare(eventCount: Int) -> Double {
         Policy.maxFamiliarShare * min(1, Double(max(0, eventCount)) / Policy.eventsForFullShare)
+    }
+
+    /// Different uploads of the same recording must not bypass recent history.
+    static func recordingKey(_ track: Track) -> String {
+        let features = TrackFeatures(track: track)
+        guard features.artistIsReliable, let artist = features.primaryArtist else { return "id:" + track.id }
+        let cleaned = MetadataCleaner.clean(rawTitle: track.cleanTitle ?? track.title, channel: nil)
+        return artist + "|" + MetadataCleaner.key(cleaned.title)
     }
 
     static func skipPenalty(_ entry: HistoryEntry, now: Date) -> Double {
@@ -103,7 +112,7 @@ enum RecommendationRanker {
                           precedingArtists: [String?] = []) -> [Track] {
         guard limit > 0, maxRun > 0 else { return [] }
         var seen = Set<String>()
-        let unique = ranked.filter { seen.insert($0.track.id).inserted }
+        let unique = ranked.filter { seen.insert(recordingKey($0.track)).inserted }
         var familiar = unique.filter(\.isFamiliar)
         var mix = unique.filter { !$0.isFamiliar }
         let count = min(limit, unique.count)
@@ -115,6 +124,7 @@ enum RecommendationRanker {
         var output: [Track] = []
         func allowed(_ candidate: RecCandidate) -> Bool {
             guard let artist = candidate.features.primaryArtist else { return true }
+            guard artists.filter({ $0 == artist }).count < Policy.maxArtistPerBatch else { return false }
             let tail = artists.suffix(maxRun)
             return tail.count < maxRun || !tail.allSatisfy { $0 == artist }
         }
@@ -149,31 +159,40 @@ enum RecommendationRanker {
 
     static func recommendations(mix: [Track], history: [String: HistoryEntry],
                                 currentID: String, queued: [Track], context: RecContext,
-                                discovery: DiscoverySnapshot = .empty) -> [Track] {
+                                discovery: DiscoverySnapshot = .empty,
+                                recentlySuggested: Set<String> = []) -> [Track] {
         // Never substitute a history-only radio when /related fails or is empty.
         guard !mix.isEmpty else { return [] }
         var excluded = Set(queued.map(\.id))
         excluded.insert(currentID)
+        let recentEntries = history.values.sorted {
+            if $0.lastPlayed != $1.lastPlayed { return $0.lastPlayed > $1.lastPlayed }
+            return $0.hit.id < $1.hit.id
+        }.prefix(Policy.recentTrackCount)
+        excluded.formUnion(recentEntries.map { $0.hit.id })
+        var excludedRecordings = Set((queued + recentEntries.map { $0.hit.asTrack }).map(recordingKey))
+        if let current = mix.first(where: { $0.id == currentID }) {
+            excludedRecordings.insert(recordingKey(current))
+        }
         let freshMix = mix.enumerated().compactMap { index, track -> RecCandidate? in
-            guard excluded.insert(track.id).inserted else { return nil }
+            guard excluded.insert(track.id).inserted,
+                  excludedRecordings.insert(recordingKey(track)).inserted else { return nil }
             return RecCandidate(track: track, mixIndex: index)
         }
         let profile = UserTasteProfile(history: history)
-        // Cold-start precedence: preserve the exact existing Mix/queue order.
-        guard profile.eventCount > 0 else { return freshMix.map(\.track) }
-        let recent = Set(history.values.sorted {
-            if $0.lastPlayed != $1.lastPlayed { return $0.lastPlayed > $1.lastPlayed }
-            return $0.hit.id < $1.hit.id
-        }.prefix(Policy.recentTrackCount).map { $0.hit.id })
         let familiar = history.values.sorted { $0.hit.id < $1.hit.id }.compactMap { entry -> RecCandidate? in
-            guard !excluded.contains(entry.hit.id), !recent.contains(entry.hit.id) else { return nil }
+            guard !excluded.contains(entry.hit.id),
+                  !excludedRecordings.contains(recordingKey(entry.hit.asTrack)) else { return nil }
             if let skipped = entry.lastSkippedAt, (entry.earlySkips ?? 0) > 0,
                context.now.timeIntervalSince(skipped) < Policy.skipDecayDays * 86_400 { return nil }
             return RecCandidate(track: entry.hit.asTrack, mixIndex: nil)
         }
-        let ranked = rank(freshMix + familiar, profile: profile, context: context,
-                          discovery: discovery)
-        return diversify(ranked, familiarShare: familiarShare(eventCount: profile.eventCount),
+        let ranked = profile.eventCount == 0 ? freshMix :
+            rank(freshMix + familiar, profile: profile, context: context, discovery: discovery)
+        // Rotate exposure on refresh without randomizing away musical relevance.
+        let rotated = ranked.filter { !recentlySuggested.contains($0.track.id) }
+            + ranked.filter { recentlySuggested.contains($0.track.id) }
+        return diversify(rotated, familiarShare: familiarShare(eventCount: profile.eventCount),
                          precedingArtists: queued.suffix(Policy.maxArtistRun).map { TrackFeatures(track: $0).primaryArtist })
     }
 }

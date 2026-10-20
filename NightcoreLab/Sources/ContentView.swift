@@ -108,6 +108,7 @@ struct ContentView: View {
     @State private var remoteRelay = RemotePlaybackRelay()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
+    @State private var recentlySuggestedIDs: [String] = []
     @State private var suggestionReasons: [String: String] = [:]
     @State private var discoveryEvents: [DiscoveryEvent] = []
     @State private var acousticVectors: [String: DiscoveryFeatureVector] = [:]
@@ -813,6 +814,17 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(audio.isExporting)
+                    .contextMenu {
+                        Button("Baixar sem tocar", systemImage: "arrow.down.circle") {
+                            downloader.downloadForOffline(track)
+                        }
+                        .disabled(status != .none || audio.isExporting)
+                        if status == .downloading {
+                            Button("Cancelar download", systemImage: "xmark.circle", role: .destructive) {
+                                downloader.cancelDownload(track)
+                            }
+                        }
+                    }
                 }
             }
             }
@@ -1314,8 +1326,9 @@ struct ContentView: View {
         let ranked = RecommendationRanker.recommendations(
             mix: videos, history: playHistory.entries, currentID: playingTrackID,
             queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now),
-            discovery: discoverySnapshot)
+            discovery: discoverySnapshot, recentlySuggested: Set(recentlySuggestedIDs))
         relatedVideos = ranked
+        recentlySuggestedIDs = Array((recentlySuggestedIDs + ranked.map(\.id)).suffix(60))
         let snapshot = discoverySnapshot
         suggestionReasons = Dictionary(uniqueKeysWithValues: ranked.compactMap { track in
             RecommendationRanker.whyAppeared(track, history: playHistory.entries,
@@ -1365,7 +1378,7 @@ struct ContentView: View {
             playbackTransition.clearQueue(playbackQueue)
             navigationHistory.clear()
             playbackTransition.reset()
-            downloader.cancel()
+            downloader.cancelPlaybackSelection()
             resetRelatedVideos()
             applyPitch()
         } catch {

@@ -197,7 +197,8 @@ struct LyricsView: View {
                 if inline {
                     HStack {
                         KaraokeScoringControls(store: lyricStore, audio: audio,
-                                               clock: audio.lyricsClock, accent: lyricAccent)
+                                               clock: audio.lyricsClock, accent: lyricAccent,
+                                               trackTitle: track.title)
                         Spacer(minLength: 0)
                         Button {
                             showLyricsControlCenter = true

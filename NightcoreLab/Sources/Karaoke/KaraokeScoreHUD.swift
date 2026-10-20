@@ -81,6 +81,7 @@ struct KaraokeScoringControls: View {
     let audio: AudioEngineManager
     let clock: PlaybackClock
     let accent: Color
+    let trackTitle: String
     @State private var request: Task<Void, Never>?
     @State private var requesting = false
     @State private var showsError = false
@@ -114,7 +115,8 @@ struct KaraokeScoringControls: View {
                 Button("Experimentar simulação", systemImage: "play.rectangle") {
                     stopMicrophone()
                     store.scoring.start(mode: .simulation, lines: store.lines,
-                                        at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
+                                        at: clock.lyricTime + store.sourceTimelineOffset(for: clock),
+                                        trackTitle: trackTitle)
                     audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
                 }
                 .disabled(store.status != .ready)
@@ -132,7 +134,10 @@ struct KaraokeScoringControls: View {
         }
         .sheet(item: $result) { saved in
             NavigationStack {
-                KaraokeScoreSummary(snapshot: saved.snapshot, simulation: saved.simulation)
+                VStack(spacing: 12) {
+                    if let title = saved.trackTitle { Text(title).font(.headline).multilineTextAlignment(.center) }
+                    KaraokeScoreSummary(snapshot: saved.snapshot, simulation: saved.simulation)
+                }
                     .padding(24)
                     .navigationTitle(saved.simulation ? "Resultado · simulação" : "Resultado do canto")
                     .navigationBarTitleDisplayMode(.inline)
@@ -184,7 +189,8 @@ struct KaraokeScoringControls: View {
             }
             guard allowed else { showsError = true; return }
             store.scoring.start(mode: .microphone, lines: store.lines,
-                                at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
+                                at: clock.lyricTime + store.sourceTimelineOffset(for: clock),
+                                trackTitle: trackTitle)
             store.scoring.microphoneFrame = { [weak audio] _ in audio?.karaokeVoiceFrame() ?? .silence }
             audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
         }

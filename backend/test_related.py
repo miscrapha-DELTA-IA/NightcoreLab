@@ -75,10 +75,10 @@ class RelatedTests(unittest.TestCase):
 
     def test_caps_results_and_lazy_iteration(self):
         def entries():
-            for i in range(10):
+            for i in range(main.RELATED_LIMIT):
                 yield {"id": f"{i:011d}", "title": str(i)}
             raise AssertionError("Must not exhaust an infinite Mix")
-        self.assertEqual(len(main._related_entries({"entries": entries()}, SEED)), 10)
+        self.assertEqual(len(main._related_entries({"entries": entries()}, SEED)), main.RELATED_LIMIT)
 
     def test_caps_scan_when_entries_unusable(self):
         def entries():
