@@ -470,206 +470,217 @@ struct SearchView: View {
         }
     }
 
+    private func resultCard(_ result: Track) -> some View {
+        let track = downloader.cachedTrack(result)
+        let status = downloader.status(for: result)
+        return VStack(alignment: .leading, spacing: 5) {
+        Button {
+            isFocused = false
+            // History counts only after the audio engine confirms playback.
+            onSelect(track, [])
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                WebImage(url: track.thumbnailURL)
+                    .resizable()
+                    .transition(.fade(duration: 0.2))
+                    .scaledToFill()
+                    .frame(width: 152, height: 100)
+                    .background(GnarlyArtworkPlaceholder())
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text(track.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(height: 34, alignment: .topLeading)
+                HStack(spacing: 5) {
+                    if pendingTrackID == track.id {
+                        ProgressView().tint(theme.accent)
+                    } else {
+                        TrackStatusIndicator(status: status, accent: theme.accent)
+                    }
+                    Text(pendingTrackID == track.id ? "Preparando…" : status.shortDescription)
+                        .font(.caption2)
+                        .foregroundStyle(status == .downloaded
+                            ? Color.green.opacity(0.85) : theme.accent)
+                }
+                if !isSearchMode,
+                   let reason = suggestionReasons[track.id] {
+                    Text("Por que apareceu: " + reason)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .accessibilityLabel("Por que apareceu: " + reason)
+                }
+            }
+            .frame(width: 152)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        HStack(spacing: 8) {
+            Button("💿") { focusAlbumArtist(track) }
+                .accessibilityLabel("Álbum e artista de \(track.title)")
+                .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
+            offlineControl(track)
+        }
+        }
+        .frame(width: 152)
+    }
+
+    private var searchHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button(action: onServerSettings) {
+                    Image(systemName: "server.rack").foregroundStyle(theme.accent)
+                }
+                .accessibilityLabel("Configurar servidor")
+                Image(systemName: looksLikeLink ? "arrow.down.circle" : "magnifyingglass")
+                    .foregroundStyle(theme.accent)
+                TextField("Buscar música ou colar link", text: $session.query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .focused($isFocused)
+                    .onSubmit { handleInput(session.query) }
+                    .disabled(!isEnabled)
+                if session.isSearching || session.omnibox.isSearching || downloader.isDownloading {
+                    ProgressView().tint(theme.accent)
+                }
+                if !session.query.isEmpty {
+                    Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
+                        .accessibilityLabel("Limpar busca")
+                }
+            }
+            .padding(14)
+            .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
+            .hideablePanel(.omnibox, edge: .top)
+
+            if let pendingTrackID {
+                HStack(spacing: 9) {
+                    ProgressView().tint(theme.accent)
+                    Text(downloader.isDownloading ? "Preparando música…" : "Iniciando reprodução…")
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 0)
+                    if downloader.isDownloading {
+                        Text("\(Int(downloader.downloadProgress * 100))%")
+                            .monospacedDigit().font(.caption2)
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(theme.accent.opacity(0.14), in: Capsule())
+                .accessibilityIdentifier("searchDrawer.loading.\(pendingTrackID)")
+                if downloader.isDownloading {
+                    ProgressView(value: downloader.downloadProgress)
+                        .tint(theme.accent)
+                }
+            } else if session.isSearching || session.omnibox.isSearching {
+                Label("Buscando músicas…", systemImage: "magnifyingglass")
+                    .font(.caption).foregroundStyle(theme.accent)
+                    .accessibilityIdentifier("searchDrawer.searching")
+            }
+
+            if showsQuickAccess || hubTab == .albumArtist {
+                quickHub
+            }
+
+            if typedText != nil && session.omnibox.isShowingStaleCache {
+                Text("Resultados salvos · tentando atualizar")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Resultados em cache; atualização em andamento ou indisponível")
+            } else if typedText != nil && session.omnibox.lastRequestFailed &&
+                        session.omnibox.loadState == .partial {
+                Text("Resultados parciais · um serviço está indisponível")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if typedText != nil && !session.omnibox.suggestions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(session.omnibox.suggestions.prefix(5), id: \.self) { item in
+                            Button {
+                                session.query = item
+                                handleInput(item)
+                            } label: {
+                                Text(item)
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+
+    private var discoveryPanel: some View {
+        CollapsibleGlassSection(
+            title: "DESCOBRIR",
+            icon: "sparkles",
+            isExpanded: discoverExpansion,
+            tint: theme.accent,
+            integrated: integrated
+        ) {
+        VStack(alignment: .leading, spacing: 12) {
+            if isSearchMode {
+                Button("Sugestões") { showSuggestions() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.accent)
+                    .accessibilityLabel("Voltar às sugestões")
+            } else if canRefreshSuggestions {
+                Button(action: onRefreshSuggestions) {
+                    Label("Iniciar Rádio", systemImage: "dot.radiowaves.left.and.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(theme.accent)
+                }
+                .accessibilityLabel("Iniciar Rádio e acrescentar recomendações à fila")
+            }
+            if let errorMessage = session.errorMessage, isSearchMode {
+                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+            } else if isSearchMode && (session.hasSearched || session.omnibox.hasSearched) &&
+                      displayedTracks.isEmpty && !session.isSearching && !session.omnibox.isSearching {
+                Text("Nenhuma música encontrada. Experimente outro termo.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
+                Text("Escolha uma música para descobrir faixas relacionadas.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if (isSearchMode && (session.isSearching || session.omnibox.isSearching)) ||
+               (!isSearchMode && isLoadingSuggestions) {
+                ProgressView(isSearchMode ? "Procurando músicas…" : "Carregando sugestões…")
+                    .tint(theme.accent)
+            }
+            if !displayedTracks.isEmpty {
+                Text(isSearchMode ? "Resultados da pesquisa · tocar agora" :
+                     "Sugestões relacionadas · tocar agora")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(displayedTracks) { result in
+                            resultCard(result)
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
+        }
+
+        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
+
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Button(action: onServerSettings) {
-                        Image(systemName: "server.rack").foregroundStyle(theme.accent)
-                    }
-                    .accessibilityLabel("Configurar servidor")
-                    Image(systemName: looksLikeLink ? "arrow.down.circle" : "magnifyingglass")
-                        .foregroundStyle(theme.accent)
-                    TextField("Buscar música ou colar link", text: $session.query)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.search)
-                        .focused($isFocused)
-                        .onSubmit { handleInput(session.query) }
-                        .disabled(!isEnabled)
-                    if session.isSearching || session.omnibox.isSearching || downloader.isDownloading {
-                        ProgressView().tint(theme.accent)
-                    }
-                    if !session.query.isEmpty {
-                        Button { showSuggestions() } label: { Image(systemName: "xmark.circle.fill") }
-                            .accessibilityLabel("Limpar busca")
-                    }
-                }
-                .padding(14)
-                .glassSurface(RoundedRectangle(cornerRadius: 16), theme: theme, depth: 0.6)
-                .hideablePanel(.omnibox, edge: .top)
+            searchHeader
 
-                if let pendingTrackID {
-                    HStack(spacing: 9) {
-                        ProgressView().tint(theme.accent)
-                        Text(downloader.isDownloading ? "Preparando música…" : "Iniciando reprodução…")
-                            .font(.caption.weight(.semibold))
-                        Spacer(minLength: 0)
-                        if downloader.isDownloading {
-                            Text("\(Int(downloader.downloadProgress * 100))%")
-                                .monospacedDigit().font(.caption2)
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 9)
-                    .background(theme.accent.opacity(0.14), in: Capsule())
-                    .accessibilityIdentifier("searchDrawer.loading.\(pendingTrackID)")
-                    if downloader.isDownloading {
-                        ProgressView(value: downloader.downloadProgress)
-                            .tint(theme.accent)
-                    }
-                } else if session.isSearching || session.omnibox.isSearching {
-                    Label("Buscando músicas…", systemImage: "magnifyingglass")
-                        .font(.caption).foregroundStyle(theme.accent)
-                        .accessibilityIdentifier("searchDrawer.searching")
-                }
-
-                if showsQuickAccess || hubTab == .albumArtist {
-                    quickHub
-                }
-
-                if typedText != nil && session.omnibox.isShowingStaleCache {
-                    Text("Resultados salvos · tentando atualizar")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Resultados em cache; atualização em andamento ou indisponível")
-                } else if typedText != nil && session.omnibox.lastRequestFailed &&
-                            session.omnibox.loadState == .partial {
-                    Text("Resultados parciais · um serviço está indisponível")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                if typedText != nil && !session.omnibox.suggestions.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(session.omnibox.suggestions.prefix(5), id: \.self) { item in
-                                Button {
-                                    session.query = item
-                                    handleInput(item)
-                                } label: {
-                                    Text(item)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 7)
-                                        .background(.ultraThinMaterial, in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                }
-
-            }
-
-            if isDiscoverVisible {
-                CollapsibleGlassSection(
-                    title: "DESCOBRIR",
-                    icon: "sparkles",
-                    isExpanded: discoverExpansion,
-                    tint: theme.accent,
-                    integrated: integrated
-                ) {
-                VStack(alignment: .leading, spacing: 12) {
-                    if isSearchMode {
-                        Button("Sugestões") { showSuggestions() }
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(theme.accent)
-                            .accessibilityLabel("Voltar às sugestões")
-                    } else if canRefreshSuggestions {
-                        Button(action: onRefreshSuggestions) {
-                            Label("Iniciar Rádio", systemImage: "dot.radiowaves.left.and.right")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(theme.accent)
-                        }
-                        .accessibilityLabel("Iniciar Rádio e acrescentar recomendações à fila")
-                    }
-                    if let errorMessage = session.errorMessage, isSearchMode {
-                        Text(session.errorMessage).font(.caption).foregroundStyle(.secondary)
-                    } else if isSearchMode && (session.hasSearched || session.omnibox.hasSearched) &&
-                              displayedTracks.isEmpty && !session.isSearching && !session.omnibox.isSearching {
-                        Text("Nenhuma música encontrada. Experimente outro termo.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
-                        Text("Escolha uma música para descobrir faixas relacionadas.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if (isSearchMode && (session.isSearching || session.omnibox.isSearching)) ||
-                       (!isSearchMode && isLoadingSuggestions) {
-                        ProgressView(isSearchMode ? "Procurando músicas…" : "Carregando sugestões…")
-                            .tint(theme.accent)
-                    }
-                    if !displayedTracks.isEmpty {
-                        Text(isSearchMode ? "Resultados da pesquisa · tocar agora" :
-                             "Sugestões relacionadas · tocar agora")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(spacing: 12) {
-                                ForEach(displayedTracks) { result in
-                                    let track = downloader.cachedTrack(result)
-                                    let status = downloader.status(for: result)
-                                    VStack(alignment: .leading, spacing: 5) {
-                                    Button {
-                                        isFocused = false
-                                        // History counts only after the audio engine confirms playback.
-                                        onSelect(track, [])
-                                    } label: {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            WebImage(url: track.thumbnailURL)
-                                                .resizable()
-                                                .transition(.fade(duration: 0.2))
-                                                .scaledToFill()
-                                                .frame(width: 152, height: 100)
-                                                .background(GnarlyArtworkPlaceholder())
-                                                .clipped()
-                                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                            Text(track.title)
-                                                .font(.caption.weight(.semibold))
-                                                .lineLimit(2)
-                                                .multilineTextAlignment(.leading)
-                                                .frame(height: 34, alignment: .topLeading)
-                                            HStack(spacing: 5) {
-                                                if pendingTrackID == track.id {
-                                                    ProgressView().tint(theme.accent)
-                                                } else {
-                                                    TrackStatusIndicator(status: status, accent: theme.accent)
-                                                }
-                                                Text(pendingTrackID == track.id ? "Preparando…" : status.shortDescription)
-                                                    .font(.caption2)
-                                                    .foregroundStyle(status == .downloaded
-                                                        ? Color.green.opacity(0.85) : theme.accent)
-                                            }
-                                            if !isSearchMode,
-                                               let reason = suggestionReasons[track.id] {
-                                                Text("Por que apareceu: " + reason)
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.secondary)
-                                                    .lineLimit(3)
-                                                    .accessibilityLabel("Por que apareceu: " + reason)
-                                            }
-                                        }
-                                        .frame(width: 152)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(!isEnabled)
-                                    HStack(spacing: 8) {
-                                        Button("💿") { focusAlbumArtist(track) }
-                                            .accessibilityLabel("Álbum e artista de \(track.title)")
-                                            .accessibilityIdentifier("searchDrawer.focusAlbum.\(track.id)")
-                                        offlineControl(track)
-                                    }
-                                    }
-                                    .frame(width: 152)
-                                }
-                            }
-                            .padding(.vertical, 3)
-                        }
-                    }
-                }
-            }
-                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.95)))
-            }
+            if isDiscoverVisible { discoveryPanel }
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.5), value: isDiscoverVisible)
         .onAppear {
