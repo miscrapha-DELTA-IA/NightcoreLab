@@ -137,7 +137,20 @@ final class PlaybackCoordinator: ObservableObject {
 
     func nextCandidate(navigation: PlaybackNavigationHistory,
                        queue: PlaybackQueue) -> Track? {
-        navigation.forwardTrack ?? queue.upNextQueue.first
+        nextSelection(navigation: navigation, queue: queue)?.track
+    }
+
+    struct NextSelection {
+        let track: Track
+        let direction: PlaybackNavigationHistory.Direction
+    }
+
+    /// One decision powers on-screen availability, remote availability and the
+    /// actual command. Staging never consumes a queue item before playback.
+    func nextSelection(navigation: PlaybackNavigationHistory,
+                       queue: PlaybackQueue) -> NextSelection? {
+        if let track = navigation.forwardTrack { return NextSelection(track: track, direction: .forward) }
+        return queue.upNextQueue.first.map { NextSelection(track: $0, direction: .regular) }
     }
 
     func commitStarted(_ track: Track, replacing previous: Track?,

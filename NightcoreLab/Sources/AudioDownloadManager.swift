@@ -24,6 +24,8 @@ final class AudioDownloadManager: ObservableObject {
     private var rateLimitUntil: Date = .distantPast
     private var breakerTask: Task<Void, Never>?
     @Published private(set) var cachedIDs = Set<String>()
+    @Published private(set) var isCacheReady = false
+    @Published private(set) var artworkRevision = 0
     @Published private(set) var downloadingIDs = Set<String>()
     @Published private(set) var offlineDownloadProgress: [String: Double] = [:]
     var backgroundCompletionHandler: (() -> Void)?
@@ -50,6 +52,7 @@ final class AudioDownloadManager: ObservableObject {
     private var preparations: [String: Task<Void, Never>] = [:]
     private var preparationPriorities: [String: Float] = [:]
     private var preparationGenerations: [String: UUID] = [:]
+    private var artworkTasks: [String: Task<URL?, Never>] = [:]
 
     func canRemoveOfflineAudio(_ track: Track) -> Bool {
         track.id != selectedID && track.id != playingID
@@ -93,6 +96,12 @@ final class AudioDownloadManager: ObservableObject {
             if let (_, loaded) = try? await cacheIO.perform({ _ in () }) {
                 cache = loaded
                 cachedIDs = Set(loaded.entries.keys)
+                isCacheReady = true
+                // Migrate covers already in WebImage's disk cache, or fill
+                // missing sidecars while online, without delaying audio.
+                for entry in loaded.entries.values {
+                    Task { _ = await ensureArtwork(for: entry.track) }
+                }
             }
         }
         memoryWarningObserver = NotificationCenter.default.addObserver(
@@ -145,6 +154,7 @@ final class AudioDownloadManager: ObservableObject {
     func saveOfflineAudio(_ track: Track) async throws -> URL {
         if let local = cache.indexedURL(for: track.id) {
             updateCache { $0.pin(track.id) }
+            _ = await ensureArtwork(for: cachedTrack(track))
             return local
         }
         return try await withCheckedThrowingContinuation { continuation in
@@ -152,6 +162,7 @@ final class AudioDownloadManager: ObservableObject {
             offlineDownloadProgress[track.id] = 0
             serialize {
                 if let local = self.cache.indexedURL(for: track.id) {
+                    _ = await self.ensureArtwork(for: self.cachedTrack(track))
                     self.completeOfflineAudio(track.id, result: .success(local))
                     return
                 }
@@ -181,6 +192,33 @@ final class AudioDownloadManager: ObservableObject {
     /// Never calls the backend. Returns nil after local eviction/reinstall.
     func cachedAudioURL(for track: Track) -> URL? {
         cache.indexedURL(for: track.id)
+    }
+
+    func cachedArtworkURL(for track: Track) -> URL? {
+        cache.artworkURL(for: track.id)
+    }
+
+    /// Cover work has separate ownership from selection/download playback.
+    /// A late completion only publishes cache state, never another song.
+    @discardableResult
+    func ensureArtwork(for track: Track) async -> URL? {
+        if let local = cachedArtworkURL(for: track) { return local }
+        if let task = artworkTasks[track.id] { return await task.value }
+        guard let remote = track.thumbnailURL else { return nil }
+        let task = Task { @MainActor [weak self] () -> URL? in
+            guard let self else { return nil }
+            defer { self.artworkTasks[track.id] = nil }
+            guard let data = await NowPlayingArtworkLoader.coverData(at: remote),
+                  let (local, _) = try? await self.cacheIO.perform({
+                      try $0.storeArtwork(data, for: track.id)
+                  }) else { return nil }
+            // Cover completion must not replace a newer audio-index snapshot
+            // published by another download/eviction while this task awaited.
+            if local != nil { self.artworkRevision &+= 1 }
+            return local
+        }
+        artworkTasks[track.id] = task
+        return await task.value
     }
 
     func saveLastTrack(_ track: Track, at position: TimeInterval = 0) {
@@ -231,6 +269,7 @@ final class AudioDownloadManager: ObservableObject {
         refreshTrackStatuses()
         let cached = cachedTrack(track)
         if let cachedLocal {
+            Task { _ = await ensureArtwork(for: cached) }
             // Local playback is immediate and does not invalidate in-flight Up Next work.
             deliver(cachedLocal, track: cached)
             return
@@ -343,6 +382,7 @@ final class AudioDownloadManager: ObservableObject {
     /// Resolve catalog metadata outside the serial transfer-mutation queue.
     /// Saving a Mix can no longer block a playback selection behind 15 lookups.
     private func prepareDownload(_ sourceTrack: Track, priority: Float) {
+        Task { _ = await ensureArtwork(for: sourceTrack) }
         preparationPriorities[sourceTrack.id] = max(priority, preparationPriorities[sourceTrack.id] ?? priority)
         guard preparations[sourceTrack.id] == nil else { return }
         let generation = UUID()
@@ -416,7 +456,7 @@ final class AudioDownloadManager: ObservableObject {
         let callback = onReady
         onReady = nil
         onFailure = nil
-        callback?(local, track.thumbnailURL)
+        callback?(local, cachedArtworkURL(for: track) ?? track.thumbnailURL)
         startNextOffline()
     }
 
@@ -641,8 +681,11 @@ extension AudioDownloadManager: DownloadManagerDelegate {
             }
             cache = updated
             cachedIDs = Set(cache.entries.keys)
-            completeOfflineAudio(track.id, result: .success(local))
+            // Start playback immediately; only the explicit offline-save
+            // completion waits for the cover sidecar to be persisted.
             deliver(local, track: track)
+            _ = await ensureArtwork(for: track)
+            completeOfflineAudio(track.id, result: .success(local))
         } catch {
             completeOfflineAudio(track.id, result: .failure(error))
             fail(track, message: DownloadFailureMessage.describe(error))
