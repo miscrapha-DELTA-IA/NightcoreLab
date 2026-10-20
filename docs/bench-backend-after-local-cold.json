@@ -1,0 +1,46 @@
+{
+  "base_host": "127.0.0.1",
+  "started_utc": "2026-10-20T04:06:31Z",
+  "measurement_scope": "HTTP client; optional Linux /proc or Windows process API sampling",
+  "cold_boot_to_health_seconds": 2.155999999999949,
+  "health": {
+    "status": 200,
+    "ttfb_seconds": 0.0,
+    "total_seconds": 0.0,
+    "bytes_received": 55,
+    "r2_redirect_followed": false
+  },
+  "cases": {
+    "three_minute": {
+      "status": 200,
+      "ttfb_seconds": 8.562,
+      "total_seconds": 8.578,
+      "bytes_received": 3731016,
+      "r2_redirect_followed": false
+    },
+    "near_ten_minute_597s": {
+      "status": 200,
+      "ttfb_seconds": 19.25,
+      "total_seconds": 19.312,
+      "bytes_received": 9655276,
+      "r2_redirect_followed": false
+    },
+    "invalid_host": {
+      "status": 400,
+      "ttfb_seconds": 0.016,
+      "total_seconds": 0.016,
+      "bytes_received": 0
+    }
+  },
+  "server_metrics_after": {
+    "pid": 9648,
+    "rss_bytes": 95883264,
+    "peak_rss_bytes": 95883264,
+    "r2_enabled": false
+  },
+  "process_sample": {
+    "peak_process_rss_bytes": 104083456,
+    "process_cpu_seconds": 1.438,
+    "sample_duration_seconds": 27.859
+  }
+}

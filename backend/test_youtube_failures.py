@@ -13,7 +13,18 @@ class YouTubeFailureTests(unittest.TestCase):
     def setUp(self):
         main.audio_sources._metadata.clear()
         main._youtube_cooldown_until = 0
+        main._strategy_failures.clear()
+        main._strategy_disabled_until.clear()
         self.addCleanup(setattr, main, "_youtube_cooldown_until", 0)
+
+    def test_player_client_circuit_opens_and_success_resets(self):
+        label = "logado/web"
+        for _ in range(3):
+            main._strategy_outcome(label, False, True)
+        self.assertFalse(main._strategy_available(label))
+        self.assertGreater(main._circuit_snapshot()[label]["open_seconds"], 0)
+        main._strategy_outcome(label, True)
+        self.assertTrue(main._strategy_available(label))
 
     def test_429_does_not_try_more_clients_and_returns_retry_after(self):
         def blocked(*args):

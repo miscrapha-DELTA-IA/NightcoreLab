@@ -337,7 +337,7 @@ final class AudioDownloadManager: ObservableObject {
     /// cold start aconteça enquanto ele ainda está colando o endereço.
     func warmUp() {
         if let lastWarmUp, Date().timeIntervalSince(lastWarmUp) < 60 { return }
-        guard let url = URL(string: Self.apiBaseURL) else { return }
+        guard let url = URL(string: Self.apiBaseURL + "/warm") else { return }
         lastWarmUp = Date()
 
         var request = URLRequest(url: url, timeoutInterval: 90)
@@ -456,6 +456,7 @@ extension AudioDownloadManager: DownloadManagerDelegate {
         guard var track = tracks[download.id] else { return }
         if let response = tasks[download.id]?.response as? HTTPURLResponse {
             let title = response.suggestedFilename.map { ($0 as NSString).deletingPathExtension }
+                .flatMap { $0.lowercased() == "audio" ? nil : $0 }
             let cover = response.value(forHTTPHeaderField: "X-Cover-Url").flatMap(URL.init(string:))
             track = Track(id: track.id, title: title ?? track.title,
                           thumbnailURL: cover?.scheme == "https" ? cover : track.thumbnailURL)

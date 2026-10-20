@@ -142,13 +142,17 @@ def _chunks(response, limit, deadline):
 def _convert(source, destination, duration):
     # Local input only: ffmpeg cannot fetch protocols from a playlist disguised as audio.
     probe = subprocess.run(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe",
-        "-show_entries", "format=duration", "-of", "json", str(source)],
+        "-show_entries", "format=duration:stream=codec_name,codec_type", "-of", "json", str(source)],
         capture_output=True, timeout=8, check=True)
-    actual = float(json.loads(probe.stdout)["format"]["duration"])
+    details = json.loads(probe.stdout)
+    actual = float(details["format"]["duration"])
     if not math.isfinite(actual) or abs(actual - duration) > 2 or not 0 < actual < 600:
         raise ValueError("preview, truncated or different recording")
+    codec = next((stream.get("codec_name") for stream in details.get("streams", [])
+                  if stream.get("codec_type") == "audio"), None)
+    codec_args = ["-c:a", "copy"] if codec == "aac" else ["-c:a", "aac", "-b:a", "192k"]
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe",
-        "-i", str(source), "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "192k",
+        "-i", str(source), "-map", "0:a:0", "-vn", *codec_args,
         "-threads", "1", "-movflags", "+faststart", "-y", str(destination)],
         capture_output=True, timeout=60, check=True)
     if destination.stat().st_size < 1024:

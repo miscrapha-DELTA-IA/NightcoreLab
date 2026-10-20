@@ -4,6 +4,8 @@ name: Backend Smoke Test
 # (custa 1 minuto da cota por minuto, contra 10 do macOS).
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '19 8 * * *'
   push:
     branches: [ "main" ]
     # Apenas alterações no backend requerem um novo deploy no Render.
@@ -19,6 +21,9 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write
 
     env:
       BASE_URL: https://nightcorelab.onrender.com
@@ -33,8 +38,8 @@ jobs:
           python-version: '3.12'
       - name: Testar contratos offline de busca e sugestões
         run: |
-          pip install -r backend/requirements.txt httpx
-          python -m unittest discover -s backend -p 'test_*.py'
+          pip install -r backend/requirements.txt pytest
+          python -m pytest -q backend
 
       - name: Esperar o Render publicar este commit
         # Num push, o Render faz um deploy novo; só testa quando a versão nova estiver no ar.
@@ -79,12 +84,12 @@ jobs:
 
       - name: Download de ponta a ponta (.m4a)
         run: |
-          code=$(curl -s -X POST "$BASE_URL/download" \
-            -H 'Content-Type: application/json' \
-            -d "{\"url\":\"$TEST_VIDEO\"}" \
+          # GET matches iOS Background URLSession. -L follows an R2 302 as GET.
+          # Never print headers.txt: Location may contain a signed private URL.
+          code=$(curl -sSL --get "$BASE_URL/download" \
+            --data-urlencode "url=$TEST_VIDEO" \
             -D headers.txt -o audio.bin -w '%{http_code}' --max-time 300)
           echo "HTTP $code"
-          cat headers.txt
 
           if [ "$code" != "200" ]; then
             echo "Resposta do servidor:"
@@ -111,3 +116,14 @@ jobs:
             || { echo "::error::A resposta não é um contêiner MP4/M4A"; exit 1; }
 
           echo "✅ .m4a válido recebido do servidor"
+
+      - name: Abrir issue quando o smoke diário falhar
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --state open --json title --jq '.[] | select(.title == "Backend Smoke Test diário falhou") | .title')
+          if [ -z "$existing" ]; then
+            gh issue create --title "Backend Smoke Test diário falhou" \
+              --body "O [smoke diário]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) falhou. Verifique o deploy Render, cookies e yt-dlp. Não cole URLs assinadas nem o Secret File nesta issue."
+          fi

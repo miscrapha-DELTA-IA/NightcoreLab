@@ -34,6 +34,8 @@ import asyncio
 import contextlib
 import concurrent.futures
 from dataclasses import dataclass
+import gzip
+import hashlib
 import json
 import logging
 import os
@@ -44,17 +46,20 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from itertools import islice
 from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 import audio_sources
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 from lyrics_alignment import AlignmentError, generate_enhanced_lrc
+from r2_cache import R2Cache, R2Config, SIGNED_URL_SECONDS
+from access_control import AccessControl
 
 MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
 # A 512 MiB Render container defaults to one extraction; two is the hard cap.
@@ -70,6 +75,30 @@ DEPLOYED_COMMIT = os.getenv("RENDER_GIT_COMMIT", "")[:7]
 
 # Reaproveita o logger do uvicorn: as mensagens aparecem nos logs do Render.
 log = logging.getLogger("uvicorn.error")
+
+try:
+    _r2_config = R2Config.from_env()
+except ValueError as error:
+    log.warning("R2 desativado: %s", error)
+    _r2_config = None
+r2_cache = R2Cache(_r2_config) if _r2_config else None
+_r2_uploading: set[str] = set()
+_r2_upload_slots = asyncio.Semaphore(1)
+_counters = {"cache_local_hits": 0, "cache_r2_hits": 0, "r2_fallbacks": 0,
+             "r2_uploads_ok": 0, "r2_uploads_failed": 0}
+_failure_categories: dict[str, int] = {}
+_peak_rss_bytes = 0
+MAX_RSS_BYTES = int(os.getenv("MAX_RSS_MB", "400")) * 1024 * 1024
+_access_control = AccessControl()
+
+
+class _JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+        message = re.sub(r"https?://\S+", "[URL removida]", message)
+        message = re.sub(r"(/(?:download|align-lyrics|queue)\?)[^ ]+", r"\1[query removida]", message)
+        return json.dumps({"time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+                           "level": record.levelname, "message": message}, ensure_ascii=False)
 
 WORK_DIR_PREFIX = "nightcore_"
 # Pastas mais velhas que isso são restos de envios interrompidos (cliente desconectou
@@ -172,6 +201,7 @@ download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 class InFlightDownload:
     task: asyncio.Task
     consumers: int = 0
+    waiting: bool = True
 
 in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
@@ -187,6 +217,70 @@ app = FastAPI(
     description="Extrai o áudio de um link do YouTube em .m4a e o envia direto, sem armazenar.",
     version="1.4.0",
 )
+
+
+@app.middleware("http")
+async def _limit_heavy_requests(request: Request, call_next):
+    if request.url.path in {"/download", "/align-lyrics"}:
+        token = request.headers.get("X-Gnarly-Token") or request.query_params.get("access_token")
+        failure = _access_control.check(token, request.client.host if request.client else "unknown")
+        if failure:
+            status, message, retry = failure
+            headers = {"Retry-After": str(retry)} if retry else {}
+            return JSONResponse({"detail": message, "code": "access_limited"},
+                                status_code=status, headers=headers)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def _search_http_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path not in {"/v1/search", "/v1/suggest"} or response.status_code != 200:
+        return response
+    # These endpoints return small JSON documents; never buffer audio/NDJSON.
+    body = b"".join([part async for part in response.body_iterator])
+    etag = '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    headers.update({"ETag": etag, "Cache-Control": "private, max-age=60",
+                    "Vary": "Accept-Encoding"})
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    if len(body) >= 512 and "gzip" in request.headers.get("accept-encoding", "").lower():
+        body = gzip.compress(body, compresslevel=3, mtime=0)
+        headers["Content-Encoding"] = "gzip"
+    return Response(content=body, status_code=200, headers=headers)
+
+
+@app.exception_handler(HTTPException)
+async def _structured_http_error(_request: Request, error: HTTPException):
+    headers = error.headers or {}
+    code = headers.get("X-Download-Error", f"http_{error.status_code}")
+    _failure_categories[code] = _failure_categories.get(code, 0) + 1
+    return JSONResponse({"detail": error.detail, "code": code},
+                        status_code=error.status_code, headers=headers)
+
+
+@app.on_event("startup")
+async def _start_r2_lifecycle() -> None:
+    for logger_name in ("uvicorn.error", "uvicorn.access"):
+        for handler in logging.getLogger(logger_name).handlers:
+            handler.setFormatter(_JsonLogFormatter())
+    _sweep_stale_work_dirs()
+    await asyncio.to_thread(_prune_audio_cache)
+    if r2_cache:
+        async def configure() -> None:
+            try:
+                await r2_cache.ensure_lifecycle()
+            except Exception as error:
+                log.warning("R2 lifecycle não configurado: %s", type(error).__name__)
+        asyncio.create_task(configure())
+
+
+@app.on_event("shutdown")
+async def _close_r2() -> None:
+    if r2_cache:
+        await r2_cache.close()
 
 
 # JSON metadata API for the SwiftUI Omnibox; /search NDJSON remains backward compatible.
@@ -212,7 +306,7 @@ async def align_lyrics(request: AlignLyricsRequest):
         raise HTTPException(status_code=429, detail="Alinhamento ocupado. Tente novamente.")
     background_tasks = BackgroundTasks()
     try:
-        response = await download(DownloadRequest(url=request.url), background_tasks)
+        response = await download(DownloadRequest(url=request.url), background_tasks, redirect_cache=False)
         transcription = asyncio.create_task(asyncio.to_thread(
             generate_enhanced_lrc, Path(response.path), request.lyrics
         ))
@@ -389,10 +483,17 @@ def search(query: str = Query(min_length=1, max_length=200)):
 
 
 @app.get("/download")
-async def background_download(url: HttpUrl, background_tasks: BackgroundTasks):
+async def background_download(url: HttpUrl, background_tasks: BackgroundTasks,
+                              delivery: str = "audio"):
     """Background URLSession compatible GET, sharing the POST extraction."""
     _youtube_video_id(str(url))
-    return await download(DownloadRequest(url=url), background_tasks)
+    return await download(DownloadRequest(url=url), background_tasks, delivery=delivery)
+
+
+@app.head("/download")
+async def background_download_head(url: HttpUrl, background_tasks: BackgroundTasks):
+    _youtube_video_id(str(url))
+    return await download(DownloadRequest(url=url), background_tasks, r2_method="HEAD")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -413,6 +514,84 @@ def health():
         "cookies_summary": _cookies_summary(),
         "secret_files": _secret_file_names(),
     }
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+def lightweight_health():
+    """Cheap probe: no yt-dlp import, disk traversal, or upstream request."""
+    return {"status": "ok", "rss_bytes": _rss_bytes(), "r2_enabled": r2_cache is not None}
+
+
+@app.get("/warm")
+async def warm():
+    """Existing app calls / on launch; this endpoint is available for future builds."""
+    return {"status": "ok", "r2_enabled": r2_cache is not None}
+
+
+def _rss_bytes() -> int:
+    global _peak_rss_bytes
+    try:
+        with open("/proc/self/status", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    value = int(line.split()[1]) * 1024
+                    _peak_rss_bytes = max(_peak_rss_bytes, value)
+                    return value
+    except OSError:
+        pass
+    if os.name == "nt":  # Local Windows benchmark; production uses /proc on Linux.
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class MemoryCounters(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            counters = MemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            current_process = ctypes.windll.kernel32.GetCurrentProcess
+            current_process.restype = wintypes.HANDLE
+            memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+            memory_info.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+            memory_info.restype = wintypes.BOOL
+            if memory_info(current_process(), ctypes.byref(counters), counters.cb):
+                value = counters.WorkingSetSize
+                _peak_rss_bytes = max(_peak_rss_bytes, value)
+                return value
+        except (AttributeError, OSError):
+            pass
+    return 0
+
+
+@app.get("/metrics")
+def metrics():
+    cookie = _cookies_summary()
+    cookie_status = ("missing" if not cookie.get("found") else
+                     "invalid" if not cookie.get("netscape_header") or not cookie.get("youtube_domain") else
+                     "logged_in" if cookie.get("logged_in") else "present")
+    return {"pid": os.getpid(), "queue_depth": len(in_flight_downloads),
+            "active_jobs": sum(not item.task.done() for item in in_flight_downloads.values()),
+            "rss_bytes": _rss_bytes(), "peak_rss_bytes": _peak_rss_bytes,
+            "r2_enabled": r2_cache is not None,
+            "r2_uploading": len(_r2_uploading), "cookie_status": cookie_status,
+            "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
+            **_counters}
+
+
+@app.get("/queue")
+def queue_status(url: HttpUrl):
+    video_id = _youtube_video_id(str(url))
+    pending = list(in_flight_downloads)
+    if video_id not in in_flight_downloads:
+        return {"position": 0, "eta_seconds": 0, "active": False}
+    entry = in_flight_downloads[video_id]
+    position = pending.index(video_id) + 1 if entry.waiting else 0
+    return {"position": position, "eta_seconds": position * 30,
+            "active": not entry.waiting}
 
 
 # Cookies que só existem numa sessão logada do Google/YouTube.
@@ -490,12 +669,15 @@ async def _shared_extraction(url: str):
     # The outer semaphore bounds scheduled extractions. The thread-level gate
     # remains held even if a client disconnects while a worker is still running.
     async with download_semaphore:
+        entry = in_flight_downloads.get(_youtube_video_id(url))
+        if entry:
+            entry.waiting = False
         loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(executor, _run_extraction, url)
             return await asyncio.to_thread(_cache_extracted_audio, _youtube_video_id(url), result)
         finally:
-            log.debug("yt-dlp extraction settled for %s", url)
+            log.debug("yt-dlp extraction settled for %s", _youtube_video_id(url))
 
 
 async def _cleanup_orphan(video_id: str, entry: InFlightDownload) -> None:
@@ -509,6 +691,9 @@ async def _release_download(video_id: str, entry: InFlightDownload,
                             decrement: bool = True) -> None:
     if decrement:
         entry.consumers -= 1
+    # Queued work can be cancelled without touching a running yt-dlp thread.
+    if entry.consumers == 0 and entry.waiting and not entry.task.done():
+        entry.task.cancel()
     if entry.consumers == 0 and entry.task.done():
         if in_flight_downloads.get(video_id) is entry:
             in_flight_downloads.pop(video_id, None)
@@ -526,10 +711,64 @@ async def _release_response(video_id: str, entry: InFlightDownload) -> None:
     await _release_download(video_id, entry)
 
 
+async def _try_r2(video_id: str, delivery: str, method: str = "GET"):
+    if not r2_cache:
+        return None
+    try:
+        meta = await r2_cache.find(f"{video_id}/audio.m4a")
+        if meta is None:
+            return None
+        signed = (r2_cache.presigned_head(f"{video_id}/audio.m4a") if method == "HEAD"
+                  else r2_cache.presigned_get(f"{video_id}/audio.m4a"))
+        _counters["cache_r2_hits"] += 1
+        if delivery == "url":
+            return JSONResponse({"url": signed, "expires_in": SIGNED_URL_SECONDS},
+                                headers={"Cache-Control": "no-store"})
+        headers = {"Cache-Control": "no-store"}
+        if meta.get("thumbnail"):
+            headers["X-Cover-Url"] = meta["thumbnail"]
+        return RedirectResponse(signed, status_code=302, headers=headers)
+    except Exception as error:
+        _counters["r2_fallbacks"] += 1
+        log.warning("R2 HEAD falhou (%s): %s", video_id, type(error).__name__)
+        return None
+
+
+async def _upload_r2(video_id: str, path: Path, title: str, thumbnail: str | None) -> None:
+    try:
+        async with _r2_upload_slots:
+            assert r2_cache is not None
+            await r2_cache.put(f"{video_id}/audio.m4a", path, title, thumbnail)
+            _counters["r2_uploads_ok"] += 1
+    except Exception as error:
+        _counters["r2_uploads_failed"] += 1
+        log.warning("R2 PUT falhou (%s): %s", video_id, type(error).__name__)
+    finally:
+        _r2_uploading.discard(video_id)
+        _release_cached_reader(video_id)
+        await asyncio.to_thread(_prune_audio_cache)
+
+
+def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | None) -> None:
+    if not r2_cache or path.parent != CACHE_DIR or video_id in _r2_uploading:
+        return
+    _r2_uploading.add(video_id)
+    with _cache_lock:
+        _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
+    asyncio.create_task(_upload_r2(video_id, path, title, thumbnail))
+
+
 @app.post("/download")
-async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
+async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
+                   redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET"):
     url = str(request.url)
     video_id = _youtube_video_id(url)
+    if delivery not in {"audio", "url"}:
+        raise HTTPException(status_code=400, detail="Modo de entrega inválido.")
+    if redirect_cache:
+        remote = await _try_r2(video_id, delivery, r2_method)
+        if remote is not None:
+            return remote
     entry = in_flight_downloads.get(video_id)
     if entry is None:
         # Pin the cache entry atomically with lookup: pruning runs under the same lock.
@@ -537,17 +776,26 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         entry = in_flight_downloads.get(video_id)
         if entry is None and hit is not None:
             audio_path, title, thumbnail, _ = hit
+            _counters["cache_local_hits"] += 1
             background_tasks.add_task(_release_cached_reader, video_id)
+            _schedule_r2_upload(video_id, audio_path, title, thumbnail)
             return _audio_response(audio_path, title, thumbnail, background_tasks)
         if hit is not None:
             _release_cached_reader(video_id)
     if entry is None:
         if not audio_sources.can_recover(video_id):
             _check_youtube_cooldown()
+        if _rss_bytes() >= MAX_RSS_BYTES:
+            await asyncio.to_thread(_prune_audio_cache)
+            raise HTTPException(status_code=503,
+                detail="Memória do servidor temporariamente ocupada. Tente novamente.",
+                headers={"Retry-After": "30", "X-Download-Error": "memory_limit"})
         # Bound distinct queued video IDs as well as actual worker count.
         # Otherwise thousands of unique requests still allocate tasks in RAM.
         if len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
-            raise HTTPException(status_code=429, detail="Fila de downloads ocupada. Tente novamente.")
+            raise HTTPException(status_code=429, detail="Fila de downloads ocupada. Tente novamente.",
+                                headers={"Retry-After": "30", "X-Queue-Position": str(MAX_PENDING_DOWNLOADS),
+                                         "X-Queue-ETA-Seconds": "30", "X-Download-Error": "queue_full"})
         entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
         in_flight_downloads[video_id] = entry
         entry.task.add_done_callback(lambda _, vid=video_id, item=entry: asyncio.create_task(_cleanup_orphan(vid, item)))
@@ -562,8 +810,8 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=504, detail="Tempo limite de extração excedido.")
     except yt_dlp.utils.DownloadError as error:
         await _release_download(video_id, entry)
-        log.warning("download falhou (%s): %s", video_id, str(error)[:600])
-        raise HTTPException(status_code=422, detail=_friendly_error(str(error)))
+        log.warning("download falhou (%s): %s", video_id, _friendly_error(str(error)))
+        raise _download_error(str(error))
     except HTTPException:
         await _release_download(video_id, entry)
         raise
@@ -583,6 +831,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         with _cache_lock:
             _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
         background_tasks.add_task(_release_cached_reader, video_id)
+        _schedule_r2_upload(video_id, audio_path, title, thumbnail)
     return _audio_response(audio_path, title, thumbnail, background_tasks)
 
 
@@ -628,6 +877,10 @@ def _check_youtube_cooldown() -> None:
             headers={"Retry-After": str(remaining), "X-Download-Error": "upstream_rate_limited"})
 
 
+def _redact_media_urls(message: str) -> str:
+    return re.sub(r"https?://\S+", "[URL removida]", message)
+
+
 class _YtdlpLog:
     """Leva os avisos do yt-dlp para o log do Render (é neles que o YouTube explica
     por que um formato sumiu: PO token, desafio JS, cookies vencidos...)."""
@@ -639,7 +892,7 @@ class _YtdlpLog:
         # Keep only the player client names needed to diagnose slow 403 responses.
         # Full yt-dlp debug output can include URLs and request details.
         if "player API JSON" in msg:
-            log.info("yt-dlp [%s]: %s", self.label, msg[:250])
+            log.info("yt-dlp [%s]: %s", self.label, _redact_media_urls(msg)[:250])
 
     def info(self, msg: str) -> None:
         pass
@@ -647,7 +900,7 @@ class _YtdlpLog:
     def warning(self, msg: str) -> None:
         if "http error 429" in msg.lower() or "too many requests" in msg.lower():
             _pause_youtube_requests()
-        log.warning("yt-dlp [%s]: %s", self.label, msg[:500])
+        log.warning("yt-dlp [%s]: %s", self.label, _redact_media_urls(msg)[:500])
 
     def error(self, msg: str) -> None:   # o erro final já é registrado em download()
         pass
@@ -675,6 +928,37 @@ _RETRYABLE = (
     "failed to extract any player response",
     "this content isn't available",
 )
+_strategy_lock = threading.Lock()
+_strategy_failures: dict[str, int] = {}
+_strategy_disabled_until: dict[str, float] = {}
+_strategy_successes: dict[str, int] = {}
+
+
+def _strategy_available(label: str) -> bool:
+    with _strategy_lock:
+        return _strategy_disabled_until.get(label, 0) <= time.monotonic()
+
+
+def _strategy_outcome(label: str, succeeded: bool, retryable: bool = False) -> None:
+    with _strategy_lock:
+        if succeeded:
+            _strategy_failures.pop(label, None)
+            _strategy_disabled_until.pop(label, None)
+            _strategy_successes[label] = _strategy_successes.get(label, 0) + 1
+        elif retryable:
+            failures = _strategy_failures.get(label, 0) + 1
+            _strategy_failures[label] = failures
+            if failures >= 3:
+                _strategy_disabled_until[label] = time.monotonic() + 300
+
+
+def _circuit_snapshot() -> dict:
+    with _strategy_lock:
+        now = time.monotonic()
+        return {label: {"successes": _strategy_successes.get(label, 0),
+                        "consecutive_failures": _strategy_failures.get(label, 0),
+                        "open_seconds": max(0, int(_strategy_disabled_until.get(label, 0) - now))}
+                for label, _, _ in _STRATEGIES}
 
 
 def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
@@ -682,6 +966,8 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
     has_cookies = bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE)
     if has_cookies:
         summary = _cookies_summary()
+        if not summary.get("netscape_header") or not summary.get("youtube_domain"):
+            log.warning("Secret File de cookies inválido ou sem domínio YouTube; rotacione o arquivo")
         log.info("cookies: %s entradas, youtube=%s, logado=%s (%s)",
                  summary.get("entries"), summary.get("youtube_domain"),
                  summary.get("logged_in"), ", ".join(summary.get("login_cookies", [])) or "nenhum")
@@ -689,6 +975,12 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         log.info("sem cookies (COOKIES_FILE=%r)", COOKIES_FILE)
 
     strategies = [s for s in _STRATEGIES if has_cookies or not s[1]]
+    ready = [s for s in strategies if _strategy_available(s[0])]
+    if ready:
+        strategies = ready
+    elif strategies:
+        # Keep one path available after a shared upstream outage.
+        strategies = [min(strategies, key=lambda s: _strategy_disabled_until.get(s[0], 0))]
     last_error: yt_dlp.utils.DownloadError | None = None
 
     for index, (label, use_cookies, clients) in enumerate(strategies):
@@ -696,13 +988,15 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         os.makedirs(attempt_dir)
         try:
             result = _extract_with(url, attempt_dir, label, use_cookies, clients)
+            _strategy_outcome(label, True)
             log.info("estratégia que funcionou: %s", label)
             return result
         except yt_dlp.utils.DownloadError as error:
             last_error = error
             message = str(error)
+            _strategy_outcome(label, False, any(marker in message.lower() for marker in _RETRYABLE))
             _check_youtube_cooldown()
-            log.warning("estratégia %s falhou: %s", label, message[:300])
+            log.warning("estratégia %s falhou: %s", label, _redact_media_urls(message)[:300])
             if "private video" in message.lower() or (label != "logado/web" and
                     not any(marker in message.lower() for marker in _RETRYABLE)):
                 raise
@@ -711,6 +1005,7 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
             # original multi-client strategy for that video.
             if label != "logado/web" or error.status_code != 422 or error.detail != "Não foi possível obter o áudio em formato .m4a.":
                 raise
+            _strategy_outcome(label, False, True)
             log.warning("estratégia %s sem áudio m4a; tentando clientes padrão", label)
 
     assert last_error is not None
@@ -823,6 +1118,24 @@ def _friendly_error(message: str) -> str:
     if "unavailable" in lowered or "not available" in lowered:
         return "Vídeo indisponível ou bloqueado na região do servidor."
     return "O yt-dlp não conseguiu processar este vídeo."
+
+
+def _download_error(message: str) -> HTTPException:
+    lowered = message.lower()
+    detail = _friendly_error(message)
+    if "too many requests" in lowered or "http error 429" in lowered or "not a bot" in lowered:
+        return HTTPException(status_code=429, detail=detail,
+                             headers={"Retry-After": "300", "X-Download-Error": "upstream_rate_limited"})
+    if "age" in lowered and ("restrict" in lowered or "sign in" in lowered):
+        return HTTPException(status_code=403, detail=detail)
+    if "private video" in lowered or "video unavailable" in lowered:
+        return HTTPException(status_code=404, detail=detail)
+    if "region" in lowered or "country" in lowered:
+        return HTTPException(status_code=451, detail=detail)
+    if "timed out" in lowered or "timeout" in lowered:
+        return HTTPException(status_code=504, detail="Tempo limite ao buscar a música.",
+                             headers={"Retry-After": "10"})
+    return HTTPException(status_code=502, detail=detail)
 
 
 def _safe_filename(title: str) -> str:
