@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 import hashlib
+import hmac
 import os
 import threading
 import time
@@ -12,9 +13,12 @@ import time
 class AccessControl:
     def __init__(self, env: dict[str, str] | None = None):
         env = os.environ if env is None else env
-        self.tokens = frozenset(token.strip() for token in env.get("GNARLY_ACCESS_TOKENS", "").split(",")
-                                if token.strip())
-        self.strict = env.get("GNARLY_AUTH_MODE", "permissive").lower() == "strict"
+        self.tokens = tuple(token.strip() for token in env.get("GNARLY_ACCESS_TOKENS", "").split(",")
+                            if token.strip())
+        # A configured beta allowlist is secure by default; absence of tokens
+        # retains the legacy open beta mode until the operator provisions access.
+        mode = env.get("GNARLY_AUTH_MODE", "").strip().lower()
+        self.strict = mode == "strict" or (not mode and bool(self.tokens))
         self.per_minute = max(1, int(env.get("GNARLY_REQUESTS_PER_MINUTE", "120")))
         self.per_day = max(1, int(env.get("GNARLY_REQUESTS_PER_DAY", "500")))
         self._events: dict[str, deque[float]] = {}
@@ -24,11 +28,14 @@ class AccessControl:
         """Return (HTTP code, Portuguese message, Retry-After) or None."""
         if self.strict and not self.tokens:
             return 503, "Autenticação do servidor não configurada.", 60
-        if token and self.tokens and token not in self.tokens:
+        # Constant-time comparison; never use a client-provided token as the
+        # rate-limit identity, including in permissive deployments.
+        authorized = any(hmac.compare_digest(token or "", candidate) for candidate in self.tokens)
+        if token and self.tokens and not authorized:
             return 403, "Acesso ao download não autorizado.", 0
-        if self.strict and token not in self.tokens:
+        if self.strict and not authorized:
             return 403, "Token de acesso necessário.", 0
-        identity = ("token:" + token) if token else ("ip:" + client_ip)
+        identity = "ip:" + client_ip
         key = hashlib.sha256(identity.encode()).hexdigest()[:24]
         moment = time.time() if now is None else now
         with self._lock:
