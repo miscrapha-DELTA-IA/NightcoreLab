@@ -36,3 +36,17 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# DevSecOps: segredos e dados de sessão locais
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*cookie*
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.log
