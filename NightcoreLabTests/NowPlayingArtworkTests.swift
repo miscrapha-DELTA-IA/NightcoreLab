@@ -75,4 +75,33 @@ final class NowPlayingArtworkTests: XCTestCase {
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
     }
+
+    func testLegacyFlatAudioEntriesKeepSeparateCoversAndDeleteOnlyOneTrack() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let first = Track(id: "legacy00001", title: "First", thumbnailURL: nil)
+        let second = Track(id: "legacy00002", title: "Second", thumbnailURL: nil)
+        try writeAudio(root.appendingPathComponent("first.caf"))
+        try writeAudio(root.appendingPathComponent("second.caf"))
+        let index = [
+            first.id: TrackAudioCache.Entry(track: first, relativePath: "first.caf", accessedAt: .now),
+            second.id: TrackAudioCache.Entry(track: second, relativePath: "second.caf", accessedAt: .now)
+        ]
+        try JSONEncoder().encode(index).write(to: root.appendingPathComponent("index.json"))
+        var cache = TrackAudioCache(folder: root)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        let bytes = try XCTUnwrap(image.pngData())
+        let firstCover = try XCTUnwrap(cache.storeArtwork(bytes, for: first.id))
+        let secondCover = try XCTUnwrap(cache.storeArtwork(bytes, for: second.id))
+        XCTAssertNotEqual(firstCover, secondCover)
+        try cache.remove(first.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstCover.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondCover.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("second.caf").path))
+        var reloaded = TrackAudioCache(folder: root)
+        XCTAssertNotNil(reloaded.localURL(for: second.id))
+    }
 }

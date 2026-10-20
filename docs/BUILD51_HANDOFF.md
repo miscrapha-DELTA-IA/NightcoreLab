@@ -36,3 +36,10 @@ Metal, Share and unfiltered tests required. Download and inspect the final IPA
 for Gnarly/build51/iPhoneOS/arm64/model inclusion before delivery. No physical
 iPhone is available. Build-50 continuation automation was paused on completion;
 do not reactivate it for this separate fix. Do not merge main or deploy backend.
+
+PR 115 is open against build 50. First CI head 3566c07 compiled successfully;
+Karaoke Clean also passed. Full IPA run 39501827900 is/was in progress. Code
+review added compatibility for flat legacy audio paths: sidecars always belong
+to separate per-ID directories, and deletion never removes the shared cache
+root. A regression covers distinct covers and deleting only one legacy track.
+Next inspect the latest run after this compatibility fix (not the old head).
