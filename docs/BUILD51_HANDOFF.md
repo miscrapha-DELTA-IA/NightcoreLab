@@ -49,3 +49,8 @@ queue arrival/removal and session restoration: SwiftUI onChange can be deferred
 while the screen is locked. Keep queue capability independent from temporary
 export blocking; AudioEngineManager observes its own isExporting transition to
 disable/re-enable remote commands without depending on a visible screen.
+
+All consumers of the player's resolved local URL now use PlayerArtworkImage:
+main/blurred/vinyl artwork, the TrackIdentityPill thumbnail, and static/marquee
+cover backgrounds. Brand logo/lockup and assets remain intact. Share already
+supports local files. Validate the latest head, not intermediate canceled runs.
