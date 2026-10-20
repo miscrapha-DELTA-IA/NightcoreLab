@@ -1,12 +1,5 @@
 name: Neural Stems Model Parity
 on:
-  push:
-    branches: ['feature/gnarly-build50-real-stems-final']
-    paths:
-      - 'scripts/neural-stems/**'
-      - 'NightcoreLab/Sources/NeuralStems/Demucs*'
-      - 'Package.swift'
-      - '.github/workflows/neural-stems.yml'
   workflow_call:
   workflow_dispatch:
 permissions:
@@ -50,7 +43,7 @@ jobs:
           retention-days: 7
   parity:
     needs: convert
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4

@@ -109,3 +109,26 @@ raw frequency/time golden tensors. Swift gate compares the entire STFT and,
 on failure, predicts from exact PyTorch inputs to diagnose raw branch drift.
 Next inspect CI for this change, fix any precision/conversion issues, then
 run the full IPA gate. No IPA has been delivered for build 50 yet.
+
+## Float32 parity passed — 2026-10-20 20:05 UTC
+
+Run 39483627322 PASSED full neural parity on an Apple Silicon Mac:
+- drums NRMSE 0.0000393, bass 0.0000712, other 0.0000272, vocals 0.0001459;
+- all correlations >0.999999996; whole STFT maximum error 7.45e-8;
+- all five Swift DSP tests passed, unchanged strict per-source acceptance.
+The fp32 graph fixes the conversion drift; do not revert to the all-fp16 graph.
+Compiled model artifact Gnarly-Neural-Model is ~100 MB compressed (12292786856).
+App compile and Karaoke Clean checks also passed for 80e57c5.
+
+The matching IPA run 39483633729 failed because its macOS arm64 parity job
+could not acquire a hosted runner after retries (capacity annotations, no
+test failure). Switch delivery/parity to macos-15, already working for app
+compile/karaoke, and eliminate duplicate automatic standalone model jobs;
+the full IPA workflow still requires the complete reusable model gate.
+
+Code review caught the original recording's gain after the common sum. Move
+it before the sum using a separate stereo resampler, so muting the original
+cannot mute the four stems. Offline exports now use that exact shared graph
+and original-source gate; the independent isolation/mute test covers it.
+Added selected-source-time stem export regression. Next full IPA CI and
+artifact inspection, followed by final PR/checkpoint and automation pause.

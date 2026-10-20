@@ -114,6 +114,7 @@ final class AudioEngineManager {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let centerCutPlayer = AVAudioPlayerNode()
+    private let originalUpmix = AVAudioMixerNode()
     /// In-process render effect; the original player remains the transport.
     private let stemMaskNode = StemGainAudioUnit.makeNode(initialGain: 1)
     @ObservationIgnored private let neuralStems = NeuralStemPlayback()
@@ -206,7 +207,7 @@ final class AudioEngineManager {
     private var processingNodes: [AVAudioNode] {
         let sources: [AVAudioNode] = [player, centerCutPlayer] + neuralStems.nodes
         return sources +
-            [upmix, varispeed, timePitch, bassEQ, stemMaskNode,
+            [originalUpmix, upmix, varispeed, timePitch, bassEQ, stemMaskNode,
              reverbNode, performanceMixer, limiter]
     }
 
@@ -325,7 +326,8 @@ final class AudioEngineManager {
         Self.connectGraph(engine: engine, player: player, upmix: upmix,
                           varispeed: varispeed, timePitch: timePitch, eq: bassEQ, reverb: reverbNode, limiter: limiter,
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
-                          performanceMixer: performanceMixer, stemMask: stemMaskNode)
+                          performanceMixer: performanceMixer,
+                          originalGain: (originalUpmix, stemMaskNode))
         engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
         neuralStems.connect(engine: engine, mixer: upmix)
         centerCutPlayer.volume = 0
@@ -982,7 +984,7 @@ final class AudioEngineManager {
     // MARK: Four-stem mixer
 
     /// Immediate AU parameter events. The AU applies each change to the live
-    /// render stream with a 50 ms sample ramp; no file preparation or reschedule.
+    /// render stream with a 30 ms sample ramp; no file preparation or reschedule.
     private var usesPreparedStemMix: Bool {
         stemMixEnabled && neuralStems.asset != nil &&
             StemKind.allCases.contains { (stemLevels[$0] ?? 1) != 1 }
@@ -1583,7 +1585,7 @@ final class AudioEngineManager {
 
     // MARK: - Privado: grafo e render offline (sem isolamento de ator)
 
-    nonisolated private static func connectGraph(engine: AVAudioEngine,
+    nonisolated static func connectGraph(engine: AVAudioEngine,
                                                  player: AVAudioPlayerNode,
                                                  upmix: AVAudioMixerNode,
                                                  varispeed: AVAudioUnitVarispeed,
@@ -1594,18 +1596,21 @@ final class AudioEngineManager {
                                                  fileFormat: AVAudioFormat,
                                                  graphFormat: AVAudioFormat,
                                                  performanceMixer: AVAudioMixerNode? = nil,
-                                                 stemMask: AVAudioUnitEffect? = nil) {
+                                                 originalGain: (mixer: AVAudioMixerNode, gain: AVAudioUnitEffect)? = nil) {
         // O mixer converte mono→estéreo e taxa de amostragem, deixando o resto do grafo uniforme.
-        engine.connect(player, to: upmix, format: fileFormat)
+        if let originalGain {
+            // Gate ONLY the original recording before it joins the real stems.
+            // Putting this gain after EQ would mute the entire combined mix.
+            engine.connect(player, to: originalGain.mixer, format: fileFormat)
+            engine.connect(originalGain.mixer, to: originalGain.gain, format: graphFormat)
+            engine.connect(originalGain.gain, to: upmix, format: graphFormat)
+        } else {
+            engine.connect(player, to: upmix, format: fileFormat)
+        }
         engine.connect(upmix, to: varispeed, format: graphFormat)
         engine.connect(varispeed, to: timePitch, format: graphFormat)
         engine.connect(timePitch, to: eq, format: graphFormat)
-        if let stemMask {
-            engine.connect(eq, to: stemMask, format: graphFormat)
-            engine.connect(stemMask, to: reverb, format: graphFormat)
-        } else {
-            engine.connect(eq, to: reverb, format: graphFormat)
-        }
+        engine.connect(eq, to: reverb, format: graphFormat)
         // Pad samples join after the song-specific DSP so a 0.5x playback
         // speed does not slow the live drums. Both inputs share the limiter.
         if let performanceMixer {
@@ -1733,6 +1738,9 @@ final class AudioEngineManager {
         let limiter = makeLimiter()
         [player, upmix, varispeed, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
         let realStems = stemAsset == nil || stemLevels == nil ? nil : NeuralStemPlayback()
+        let originalUpmix = AVAudioMixerNode()
+        let originalGain = StemGainAudioUnit.makeNode(initialGain: realStems == nil ? 1 : 0)
+        engine.attach(originalUpmix); engine.attach(originalGain)
         realStems?.nodes.forEach { engine.attach($0) }
         if let realStems, let stemAsset {
             try realStems.load(stemAsset, seconds: sourceSeconds)
@@ -1759,12 +1767,12 @@ final class AudioEngineManager {
         connectGraph(engine: engine, player: player, upmix: upmix, varispeed: varispeed, timePitch: timePitch, eq: eq,
                      reverb: reverb, limiter: limiter,
                      fileFormat: file.processingFormat, graphFormat: renderFormat,
-                     performanceMixer: performanceMixer)
+                     performanceMixer: performanceMixer,
+                     originalGain: (originalUpmix, originalGain))
         realStems?.connect(engine: engine, mixer: upmix)
         if let stemLevels {
             guard realStems != nil else { throw NeuralStemError.invalidOutput }
             realStems?.setLevels(stemLevels, enabled: true, immediate: true)
-            player.volume = 0
         }
         if let padPlayer, let performanceMixer {
             engine.connect(padPlayer, to: performanceMixer, format: renderFormat)

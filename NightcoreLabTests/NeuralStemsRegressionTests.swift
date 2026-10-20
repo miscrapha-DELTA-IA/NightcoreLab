@@ -84,6 +84,37 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertGreaterThan(wave.map { abs($0) }.max() ?? 0, 0.5)
     }
 
+    func testStemExportStartsAtSelectedSourceTime() throws {
+        var urls: [StemKind: URL] = [:]
+        for kind in StemKind.allCases {
+            urls[kind] = try write("seek-" + kind.rawValue) { index in
+                guard kind == .vocal else { return 0 }
+                let frequency = index < 44_100 ? 440.0 : 880.0
+                return Float(0.2 * sin(2 * .pi * frequency * Double(index) / 44_100))
+            }
+        }
+        let original = try write("seek-original") { _ in 0 }
+        let settings = RenderSettings(speed: 1, pitch: 0, reverb: 0, bass: 0, reverbPresetRaw: 0)
+        let result = try AudioEngineManager.renderOffline(source: original, settings: settings,
+            format: .wav, progress: { _ in }, startTime: 1, maxDuration: 1,
+            stemLevels: StemMixPreset.acapella.levels, stemAsset: StemAsset(urls: urls, source: .demucs))
+        defer { try? FileManager.default.removeItem(at: result) }
+        let wave = try samples(result)
+        XCTAssertGreaterThanOrEqual(wave.count, 30_000)
+        // A complete 0.5 s window after any graph startup latency.
+        let window = Array(wave[4_410..<26_460])
+        func level(_ frequency: Double) -> Double {
+            var re = 0.0, im = 0.0
+            for (i, value) in window.enumerated() {
+                let phase = 2 * .pi * frequency * Double(i) / 44_100
+                re += Double(value) * cos(phase); im += Double(value) * sin(phase)
+            }
+            return 2 * hypot(re, im) / Double(window.count)
+        }
+        XCTAssertGreaterThan(level(880), 0.1)
+        XCTAssertLessThan(level(440), 0.0001, "Seeking a stem mix must not replay its beginning")
+    }
+
     func testPaddedMultiArrayUsesAllStrides() throws {
         let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 16)
         pointer.initialize(repeating: -999, count: 16)
