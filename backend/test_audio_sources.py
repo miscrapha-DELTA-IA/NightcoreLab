@@ -93,6 +93,24 @@ class RecoveryTests(unittest.TestCase):
             sources._convert(source, output, 3)
             self.assertGreater(output.stat().st_size, 1024)
 
+    def test_aac_recovery_remuxes_without_encoding(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            source, output = Path(folder) / 'in.audio', Path(folder) / 'out.m4a'
+            source.write_bytes(b'aac')
+            probe = SimpleNamespace(stdout=json.dumps({
+                'format': {'duration': '180'},
+                'streams': [{'codec_type': 'audio', 'codec_name': 'aac'}],
+            }).encode())
+            def run(command, **_kwargs):
+                if command[0] == 'ffprobe':
+                    return probe
+                output.write_bytes(b'valid m4a' * 200)
+                self.assertEqual(command[command.index('-c:a') + 1], 'copy')
+                self.assertEqual(command[command.index('-threads') + 1], '1')
+            with patch.object(sources.subprocess, 'run', side_effect=run):
+                sources._convert(source, output, 180)
+
     def test_worker_recovers_during_youtube_cooldown(self):
         main._pause_youtube_requests()
         with patch.object(main, '_extract_m4a') as primary, patch.object(sources, 'recover', return_value=(Path('song.m4a'), 'Song', None)) as fallback:

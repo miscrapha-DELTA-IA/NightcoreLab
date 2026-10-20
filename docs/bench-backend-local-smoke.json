@@ -1,0 +1,36 @@
+{
+  "base_host": "127.0.0.1",
+  "started_utc": "2026-10-20T03:56:21Z",
+  "measurement_scope": "HTTP client; optional process-only /proc sampling",
+  "cold_boot_to_health_seconds": 4.280999999999949,
+  "health": {
+    "status": 200,
+    "ttfb_seconds": 0.016,
+    "total_seconds": 0.016,
+    "bytes_received": 48,
+    "r2_redirect_followed": false
+  },
+  "cases": {
+    "three_minute": {
+      "status": 200,
+      "ttfb_seconds": 3.406,
+      "total_seconds": 3.406,
+      "bytes_received": 309288,
+      "r2_redirect_followed": false
+    },
+    "near_ten_minute_597s": {
+      "status": 200,
+      "ttfb_seconds": 0.016,
+      "total_seconds": 0.016,
+      "bytes_received": 309288,
+      "r2_redirect_followed": false
+    },
+    "invalid_host": {
+      "status": 400,
+      "ttfb_seconds": 0.0,
+      "total_seconds": 0.0,
+      "bytes_received": 0
+    }
+  },
+  "process_sample": null
+}
