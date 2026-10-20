@@ -1,8 +1,5 @@
 {
   "model_id": "htdemucs-v4-core-fp16-v1",
-  "release": "gnarly-htdemucs-coreml-v1",
-  "asset": "gnarly-htdemucs-coreml-v1.zip",
-  "sha256": "601adca4133f1db70caace1bbd47f1b74dffd94ae33572f6d26ac783dfa1b687",
   "license": "MIT",
   "sources": [
     "drums",
@@ -18,5 +15,8 @@
   "demucs": "4.1.0",
   "coremltools": "9.0",
   "surgery_max_error": 0.0,
-  "runtime_parity": "Required before IPA delivery"
+  "runtime_parity": "Required before IPA delivery",
+  "weights_sha256": "4551623b849263d638252fb0a07315ca042491e8d9700eb53d416253f8977caf",
+  "huggingface_repo": "adefossez/HTDemucs",
+  "huggingface_revision": "cbc8a9b1a87023b7fd74e7b3412e6321c0eab003"
 }

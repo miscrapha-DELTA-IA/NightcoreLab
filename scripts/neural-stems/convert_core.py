@@ -121,8 +121,19 @@ def main():
     # pad1d carries a data-dependent assert that torch.export refuses; the logic is unchanged.
     hd.pad1d = sc.pad1d_safe
     htd.pad1d = sc.pad1d_safe
-    from demucs.pretrained import get_model
-    model = get_model("htdemucs").models[0].eval()
+    import json
+    import pathlib
+    import yaml
+    from huggingface_hub import hf_hub_download
+    from demucs.hf import load_safetensors_model
+    manifest = json.loads((pathlib.Path(__file__).parent / "model-manifest.json").read_text())
+    repo, revision = manifest["huggingface_repo"], manifest["huggingface_revision"]
+    with open(hf_hub_download(repo, "htdemucs.yaml", revision=revision)) as source:
+        bag = yaml.safe_load(source)
+    assert len(bag["models"]) == 1
+    checkpoint = hf_hub_download(repo, bag["models"][0] + ".safetensors", revision=revision)
+    model = load_safetensors_model(checkpoint).eval()
+    assert model.sources == ["drums", "bass", "other", "vocals"]
     core = HTDemucsCore(model).eval()
 
     n = sc.SEG_SAMPLES
