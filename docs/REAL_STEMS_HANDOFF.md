@@ -92,3 +92,20 @@ IPA includes the model and Gnarly identity, then deliver build 50 or later.
 Do not deliver build 49 again and do not claim physical iPhone testing.
 Scheduled continuation exists (one-time, two hours after initial scheduling);
 pause it when work is complete to prevent duplication. Record fresh CI/PR state.
+
+## Precision investigation — 2026-10-20 19:30 UTC
+
+Head 0471689 compiled the iOS app successfully (run 39482676935). All five
+Swift DSP golden tests passed on macOS. Full neural parity failed on the fp16
+conversion: per-source NRMSE drums 0.0519, bass 0.0660, other 0.0303, vocals
+0.1700 on the seeded white-noise tensor. Correlations were 0.9873–0.9996.
+The gate remains strict (correlation >0.98 AND NRMSE <0.05 for every source).
+CPU+GPU and CPU-only produced identical results on the hosted Mac runner.
+A separate Linux reconstruction check matched PyTorch iSTFT to <1e-6.
+
+Current change preserves float32 graph precision (model identifier/cache key
+htdemucs-v4-core-fp32-v1) instead of relaxing validation. Converter now emits
+raw frequency/time golden tensors. Swift gate compares the entire STFT and,
+on failure, predicts from exact PyTorch inputs to diagnose raw branch drift.
+Next inspect CI for this change, fix any precision/conversion issues, then
+run the full IPA gate. No IPA has been delivered for build 50 yet.

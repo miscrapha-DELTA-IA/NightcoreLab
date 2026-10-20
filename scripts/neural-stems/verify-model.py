@@ -13,4 +13,7 @@ assert evidence['surgery_max_error']<1e-3
 assert hashlib.sha256(weight.read_bytes()).hexdigest()==evidence['converted_sha256']
 assert (root/'golden/mix.f32').stat().st_size==2*343980*4
 assert (root/'golden/reference.f32').stat().st_size==4*2*343980*4
+assert (root/'golden/spec-input.f32').stat().st_size==4*2048*336*4
+assert (root/'golden/spec-reference.f32').stat().st_size==4*4*2048*336*4
+assert (root/'golden/time-reference.f32').stat().st_size==4*2*343980*4
 print('Verified immutable source weights, conversion integrity and reference tensors')

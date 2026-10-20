@@ -168,13 +168,16 @@ def main():
         traceback.print_exc()
         return 2
 
-    STAGE("4. coremltools.convert (fp16)")
+    # Keep activations in float32. The all-fp16 graph introduced measurable
+    # per-source drift, especially in the quiet vocal/bass branches. Delivery
+    # uses the same strict full-waveform parity gate, without relaxed limits.
+    STAGE("4. coremltools.convert (fp32)")
     import coremltools as ct
     try:
         mlmodel = ct.convert(
             ep,
             minimum_deployment_target=ct.target.iOS18,
-            compute_precision=ct.precision.FLOAT16,
+            compute_precision=ct.precision.FLOAT32,
             convert_to="mlprogram",
         )
     except Exception:
@@ -184,7 +187,7 @@ def main():
     mlmodel.author = "Meta Platforms, Inc.; Core ML port by Nikolai Tsyrenov / Gnarly"
     mlmodel.license = "MIT"
     mlmodel.short_description = "HTDemucs v4: four real neural music sources"
-    mlmodel.user_defined_metadata["gnarly.model_id"] = "htdemucs-v4-core-fp16-v1"
+    mlmodel.user_defined_metadata["gnarly.model_id"] = manifest["model_id"]
     mlmodel.user_defined_metadata["sources"] = ",".join(model.sources)
     mlmodel.user_defined_metadata["segment_samples"] = str(n)
     mlmodel.save(out)
@@ -195,6 +198,9 @@ def main():
     fixture.mkdir(exist_ok=True)
     mix.numpy().tofile(fixture / "mix.f32")
     ref.tofile(fixture / "reference.f32")
+    spec_ri.numpy().tofile(fixture / "spec-input.f32")
+    spec_stems.numpy().tofile(fixture / "spec-reference.f32")
+    time_stems.numpy().tofile(fixture / "time-reference.f32")
     weight = pathlib.Path(out) / "Data/com.apple.CoreML/weights/weight.bin"
     evidence = {"model_id": manifest["model_id"], "source_revision": revision,
                 "source_files": manifest["source_files"], "surgery_max_error": float(err),
@@ -203,7 +209,7 @@ def main():
     if args.convert_only:
         print("CONVERTED; runtime gate must run on macOS before delivery")
         return 0
-    STAGE("5. Core ML vs PyTorch (fp16 drift)")
+    STAGE("5. Core ML vs PyTorch")
     # Reload with explicit compute units: the default (ALL) lets the Neural Engine run this
     # model, and the ANE returns garbage here — NaNs on the first prediction. Same reason the
     # iOS side must use .cpuAndGPU. See docs/GOTCHAS.md.
