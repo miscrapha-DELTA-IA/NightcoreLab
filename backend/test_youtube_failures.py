@@ -37,6 +37,31 @@ class YouTubeFailureTests(unittest.TestCase):
             self.assertEqual(main._extract_m4a("url", folder), result)
         self.assertEqual(extract.call_count, 2)
 
+    def test_web_shortcut_keeps_default_client_when_web_has_no_audio(self):
+        result = (Path("song.m4a"), "song", None)
+        with tempfile.TemporaryDirectory() as folder:
+            cookies = Path(folder) / "cookies.txt"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            with patch.object(main, "COOKIES_FILE", str(cookies)), \
+                 patch.object(main, "_extract_with", side_effect=[
+                     HTTPException(status_code=422, detail="Não foi possível obter o áudio em formato .m4a."),
+                     result]) as extract:
+                self.assertEqual(main._extract_m4a("url", folder), result)
+        self.assertEqual(extract.call_count, 2)
+        self.assertEqual(extract.call_args_list[0].args[-1], ["web"])
+        self.assertIsNone(extract.call_args_list[1].args[-1])
+
+    def test_web_shortcut_keeps_default_client_on_upstream_error(self):
+        result = (Path("song.m4a"), "song", None)
+        with tempfile.TemporaryDirectory() as folder:
+            cookies = Path(folder) / "cookies.txt"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            with patch.object(main, "COOKIES_FILE", str(cookies)), \
+                 patch.object(main, "_extract_with", side_effect=[
+                     main.yt_dlp.utils.DownloadError("Web player unavailable"), result]) as extract:
+                self.assertEqual(main._extract_m4a("url", folder), result)
+        self.assertEqual(extract.call_count, 2)
+
     def test_private_video_does_not_retry(self):
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(main, "_extract_with", side_effect=main.yt_dlp.utils.DownloadError("Private video")) as extract:
