@@ -27,6 +27,11 @@ final class AudioDownloadManager: ObservableObject {
     var backgroundCompletionHandler: (() -> Void)?
 
     private let transfers: DownloadKit.DownloadManager
+    // A non-redirecting, cookie-free session only for exchanging friend tokens.
+    // The separate background transfer never receives the long-lived credential.
+    private let ticketSession = URLSession(configuration: .ephemeral,
+                                           delegate: AccessTicketRedirectBlocker(),
+                                           delegateQueue: nil)
     private var cache = TrackAudioCache()
     private var tracks: [UUID: Track] = [:]
     private var tasks: [UUID: URLSessionDownloadTask] = [:]
@@ -242,13 +247,45 @@ final class AudioDownloadManager: ObservableObject {
         }
     }
 
+    private func accessTicket(for track: Track, server: String) async throws -> String? {
+        let token = ServerAccessTokenStore.load(for: server)
+        guard !token.isEmpty else { return nil }
+        guard var components = URLComponents(string: server),
+              components.scheme?.lowercased() == "https",
+              components.host != nil else { throw URLError(.secureConnectionFailed) }
+        components.path += "/access-ticket"
+        guard let url = components.url else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url, timeoutInterval: 25)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(token, forHTTPHeaderField: "X-Gnarly-Token")
+        request.httpBody = try JSONEncoder().encode(AccessTicketRequest(url: track.url.absoluteString))
+        let (data, response) = try await ticketSession.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        return try JSONDecoder().decode(AccessTicketReply.self, from: data).ticket
+    }
+
     private func append(_ track: Track, priority: Float) async {
-        guard var endpoint = URLComponents(string: Self.apiBaseURL) else {
+        let server = Self.apiBaseURL
+        let ticket: String?
+        do {
+            ticket = try await accessTicket(for: track, server: server)
+        } catch {
+            fail(track, message: "Convite do servidor inválido ou expirado. Confira o token em Servidor.")
+            return
+        }
+        guard var endpoint = URLComponents(string: server) else {
             fail(track, message: "Endereço do servidor inválido.")
             return
         }
         endpoint.path += "/download"
         endpoint.queryItems = [URLQueryItem(name: "url", value: track.url.absoluteString)]
+        if let ticket {
+            endpoint.queryItems?.append(URLQueryItem(name: "ticket", value: ticket))
+        }
         guard let url = endpoint.url else {
             fail(track, message: "Endereço do servidor inválido.")
             return
@@ -419,6 +456,26 @@ final class AudioDownloadManager: ObservableObject {
         let links = parts.queryItems?.filter { $0.name == "link" } ?? []
         guard links.count == 1, let link = links.first?.value else { return nil }
         return youtubeVideoURL(from: link)
+    }
+}
+
+private struct AccessTicketRequest: Encodable {
+    let url: String
+}
+
+private struct AccessTicketReply: Decodable {
+    let ticket: String
+}
+
+// Prevent a malicious/misconfigured backend from forwarding invitation headers
+// across a 301/302. This delegate is used ONLY for POST /access-ticket.
+private final class AccessTicketRedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }
 
