@@ -182,7 +182,7 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(try settledPeak(), 0.05, accuracy: 0.0001)
     }
 
-    func testDeliveryContainsAndRunsVerifiedNeuralModel() throws {
+    func testDeliveryContainsAndRunsVerifiedNeuralModel() async throws {
         let environment = ProcessInfo.processInfo.environment
         let required = environment["GNARLY_REQUIRE_NEURAL_MODEL"] == "1" ||
             environment["TEST_RUNNER_GNARLY_REQUIRE_NEURAL_MODEL"] == "1"
@@ -194,15 +194,26 @@ final class NeuralStemsRegressionTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: evidence)) as? [String: Any])
         XCTAssertEqual(json["passed"] as? Bool, true)
         XCTAssertEqual((json["sources"] as? [[String: Any]])?.count, 4)
-        // This uses the actual bundled compiled model in the iOS runtime,
-        // rather than trusting the separate macOS converter/parity process.
-        let runtime = try DemucsCoreMLModel(url: model, cpuOnly: true)
-        let channel = (0..<StemDSP.segmentSamples).map {
+        // Exercise the actual bundled model AND the app's complete worker in
+        // the iOS runtime: stereo 44.1k decode, prediction, overlap, four files,
+        // atomic cache commit and subsequent reuse without loading a model.
+        let source = try write("neural-runtime") {
             Float(0.1 * sin(2 * .pi * 440 * Double($0) / 44_100))
         }
-        let output = try runtime.separate(channel + channel)
-        XCTAssertEqual(output.count, 8 * StemDSP.segmentSamples)
-        XCTAssertTrue(output.allSatisfy { $0.isFinite })
-        XCTAssertGreaterThan(output.map { abs($0) }.max() ?? 0, 0.001)
+        let cache = folder.appendingPathComponent("runtime-cache")
+        let asset = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+            modelURL: model, progress: { _, _ in })
+        XCTAssertEqual(asset.source, .demucs)
+        XCTAssertEqual(try NeuralStemWorker.validate(asset, expectedSeconds: 2), 88_200)
+        var peak: Float = 0
+        for url in asset.urls.values {
+            let wave = try samples(url)
+            XCTAssertTrue(wave.allSatisfy { $0.isFinite })
+            peak = max(peak, wave.map { abs($0) }.max() ?? 0)
+        }
+        XCTAssertGreaterThan(peak, 0.001)
+        let cached = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+            modelURL: nil, progress: { _, _ in })
+        XCTAssertEqual(cached.urls, asset.urls)
     }
 }
