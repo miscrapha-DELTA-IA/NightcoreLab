@@ -28,3 +28,7 @@ jobs:
         run: pip install -r backend/requirements.txt pytest
       - name: Run offline unit tests
         run: python -m pytest -q backend
+      - name: Auditar vulnerabilidades de dependências Python
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit -r backend/requirements.txt
