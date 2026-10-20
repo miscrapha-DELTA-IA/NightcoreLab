@@ -388,6 +388,12 @@ struct ContentView: View {
             discoveryTracker.contextChanged(speed: Double(speed))
             applyPitch()
         }
+        .onChange(of: audio.isPreparingStems) { _, preparing in
+            if preparing {
+                discoveryAnalysisTask?.cancel()
+                discoveryAnalysisTask = nil
+            }
+        }
         .onChange(of: energyBudget.allowsNewAnalysis) { _, isAllowed in
             if !isAllowed {
                 discoveryAnalysisTask?.cancel()

@@ -2,6 +2,7 @@ import AVFoundation
 import CryptoKit
 import Foundation
 import Darwin
+import os
 import UIKit
 
 /// Serial, bounded-memory processing. Only this queue owns the model, files,
@@ -137,6 +138,7 @@ enum NeuralStemWorker {
         #endif
         progress(0.04, DemucsCoreMLModel.prefersCPU(physicalMemory: ProcessInfo.processInfo.physicalMemory)
                  ? "Carregando Demucs · modo de pouca memória…" : "Carregando Demucs…")
+        try check()
         let separator = try autoreleasepool { try DemucsCoreMLModel(url: modelURL) }
         try check()
         try separate(decodedURL, decoded: decoded, separator: separator,

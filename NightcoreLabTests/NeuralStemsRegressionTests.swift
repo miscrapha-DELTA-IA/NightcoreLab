@@ -1,6 +1,7 @@
 import AVFoundation
 import AudioToolbox
 import CoreML
+import UIKit
 import XCTest
 @testable import NightcoreLab
 
@@ -212,6 +213,23 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(try settledPeak(), 0, accuracy: 0.000001)
         gain.auAudioUnit.scheduleParameterBlock(AUEventSampleTimeImmediate, 0, 0, 0.5)
         XCTAssertEqual(try settledPeak(), 0.05, accuracy: 0.0001)
+    }
+
+    func testMemoryWarningStopsBeforeLoadingModelAndCleansPartialFiles() async throws {
+        let source = try write("memory-warning") { _ in 0.1 }
+        let cache = folder.appendingPathComponent("cancelled-cache")
+        do {
+            _ = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+                modelURL: folder.appendingPathComponent("must-not-load.mlmodelc")) { progress, _ in
+                if progress == 0.04 {
+                    NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+                }
+            }
+            XCTFail("A memory warning must stop separation before allocating the model")
+        } catch NeuralStemError.insufficientMemory {
+            let remaining = try FileManager.default.contentsOfDirectory(atPath: cache.path)
+            XCTAssertTrue(remaining.isEmpty, "Aborted separation must clean partial files and never commit corrupt stems")
+        }
     }
 
     func testDeliveryContainsAndRunsVerifiedNeuralModel() async throws {
