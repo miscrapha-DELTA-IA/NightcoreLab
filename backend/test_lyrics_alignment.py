@@ -65,7 +65,7 @@ class AlignLyricsEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_releases_audio_after_transcription(self):
         released = []
 
-        async def fake_download(_request, background_tasks):
+        async def fake_download(_request, background_tasks, **_options):
             background_tasks.add_task(lambda: released.append(True))
             return SimpleNamespace(path="song.m4a")
 
@@ -80,7 +80,7 @@ class AlignLyricsEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_releases_audio_when_alignment_is_rejected(self):
         released = []
 
-        async def fake_download(_request, background_tasks):
+        async def fake_download(_request, background_tasks, **_options):
             background_tasks.add_task(lambda: released.append(True))
             return SimpleNamespace(path="song.m4a")
 
@@ -98,7 +98,7 @@ class AlignLyricsEndpointTests(unittest.IsolatedAsyncioTestCase):
         started, finish = Event(), Event()
         released = []
 
-        async def fake_download(_request, background_tasks):
+        async def fake_download(_request, background_tasks, **_options):
             background_tasks.add_task(lambda: released.append(True))
             return SimpleNamespace(path="song.m4a")
 

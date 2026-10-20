@@ -79,12 +79,12 @@ jobs:
 
       - name: Download de ponta a ponta (.m4a)
         run: |
-          code=$(curl -s -X POST "$BASE_URL/download" \
-            -H 'Content-Type: application/json' \
-            -d "{\"url\":\"$TEST_VIDEO\"}" \
+          # GET matches iOS Background URLSession. -L follows an R2 302 as GET.
+          # Never print headers.txt: Location may contain a signed private URL.
+          code=$(curl -sSL --get "$BASE_URL/download" \
+            --data-urlencode "url=$TEST_VIDEO" \
             -D headers.txt -o audio.bin -w '%{http_code}' --max-time 300)
           echo "HTTP $code"
-          cat headers.txt
 
           if [ "$code" != "200" ]; then
             echo "Resposta do servidor:"

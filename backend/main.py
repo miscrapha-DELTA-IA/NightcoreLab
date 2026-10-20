@@ -51,10 +51,11 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 import audio_sources
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 from lyrics_alignment import AlignmentError, generate_enhanced_lrc
+from r2_cache import R2Cache, R2Config, SIGNED_URL_SECONDS
 
 MAX_DURATION_SECONDS = 600  # hard safety cap: strictly below ten minutes
 # A 512 MiB Render container defaults to one extraction; two is the hard cap.
@@ -70,6 +71,17 @@ DEPLOYED_COMMIT = os.getenv("RENDER_GIT_COMMIT", "")[:7]
 
 # Reaproveita o logger do uvicorn: as mensagens aparecem nos logs do Render.
 log = logging.getLogger("uvicorn.error")
+
+try:
+    _r2_config = R2Config.from_env()
+except ValueError as error:
+    log.warning("R2 desativado: %s", error)
+    _r2_config = None
+r2_cache = R2Cache(_r2_config) if _r2_config else None
+_r2_uploading: set[str] = set()
+_r2_upload_slots = asyncio.Semaphore(1)
+_counters = {"cache_local_hits": 0, "cache_r2_hits": 0, "r2_fallbacks": 0,
+             "r2_uploads_ok": 0, "r2_uploads_failed": 0}
 
 WORK_DIR_PREFIX = "nightcore_"
 # Pastas mais velhas que isso são restos de envios interrompidos (cliente desconectou
@@ -189,6 +201,25 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+async def _start_r2_lifecycle() -> None:
+    _sweep_stale_work_dirs()
+    await asyncio.to_thread(_prune_audio_cache)
+    if r2_cache:
+        async def configure() -> None:
+            try:
+                await r2_cache.ensure_lifecycle()
+            except Exception as error:
+                log.warning("R2 lifecycle não configurado: %s", type(error).__name__)
+        asyncio.create_task(configure())
+
+
+@app.on_event("shutdown")
+async def _close_r2() -> None:
+    if r2_cache:
+        await r2_cache.close()
+
+
 # JSON metadata API for the SwiftUI Omnibox; /search NDJSON remains backward compatible.
 app.include_router(music_search_router)
 
@@ -212,7 +243,7 @@ async def align_lyrics(request: AlignLyricsRequest):
         raise HTTPException(status_code=429, detail="Alinhamento ocupado. Tente novamente.")
     background_tasks = BackgroundTasks()
     try:
-        response = await download(DownloadRequest(url=request.url), background_tasks)
+        response = await download(DownloadRequest(url=request.url), background_tasks, redirect_cache=False)
         transcription = asyncio.create_task(asyncio.to_thread(
             generate_enhanced_lrc, Path(response.path), request.lyrics
         ))
@@ -389,10 +420,11 @@ def search(query: str = Query(min_length=1, max_length=200)):
 
 
 @app.get("/download")
-async def background_download(url: HttpUrl, background_tasks: BackgroundTasks):
+async def background_download(url: HttpUrl, background_tasks: BackgroundTasks,
+                              delivery: str = "audio"):
     """Background URLSession compatible GET, sharing the POST extraction."""
     _youtube_video_id(str(url))
-    return await download(DownloadRequest(url=url), background_tasks)
+    return await download(DownloadRequest(url=url), background_tasks, delivery=delivery)
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -413,6 +445,37 @@ def health():
         "cookies_summary": _cookies_summary(),
         "secret_files": _secret_file_names(),
     }
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+def lightweight_health():
+    """Cheap probe: no yt-dlp import, disk traversal, or upstream request."""
+    return {"status": "ok", "rss_bytes": _rss_bytes(), "r2_enabled": r2_cache is not None}
+
+
+@app.get("/warm")
+async def warm():
+    """Existing app calls / on launch; this endpoint is available for future builds."""
+    return {"status": "ok", "r2_enabled": r2_cache is not None}
+
+
+def _rss_bytes() -> int:
+    try:
+        with open("/proc/self/status", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return 0
+
+
+@app.get("/metrics")
+def metrics():
+    return {"queue_depth": len(in_flight_downloads),
+            "active_jobs": sum(not item.task.done() for item in in_flight_downloads.values()),
+            "rss_bytes": _rss_bytes(), "r2_enabled": r2_cache is not None,
+            "r2_uploading": len(_r2_uploading), **_counters}
 
 
 # Cookies que só existem numa sessão logada do Google/YouTube.
@@ -526,10 +589,63 @@ async def _release_response(video_id: str, entry: InFlightDownload) -> None:
     await _release_download(video_id, entry)
 
 
+async def _try_r2(video_id: str, delivery: str):
+    if not r2_cache:
+        return None
+    try:
+        meta = await r2_cache.find(f"{video_id}/audio.m4a")
+        if meta is None:
+            return None
+        signed = r2_cache.presigned_get(f"{video_id}/audio.m4a")
+        _counters["cache_r2_hits"] += 1
+        if delivery == "url":
+            return JSONResponse({"url": signed, "expires_in": SIGNED_URL_SECONDS},
+                                headers={"Cache-Control": "no-store"})
+        headers = {"Cache-Control": "no-store"}
+        if meta.get("thumbnail"):
+            headers["X-Cover-Url"] = meta["thumbnail"]
+        return RedirectResponse(signed, status_code=302, headers=headers)
+    except Exception as error:
+        _counters["r2_fallbacks"] += 1
+        log.warning("R2 HEAD falhou (%s): %s", video_id, type(error).__name__)
+        return None
+
+
+async def _upload_r2(video_id: str, path: Path, title: str, thumbnail: str | None) -> None:
+    try:
+        async with _r2_upload_slots:
+            assert r2_cache is not None
+            await r2_cache.put(f"{video_id}/audio.m4a", path, title, thumbnail)
+            _counters["r2_uploads_ok"] += 1
+    except Exception as error:
+        _counters["r2_uploads_failed"] += 1
+        log.warning("R2 PUT falhou (%s): %s", video_id, type(error).__name__)
+    finally:
+        _r2_uploading.discard(video_id)
+        _release_cached_reader(video_id)
+        await asyncio.to_thread(_prune_audio_cache)
+
+
+def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | None) -> None:
+    if not r2_cache or path.parent != CACHE_DIR or video_id in _r2_uploading:
+        return
+    _r2_uploading.add(video_id)
+    with _cache_lock:
+        _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
+    asyncio.create_task(_upload_r2(video_id, path, title, thumbnail))
+
+
 @app.post("/download")
-async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
+async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
+                   redirect_cache: bool = True, delivery: str = "audio"):
     url = str(request.url)
     video_id = _youtube_video_id(url)
+    if delivery not in {"audio", "url"}:
+        raise HTTPException(status_code=400, detail="Modo de entrega inválido.")
+    if redirect_cache:
+        remote = await _try_r2(video_id, delivery)
+        if remote is not None:
+            return remote
     entry = in_flight_downloads.get(video_id)
     if entry is None:
         # Pin the cache entry atomically with lookup: pruning runs under the same lock.
@@ -537,7 +653,9 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         entry = in_flight_downloads.get(video_id)
         if entry is None and hit is not None:
             audio_path, title, thumbnail, _ = hit
+            _counters["cache_local_hits"] += 1
             background_tasks.add_task(_release_cached_reader, video_id)
+            _schedule_r2_upload(video_id, audio_path, title, thumbnail)
             return _audio_response(audio_path, title, thumbnail, background_tasks)
         if hit is not None:
             _release_cached_reader(video_id)
@@ -583,6 +701,7 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks):
         with _cache_lock:
             _cache_readers[video_id] = _cache_readers.get(video_id, 0) + 1
         background_tasks.add_task(_release_cached_reader, video_id)
+        _schedule_r2_upload(video_id, audio_path, title, thumbnail)
     return _audio_response(audio_path, title, thumbnail, background_tasks)
 
 
