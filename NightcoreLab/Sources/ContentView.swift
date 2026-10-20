@@ -81,6 +81,7 @@ private enum MusicControlPage: String, CaseIterable {
 
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
+    @State private var searchSession = SearchSession()
 
     @State private var speed: Float = 1.0
     @State private var reverb: Float = 0
@@ -550,7 +551,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
                 SearchView(
-                    downloader: downloader, theme: currentTheme,
+                    downloader: downloader, session: searchSession, theme: currentTheme,
                     isEnabled: !audio.isExporting,
                     suggestedTracks: relatedVideos,
                     suggestionReasons: suggestionReasons,
@@ -639,11 +640,16 @@ struct ContentView: View {
 
     private func showKaraokeResult() {
         lyricsStore.scoring.finish()
-        guard let currentTrack else { return }
+        guard let currentTrack, let result = lyricsStore.scoring.lastResult else { return }
         let info = TrackInfo(track: currentTrack, fileName: audio.fileName,
                              coverURL: coverURL)
         karaokeSummary = KaraokeSummary(track: info,
-            snapshot: lyricsStore.scoring.snapshot, mode: lyricsStore.scoring.mode)
+            snapshot: result.snapshot, mode: result.mode)
+        if karaokeSummary != nil {
+            audio.pause()
+            lyricsStore.scoring.stop()
+            audio.endKaraokeMicrophone()
+        }
     }
 
     private func replayKaraoke() {
@@ -1536,7 +1542,7 @@ struct ContentView: View {
             playbackTransition.clearQueue(playbackQueue)
             navigationHistory.clear()
             playbackTransition.reset()
-            downloader.cancel()
+            downloader.cancelPlaybackSelection()
             resetRelatedVideos()
             applyPitch()
         } catch {

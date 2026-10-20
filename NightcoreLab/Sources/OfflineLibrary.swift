@@ -14,7 +14,9 @@ enum OfflinePreparation {
                     syncedLyrics: () async -> Bool,
                     songDNA: (URL) async throws -> Bool) async throws -> OfflineReadiness {
         let url = try await audio()
+        try Task.checkCancellation()
         let lyrics = await syncedLyrics()
+        try Task.checkCancellation()
         let analysis = try await songDNA(url)
         return OfflineReadiness(audio: true, syncedLyrics: lyrics, songDNA: analysis)
     }
@@ -30,6 +32,16 @@ final class OfflineLibrary: ObservableObject {
     @Published private(set) var phases: [String: String] = [:]
 
     private let analysisCache = MusicAnalysisCache()
+    private var savingTasks: [String: Task<Void, Never>] = [:]
+    private var savingGenerations: [String: UUID] = [:]
+
+    func cancel(_ track: Track, downloader: AudioDownloadManager) {
+        savingTasks.removeValue(forKey: track.id)?.cancel()
+        savingGenerations[track.id] = nil
+        downloader.cancelOfflineAudio(track)
+        savingIDs.remove(track.id)
+        phases[track.id] = nil
+    }
 
     func refresh(_ tracks: [Track], downloader: AudioDownloadManager,
                  lyrics: LyricsPrefetcher) {
@@ -59,7 +71,17 @@ final class OfflineLibrary: ObservableObject {
         guard savingIDs.insert(track.id).inserted else { return }
         failedIDs.remove(track.id)
         phases[track.id] = "Baixando áudio"
-        Task {
+        let generation = UUID()
+        savingGenerations[track.id] = generation
+        savingTasks[track.id] = Task {
+            defer {
+                if savingGenerations[track.id] == generation {
+                    phases[track.id] = nil
+                    savingIDs.remove(track.id)
+                    savingTasks[track.id] = nil
+                    savingGenerations[track.id] = nil
+                }
+            }
             do {
                 let meta = TrackMetadata(videoID: track.id, rawTitle: track.title,
                     channel: nil, cleanArtist: track.cleanArtist,
@@ -76,6 +98,7 @@ final class OfflineLibrary: ObservableObject {
                         let result = try await MusicIntelligenceEngine.shared.analysis(for: url)
                         return result.energyTimeline != nil && result.isTerminal
                     })
+                try Task.checkCancellation()
                 if readiness.syncedLyrics { lyricsReadyIDs.insert(track.id) }
                 if readiness.isReady {
                     readyIDs.insert(track.id)
@@ -83,10 +106,8 @@ final class OfflineLibrary: ObservableObject {
                     failedIDs.insert(track.id)
                 }
             } catch {
-                failedIDs.insert(track.id)
+                if !Task.isCancelled { failedIDs.insert(track.id) }
             }
-            phases[track.id] = nil
-            savingIDs.remove(track.id)
         }
     }
 

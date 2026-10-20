@@ -20,13 +20,13 @@ struct KaraokeScoreHUD: View {
 
     var body: some View {
         if session.isPresented {
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.mode == .off ? "MICROFONE INATIVO" : (session.mode == .passive ? "RITMO DA FAIXA · SEM MICROFONE" : (session.mode == .simulation ? "SIMULAÇÃO" : "CANTO AO VIVO")))
                             .font(.system(size: 9, weight: .bold))
                         Text(session.snapshot.totalScore, format: .number)
-                            .font(.title3.bold().monospacedDigit())
+                            .font(.subheadline.bold().monospacedDigit())
                             .contentTransition(.numericText())
                     }
                     Spacer(minLength: 4)
@@ -62,7 +62,7 @@ struct KaraokeScoreHUD: View {
                     .tint(accent)
                     .accessibilityLabel(session.mode == .passive ? "Sincronia da faixa" : "Precisão vocal")
                     .accessibilityValue("\(Int(session.snapshot.vocalAccuracy * 100)) por cento")
-                if session.snapshot.judgedVerses > 0, let onResult {
+                if (session.lastResult?.snapshot.judgedVerses ?? session.snapshot.judgedVerses) > 0, let onResult {
                     Button(action: onResult) {
                         Label("Ver Resultado", systemImage: "trophy.fill")
                             .font(.caption.weight(.semibold))
@@ -76,7 +76,7 @@ struct KaraokeScoreHUD: View {
                     KaraokeScoreSummary(snapshot: session.snapshot, simulation: session.mode != .microphone)
                 }
             }
-            .padding(12)
+            .padding(9)
             .foregroundStyle(.white)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.3)))
@@ -92,6 +92,7 @@ struct KaraokeScoreHUD: View {
                     .allowsHitTesting(false)
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: session.snapshot.totalScore)
+            .frame(maxWidth: 310)
             .padding(.horizontal, 18).padding(.top, 4)
             .accessibilityIdentifier("karaoke.scoreHUD")
             .onChange(of: session.snapshot.judgedVerses) { _, verses in
@@ -146,30 +147,35 @@ struct KaraokeScoringControls: View {
     @State private var showsError = false
 
     var body: some View {
-        Menu {
-            Button("Pontuar com microfone", systemImage: "mic.badge.plus") { startMicrophone() }
-                .disabled(requesting || store.status != .ready)
+        Button {
+            if requesting || store.scoring.mode == .microphone {
+                request?.cancel(); requesting = false
+                store.scoring.stop()
+                audio.endKaraokeMicrophone()
+            } else { startMicrophone() }
+        } label: {
+            Label(requesting ? "Cancelar" : store.scoring.mode == .microphone ? "Desligar mic" : "Ligar mic",
+                  systemImage: store.scoring.mode == .microphone ? "mic.fill" : "mic.slash")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(accent)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(store.status != .ready && !requesting && store.scoring.mode != .microphone)
+        .accessibilityLabel(store.scoring.mode == .microphone ? "Desligar microfone" : "Ligar microfone")
+        .accessibilityIdentifier("karaoke.microphoneToggle")
+        .contextMenu {
             Button("Experimentar simulação", systemImage: "play.rectangle") {
-                request?.cancel(); audio.endKaraokeMicrophone()
-                requesting = false
+                request?.cancel(); requesting = false
+                audio.endKaraokeMicrophone()
                 store.scoring.start(mode: .simulation, lines: store.lines,
                                     at: clock.lyricTime + store.sourceTimelineOffset(for: clock))
                 audio.karaokeCompletion = { [weak session = store.scoring] in session?.finish() }
             }
             .disabled(store.status != .ready)
-            Button("Desligar pontuação", systemImage: "mic.slash") {
-                request?.cancel(); requesting = false
-                audio.endKaraokeMicrophone(); store.scoring.stop()
-            }
-            Text("Use fones para evitar captar a música no microfone.")
-        } label: {
-            Image(systemName: store.scoring.mode == .off ? "trophy" : "trophy.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(accent)
-                .frame(width: 42, height: 42)
-                .background(.ultraThinMaterial, in: Circle())
         }
-        .accessibilityLabel("Pontuação do karaokê")
         .alert("Microfone indisponível", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {

@@ -119,13 +119,14 @@ actor LyricsPrefetcher {
 
     /// Escolha manual ("trocar letra"): vira definitiva para esta faixa.
     func pin(_ record: LRCLIBRecord, for videoID: String) async {
+        guard await store.trackID == videoID else { return }
         if activeID == videoID { task?.cancel() }
         var c = cache.load(videoID) ?? CachedLyricsChoice(selected: nil, score: 1, needsReview: false,
                                                            pinned: true, alternatives: [], savedAt: Date())
         c.selected = record; c.pinned = true; c.needsReview = false; c.score = 1; c.savedAt = Date()
         cache.save(c, id: videoID)
         if let lrc = record.syncedLyrics {
-            await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
+            await store.loadIfCurrent(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
         } else if let sourceURL = activeSourceURL {
             await store.loadFallback(trackID: videoID, plainText: record.plainLyrics,
                                      sourceURL: sourceURL, duration: activeDuration,
@@ -182,7 +183,7 @@ actor LyricsPrefetcher {
     private func finish(_ c: CachedLyricsChoice, _ m: TrackMetadata, _ apply: Bool) async {
         guard apply, !Task.isCancelled, activeID == m.videoID else { return }   // resultado velho de faixa anterior
         if let lrc = c.selected?.syncedLyrics {
-            await store.load(trackID: m.videoID, rawLRC: lrc,
+            await store.loadIfCurrent(trackID: m.videoID, rawLRC: lrc,
                              needsReview: c.needsReview, force: c.pinned)
         } else if let sourceURL = activeSourceURL {
             await store.loadFallback(trackID: m.videoID,

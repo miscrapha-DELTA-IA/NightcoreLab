@@ -68,7 +68,7 @@ enum DrawerSmartMix {
     ]
 
     static func resolve(history: [HistoryEntry], cached: [Track],
-                        discovery: [Track], current: Track?) -> [Track] {
+                        discovery: [Track], current: Track?, generation: Int = 0) -> [Track] {
         let ranked = history.sorted {
             let lhs = Double($0.plays + 2 * ($0.completions ?? 0) - 2 * ($0.earlySkips ?? 0))
             let rhs = Double($1.plays + 2 * ($1.completions ?? 0) - 2 * ($1.earlySkips ?? 0))
@@ -84,9 +84,32 @@ enum DrawerSmartMix {
             track.cleanTitle = title
             return track
         }
+        let recent = Set(history.sorted { $0.lastPlayed > $1.lastPlayed }.prefix(10).map { $0.hit.id })
         var seen = Set<String>()
-        return Array((ranked + cached + [current].compactMap { $0 } + discovery + fallback)
-            .filter { seen.insert($0.id).inserted }.prefix(15))
+        let pool = (cached + discovery + fallback + ranked).filter {
+            $0.id != current?.id && seen.insert($0.id).inserted
+        }
+        func rotated(_ tracks: [Track]) -> [Track] {
+            guard !tracks.isEmpty else { return [] }
+            let offset = abs(generation % tracks.count)
+            return Array(tracks.dropFirst(offset) + tracks.prefix(offset))
+        }
+        let unheard = rotated(pool.filter { !recent.contains($0.id) })
+        let familiar = rotated(pool.filter { recent.contains($0.id) })
+        let candidates = unheard + familiar
+        var output: [Track] = []
+        var artistCounts: [String: Int] = [:]
+        for track in candidates {
+            let artist = TrackFeatures(track: track).primaryArtist
+            if let artist, artistCounts[artist, default: 0] >= 3 { continue }
+            output.append(track)
+            if let artist { artistCounts[artist, default: 0] += 1 }
+            if output.count == 15 { break }
+        }
+        // Preserve a useful full mix when the local catalog has little variety.
+        let chosen = Set(output.map(\.id))
+        output += candidates.filter { !chosen.contains($0.id) }.prefix(max(0, 15 - output.count))
+        return output
     }
 }
 import Observation

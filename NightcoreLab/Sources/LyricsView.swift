@@ -124,6 +124,7 @@ struct LyricsView: View {
     }
 
     private func apply(_ selected: LyricsRecord, pin: Bool = false) {
+        guard lyricStore.trackID == track.id else { return }
         record = selected
         if let synced = selected.syncedLyrics, !synced.isEmpty {
             lyricStore.load(trackID: track.id, rawLRC: synced,
@@ -205,6 +206,8 @@ struct LyricsView: View {
                 }
                 if inline {
                     HStack {
+                        KaraokeScoringControls(store: lyricStore, audio: audio,
+                            clock: audio.lyricsClock, accent: lyricAccent)
                         Spacer(minLength: 0)
                         Button {
                             showLyricsControlCenter = true
@@ -338,13 +341,13 @@ struct LyricsView: View {
                     .padding(.horizontal, 22)
                 }
 
-                if loading {
+                if loading && (lyricStore.trackID != track.id || lyricStore.lines.isEmpty) {
                     Spacer()
                     ProgressView("Buscando letras…")
                         .tint(theme.accent)
                         .foregroundStyle(.white)
                     Spacer()
-                } else if !lyricStore.lines.isEmpty {
+                } else if lyricStore.trackID == track.id, !lyricStore.lines.isEmpty {
                     synchronizedLyrics
                 } else if lyricStore.status == .searching {
                     Spacer()
@@ -381,6 +384,7 @@ struct LyricsView: View {
             .padding(.top, inline ? 4 : 20)
         }
         .onAppear {
+            if lyricStore.trackID != track.id { lyricStore.beginLoading(trackID: track.id) }
             lyricStore.attach(clock: audio.lyricsClock)
             lyricStore.seekHandler = { position in audio.seek(to: position) }
         }
