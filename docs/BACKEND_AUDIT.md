@@ -41,6 +41,14 @@ R2 Standard inclui [10 GB-mês, 1 milhão de operações Class A, 10 milhões Cl
 
 Uma extração Swift client-side teria de reproduzir assinatura/cipher e desafios JS mutáveis do YouTube, manter cookies/PO Token e lidar com licenças e manutenção de uma biblioteca não oficial. O esforço e risco são altos; seria uma grande mudança no app e não cabe nesta alteração de backend. URLs `googlevideo` podem estar vinculadas ao IP de origem e expirar; **não foi validado** que uma URL resolvida no Render funcione na rede celular de outro IP. Assim, a entrega via cache R2 é a opção experimental de menor impacto no cliente.
 
+| Opção | Licença/manutenção observada em 20/10/2026 | Esforço/risco | RAM/CPU/banda Render |
+|---|---|---|---|
+| [alexeichhorn/YouTubeKit](https://github.com/alexeichhorn/YouTubeKit) | MIT; último commit `e5b7d03` em 18/08/2026; Swift Package sem dependências externas diretas | Integração média; API não oficial e mudanças do YouTube podem exigir update do app; o projeto oferece fallback remoto opcional | Extração passa ao iPhone; banda Render cai, mas confiabilidade do cliente é incerta |
+| [dcas796/YouTubeKit](https://github.com/dcas796/YouTubeKit) | Licença não identificada na API do GitHub; último commit `be459b6` em 31/03/2024 | Manutenção fraca e licença a verificar; risco alto | Potencialmente zero banda Render, com alto risco de quebra |
+| Servidor yt-dlp + R2 (implementado) | yt-dlp e httpx com manutenção ativa; requer credenciais R2 | Baixo impacto no app; validação de assinaturas e lifecycle necessária | Miss usa CPU/banda Render; hit usa R2 e 302 |
+
+Não foi possível testar, a partir deste checkout, uma URL `googlevideo` resolvida **no IP do Render** num **segundo IP independente** sem expor um resolvedor temporário ou a URL assinada. O teste de cross-IP permanece pendente e não fundamenta uma migração client-side. O [guia oficial do yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Po-Token-Guide) descreve dependência crescente de PO Tokens por cliente e vídeo, reforçando o risco de manter um extrator embarcado sem atualização rápida.
+
 ## Operação
 
 Preferir aquecimento via app a monitor de 5 minutos: manter um serviço gratuito acordado consome as 750 h mensais compartilhadas. Healthchecks.io, UptimeRobot ou Better Stack podem consultar `/health`, mas intervalo inferior a 15 min impede spin-down e pode consumir horas do workspace. Rotacionar o Secret File de cookies ao detectar falha de login/anti-bot; nunca publicar o conteúdo em issue/log.

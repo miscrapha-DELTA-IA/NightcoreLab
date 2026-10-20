@@ -1,0 +1,102 @@
+{
+  "base_host": "127.0.0.1",
+  "users": 20,
+  "peak": 5,
+  "duration_seconds": 0.188,
+  "p95_seconds": 0.062,
+  "error_rate": 0.0,
+  "peak_rss_bytes": 0,
+  "r2_hits_observed": 0,
+  "bytes_received": 6185760,
+  "metrics_before": {
+    "queue_depth": 0,
+    "active_jobs": 0,
+    "rss_bytes": 0,
+    "peak_rss_bytes": 0,
+    "r2_enabled": false,
+    "r2_uploading": 0,
+    "cookie_status": "missing",
+    "player_clients": {
+      "logado/web": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "logado/padrão": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "logado/tv": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "anônimo/visionos": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "anônimo/padrão": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      }
+    },
+    "failures": {},
+    "cache_local_hits": 0,
+    "cache_r2_hits": 0,
+    "r2_fallbacks": 0,
+    "r2_uploads_ok": 0,
+    "r2_uploads_failed": 0
+  },
+  "metrics_after": {
+    "queue_depth": 0,
+    "active_jobs": 0,
+    "rss_bytes": 0,
+    "peak_rss_bytes": 0,
+    "r2_enabled": false,
+    "r2_uploading": 0,
+    "cookie_status": "missing",
+    "player_clients": {
+      "logado/web": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "logado/padrão": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "logado/tv": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "anônimo/visionos": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      },
+      "anônimo/padrão": {
+        "successes": 0,
+        "consecutive_failures": 0,
+        "open_seconds": 0
+      }
+    },
+    "failures": {},
+    "cache_local_hits": 20,
+    "cache_r2_hits": 0,
+    "r2_fallbacks": 0,
+    "r2_uploads_ok": 0,
+    "r2_uploads_failed": 0
+  },
+  "status_counts": {
+    "200": 20
+  },
+  "targets_met": {
+    "error_rate_under_2_percent": true,
+    "rss_under_400_mib": null
+  }
+}
