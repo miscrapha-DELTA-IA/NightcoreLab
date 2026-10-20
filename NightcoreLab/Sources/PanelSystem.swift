@@ -105,9 +105,11 @@ enum PanelID: String, CaseIterable, Identifiable {
     case header, player, lyrics, themes, controls
     case omnibox, discover, queue, presets, export
 
-    static let discoveryPanels: [PanelID] = [.omnibox, .discover, .queue]
+    // Only the search field is independently hideable from the eye menu.
+    // Discovery results and queue remain in their existing drawer sections.
+    static let discoveryPanels: [PanelID] = [.omnibox]
     static let audioPanels: [PanelID] = [.presets, .controls]
-    static let mainPanels: [PanelID] = [.header, .player, .omnibox, .discover, .queue, .presets, .controls, .export]
+    static let mainPanels: [PanelID] = [.header, .player, .omnibox, .presets, .controls, .export]
     static let karaokePanels: [PanelID] = [.player, .lyrics, .themes]
     // Telas novas: adicione um case + título + ícone aqui.
 
@@ -157,7 +159,7 @@ enum PanelDensity: String, CaseIterable, Identifiable {
         switch self {
         case .discover: return Set(PanelID.allCases)
         case .balanced: return [.header, .player, .omnibox, .discover, .queue, .controls, .lyrics, .themes]
-        case .listen: return [.player, .presets, .controls, .lyrics, .themes]
+        case .listen: return [.player, .discover, .queue, .presets, .controls, .lyrics, .themes]
         }
     }
 }
@@ -196,6 +198,9 @@ final class PanelStore {
         for (key, id) in legacy where defaults.object(forKey: key) != nil {
             if !defaults.bool(forKey: key) { migrated.insert(id) }
         }
+        // Retire obsolete eye toggles: their saved hidden flags must not leave
+        // Discover/Queue inaccessible after the options disappear.
+        migrated.subtract([.discover, .queue])
         hidden = migrated
         // Write the merged preference BEFORE removing its legacy source.
         persist()
@@ -404,14 +409,9 @@ private struct PanelVisibilityEditor: View {
 
                 if !discoveryIDs.isEmpty {
                     HStack {
-                        Text("MÚSICAS · BUSCA E DESCOBERTA")
+                        Text("BUSCA")
                             .font(.caption2.weight(.heavy))
                             .foregroundStyle(.secondary)
-                        Spacer(minLength: 4)
-                        Button("Tudo") { store.setVisible(true, for: discoveryIDs) }
-                            .font(.caption.weight(.semibold))
-                        Button("Nada") { store.setVisible(false, for: discoveryIDs) }
-                            .font(.caption.weight(.semibold))
                     }
                     ForEach(discoveryIDs) { id in panelToggle(id) }
                     Divider()
