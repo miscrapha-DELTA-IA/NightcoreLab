@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
+import xml.etree.ElementTree as ET
 
 import httpx
 import pytest
@@ -48,6 +49,7 @@ def test_presigned_get_is_short_lived_and_private():
     assert query["X-Amz-SignedHeaders"] == ["host"]
     assert len(query["X-Amz-Signature"][0]) == 64
     assert "secret" not in url
+    assert cache.presigned_head("abcdefghijk/audio.m4a", datetime(2026, 10, 20, tzinfo=timezone.utc)) != url
 
 
 def test_head_ttl_and_hot_index():
@@ -100,12 +102,41 @@ def test_streaming_put_preserves_filename_and_content_type():
     assert seen["authorization"].startswith("AWS4-HMAC-SHA256 ")
 
 
+def test_lifecycle_merge_keeps_existing_rules():
+    namespace = "http://s3.amazonaws.com/doc/2006-03-01/"
+    prior = (f'<LifecycleConfiguration xmlns="{namespace}">'
+             '<Rule><ID>other-rule</ID><Status>Enabled</Status>'
+             '<Filter><Prefix>other/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule>'
+             '</LifecycleConfiguration>')
+    saved = {}
+    async def handle(request):
+        assert request.url.params.get("lifecycle") == ""
+        if request.method == "GET":
+            return httpx.Response(200, content=prior)
+        saved["xml"] = await request.aread()
+        return httpx.Response(200)
+    async def exercise():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        cache = R2Cache(R2Config.from_env({**BASE, "R2_ACCOUNT_ID": ACCOUNT}), client=client)
+        try:
+            assert await cache.ensure_lifecycle()
+        finally:
+            await client.aclose()
+    asyncio.run(exercise())
+    root = ET.fromstring(saved["xml"])
+    ids = [rule.findtext(f"{{{namespace}}}ID") for rule in root]
+    assert ids == ["other-rule", "gnarly-cache-seven-days"]
+    assert root[-1].findtext(f"{{{namespace}}}Expiration/{{{namespace}}}Days") == "7"
+
+
 def test_download_r2_redirect_and_local_fallback():
     class FakeR2:
         async def find(self, _key):
             return {"title": "Song", "thumbnail": "https://example.com/cover.jpg"}
         def presigned_get(self, _key):
             return "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/signed"
+        def presigned_head(self, _key):
+            return "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/signed-head"
         async def ensure_lifecycle(self):
             return True
         async def close(self):
@@ -117,6 +148,10 @@ def test_download_r2_redirect_and_local_fallback():
             assert response.status_code == 302
             assert response.headers["location"].startswith("https://")
             assert response.headers["x-cover-url"] == "https://example.com/cover.jpg"
+            head = client.head("/download?url=https://www.youtube.com/watch?v=abcdefghijk",
+                               follow_redirects=False)
+            assert head.status_code == 302
+            assert head.headers["location"].endswith("/signed-head")
             result = client.get("/download?url=https://www.youtube.com/watch?v=abcdefghijk&delivery=url")
             assert result.status_code == 200
             assert result.json()["expires_in"] == 3600
@@ -138,3 +173,10 @@ def test_download_r2_redirect_and_local_fallback():
                 response = client.get("/download?url=https://www.youtube.com/watch?v=abcdefghijk")
                 assert response.status_code == 200
                 assert response.content.startswith(b"\x00\x00")
+                ranged = client.get("/download?url=https://www.youtube.com/watch?v=abcdefghijk",
+                                    headers={"Range": "bytes=4-7"})
+                assert ranged.status_code == 206
+                assert ranged.content == b"ftyp"
+                head = client.head("/download?url=https://www.youtube.com/watch?v=abcdefghijk")
+                assert head.status_code == 200
+                assert head.content == b""

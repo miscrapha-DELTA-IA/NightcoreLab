@@ -46,6 +46,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from itertools import islice
 from urllib.parse import parse_qs, urlparse
@@ -85,9 +86,19 @@ _r2_uploading: set[str] = set()
 _r2_upload_slots = asyncio.Semaphore(1)
 _counters = {"cache_local_hits": 0, "cache_r2_hits": 0, "r2_fallbacks": 0,
              "r2_uploads_ok": 0, "r2_uploads_failed": 0}
+_failure_categories: dict[str, int] = {}
 _peak_rss_bytes = 0
 MAX_RSS_BYTES = int(os.getenv("MAX_RSS_MB", "400")) * 1024 * 1024
 _access_control = AccessControl()
+
+
+class _JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+        message = re.sub(r"https?://\S+", "[URL removida]", message)
+        message = re.sub(r"(/(?:download|align-lyrics|queue)\?)[^ ]+", r"\1[query removida]", message)
+        return json.dumps({"time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+                           "level": record.levelname, "message": message}, ensure_ascii=False)
 
 WORK_DIR_PREFIX = "nightcore_"
 # Pastas mais velhas que isso são restos de envios interrompidos (cliente desconectou
@@ -244,13 +255,17 @@ async def _search_http_cache(request: Request, call_next):
 @app.exception_handler(HTTPException)
 async def _structured_http_error(_request: Request, error: HTTPException):
     headers = error.headers or {}
-    return JSONResponse({"detail": error.detail,
-                         "code": headers.get("X-Download-Error", f"http_{error.status_code}")},
+    code = headers.get("X-Download-Error", f"http_{error.status_code}")
+    _failure_categories[code] = _failure_categories.get(code, 0) + 1
+    return JSONResponse({"detail": error.detail, "code": code},
                         status_code=error.status_code, headers=headers)
 
 
 @app.on_event("startup")
 async def _start_r2_lifecycle() -> None:
+    for logger_name in ("uvicorn.error", "uvicorn.access"):
+        for handler in logging.getLogger(logger_name).handlers:
+            handler.setFormatter(_JsonLogFormatter())
     _sweep_stale_work_dirs()
     await asyncio.to_thread(_prune_audio_cache)
     if r2_cache:
@@ -475,6 +490,12 @@ async def background_download(url: HttpUrl, background_tasks: BackgroundTasks,
     return await download(DownloadRequest(url=url), background_tasks, delivery=delivery)
 
 
+@app.head("/download")
+async def background_download_head(url: HttpUrl, background_tasks: BackgroundTasks):
+    _youtube_video_id(str(url))
+    return await download(DownloadRequest(url=url), background_tasks, r2_method="HEAD")
+
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def health():
     """Health check. Aceita HEAD para monitores de uptime; também 'acorda' o Render."""
@@ -523,11 +544,17 @@ def _rss_bytes() -> int:
 
 @app.get("/metrics")
 def metrics():
+    cookie = _cookies_summary()
+    cookie_status = ("missing" if not cookie.get("found") else
+                     "invalid" if not cookie.get("netscape_header") or not cookie.get("youtube_domain") else
+                     "logged_in" if cookie.get("logged_in") else "present")
     return {"queue_depth": len(in_flight_downloads),
             "active_jobs": sum(not item.task.done() for item in in_flight_downloads.values()),
             "rss_bytes": _rss_bytes(), "peak_rss_bytes": _peak_rss_bytes,
             "r2_enabled": r2_cache is not None,
-            "r2_uploading": len(_r2_uploading), **_counters}
+            "r2_uploading": len(_r2_uploading), "cookie_status": cookie_status,
+            "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
+            **_counters}
 
 
 @app.get("/queue")
@@ -659,14 +686,15 @@ async def _release_response(video_id: str, entry: InFlightDownload) -> None:
     await _release_download(video_id, entry)
 
 
-async def _try_r2(video_id: str, delivery: str):
+async def _try_r2(video_id: str, delivery: str, method: str = "GET"):
     if not r2_cache:
         return None
     try:
         meta = await r2_cache.find(f"{video_id}/audio.m4a")
         if meta is None:
             return None
-        signed = r2_cache.presigned_get(f"{video_id}/audio.m4a")
+        signed = (r2_cache.presigned_head(f"{video_id}/audio.m4a") if method == "HEAD"
+                  else r2_cache.presigned_get(f"{video_id}/audio.m4a"))
         _counters["cache_r2_hits"] += 1
         if delivery == "url":
             return JSONResponse({"url": signed, "expires_in": SIGNED_URL_SECONDS},
@@ -707,13 +735,13 @@ def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | 
 
 @app.post("/download")
 async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
-                   redirect_cache: bool = True, delivery: str = "audio"):
+                   redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET"):
     url = str(request.url)
     video_id = _youtube_video_id(url)
     if delivery not in {"audio", "url"}:
         raise HTTPException(status_code=400, detail="Modo de entrega inválido.")
     if redirect_cache:
-        remote = await _try_r2(video_id, delivery)
+        remote = await _try_r2(video_id, delivery, r2_method)
         if remote is not None:
             return remote
     entry = in_flight_downloads.get(video_id)
@@ -875,6 +903,37 @@ _RETRYABLE = (
     "failed to extract any player response",
     "this content isn't available",
 )
+_strategy_lock = threading.Lock()
+_strategy_failures: dict[str, int] = {}
+_strategy_disabled_until: dict[str, float] = {}
+_strategy_successes: dict[str, int] = {}
+
+
+def _strategy_available(label: str) -> bool:
+    with _strategy_lock:
+        return _strategy_disabled_until.get(label, 0) <= time.monotonic()
+
+
+def _strategy_outcome(label: str, succeeded: bool, retryable: bool = False) -> None:
+    with _strategy_lock:
+        if succeeded:
+            _strategy_failures.pop(label, None)
+            _strategy_disabled_until.pop(label, None)
+            _strategy_successes[label] = _strategy_successes.get(label, 0) + 1
+        elif retryable:
+            failures = _strategy_failures.get(label, 0) + 1
+            _strategy_failures[label] = failures
+            if failures >= 3:
+                _strategy_disabled_until[label] = time.monotonic() + 300
+
+
+def _circuit_snapshot() -> dict:
+    with _strategy_lock:
+        now = time.monotonic()
+        return {label: {"successes": _strategy_successes.get(label, 0),
+                        "consecutive_failures": _strategy_failures.get(label, 0),
+                        "open_seconds": max(0, int(_strategy_disabled_until.get(label, 0) - now))}
+                for label, _, _ in _STRATEGIES}
 
 
 def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
@@ -882,6 +941,8 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
     has_cookies = bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE)
     if has_cookies:
         summary = _cookies_summary()
+        if not summary.get("netscape_header") or not summary.get("youtube_domain"):
+            log.warning("Secret File de cookies inválido ou sem domínio YouTube; rotacione o arquivo")
         log.info("cookies: %s entradas, youtube=%s, logado=%s (%s)",
                  summary.get("entries"), summary.get("youtube_domain"),
                  summary.get("logged_in"), ", ".join(summary.get("login_cookies", [])) or "nenhum")
@@ -889,6 +950,12 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         log.info("sem cookies (COOKIES_FILE=%r)", COOKIES_FILE)
 
     strategies = [s for s in _STRATEGIES if has_cookies or not s[1]]
+    ready = [s for s in strategies if _strategy_available(s[0])]
+    if ready:
+        strategies = ready
+    elif strategies:
+        # Keep one path available after a shared upstream outage.
+        strategies = [min(strategies, key=lambda s: _strategy_disabled_until.get(s[0], 0))]
     last_error: yt_dlp.utils.DownloadError | None = None
 
     for index, (label, use_cookies, clients) in enumerate(strategies):
@@ -896,11 +963,13 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         os.makedirs(attempt_dir)
         try:
             result = _extract_with(url, attempt_dir, label, use_cookies, clients)
+            _strategy_outcome(label, True)
             log.info("estratégia que funcionou: %s", label)
             return result
         except yt_dlp.utils.DownloadError as error:
             last_error = error
             message = str(error)
+            _strategy_outcome(label, False, any(marker in message.lower() for marker in _RETRYABLE))
             _check_youtube_cooldown()
             log.warning("estratégia %s falhou: %s", label, _redact_media_urls(message)[:300])
             if "private video" in message.lower() or (label != "logado/web" and
@@ -911,6 +980,7 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
             # original multi-client strategy for that video.
             if label != "logado/web" or error.status_code != 422 or error.detail != "Não foi possível obter o áudio em formato .m4a.":
                 raise
+            _strategy_outcome(label, False, True)
             log.warning("estratégia %s sem áudio m4a; tentando clientes padrão", label)
 
     assert last_error is not None

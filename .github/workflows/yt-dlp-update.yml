@@ -1,0 +1,79 @@
+name: Weekly yt-dlp update check
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 9 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Consultar versão estável publicada no PyPI
+        id: version
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, pathlib, re, urllib.request, os
+          path = pathlib.Path('backend/requirements.txt')
+          body = path.read_text()
+          current = re.search(r'^yt-dlp\[default\]==([0-9.]+)$', body, re.M).group(1)
+          with urllib.request.urlopen('https://pypi.org/pypi/yt-dlp/json', timeout=15) as reply:
+              latest = json.load(reply)['info']['version']
+          if not re.fullmatch(r'[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}', latest):
+              raise SystemExit('Versão inesperada no PyPI')
+          changed = latest != current
+          if changed:
+              path.write_text(body.replace(f'yt-dlp[default]=={current}', f'yt-dlp[default]=={latest}'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'changed={str(changed).lower()}\nversion={latest}\n')
+          PY
+      - name: Instalar e testar contratos offline
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          pip install -r backend/requirements.txt pytest
+          python -m pytest -q backend
+      - name: Smoke local de extração M4A
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          cd backend
+          uvicorn main:app --host 127.0.0.1 --port 8765 >/tmp/gnarly-smoke.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8765/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsSL --get http://127.0.0.1:8765/download \
+            --data-urlencode 'url=https://www.youtube.com/watch?v=jNQXAC9IVRw' \
+            --max-time 240 -o /tmp/gnarly-smoke.m4a
+          test "$(stat -c %s /tmp/gnarly-smoke.m4a)" -gt 20000
+          head -c 12 /tmp/gnarly-smoke.m4a | tail -c 8 | grep -qa ftyp
+      - name: Commitar bump aprovado pelos testes e abrir PR
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          branch=chore/yt-dlp-weekly
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$branch"
+          git add backend/requirements.txt
+          git commit -m "Atualizar yt-dlp para ${{ steps.version.outputs.version }} [skip ios]"
+          git push --force-with-lease origin "$branch"
+          if ! gh pr view "$branch" >/dev/null 2>&1; then
+            gh pr create --base main --head "$branch" \
+              --title "Atualizar yt-dlp para ${{ steps.version.outputs.version }}" \
+              --body "Bump semanal após pytest offline e smoke local M4A. Revisar antes de mesclar. [skip ios]"
+          fi

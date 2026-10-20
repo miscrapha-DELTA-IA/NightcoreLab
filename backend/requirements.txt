@@ -1,9 +1,8 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
-# Sem versão fixa de propósito: o YouTube muda com frequência e só versões
-# recentes do yt-dlp continuam funcionando. Faça redeploy para atualizar.
+# Pin reproduzível. O workflow semanal testa a nova versão e abre PR de bump.
 # [default] inclui o yt-dlp-ejs, que o YouTube exige desde a versão 2025.11.12.
-yt-dlp[default]
+yt-dlp[default]==2026.8.19
 # Runtime de JavaScript usado pelo yt-dlp para o YouTube (binário oficial do Deno no PyPI).
 deno
 # Bundle de autoridades certificadoras para validação TLS.

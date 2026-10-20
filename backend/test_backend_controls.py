@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -82,3 +84,12 @@ def test_json_search_etag_and_scoped_gzip():
             again = client.get("/v1/search?q=abc", headers={"If-None-Match": first.headers["etag"]})
             assert again.status_code == 304
             assert again.content == b""
+
+
+def test_structured_log_redacts_signed_urls_and_query_tokens():
+    record = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1,
+        'GET /download?access_token=secret HTTP/1.1 media https://r2.example/file?X-Amz-Signature=secret',
+        (), None)
+    payload = json.loads(main._JsonLogFormatter().format(record))
+    assert payload["level"] == "INFO"
+    assert "secret" not in payload["message"]

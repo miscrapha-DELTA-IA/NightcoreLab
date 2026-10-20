@@ -138,6 +138,10 @@ class R2Cache:
         return self._sign("GET", self._path(key), {}, {}, _EMPTY_HASH,
                           now or datetime.now(timezone.utc), presign=True)[0]
 
+    def presigned_head(self, key: str, now: datetime | None = None) -> str:
+        return self._sign("HEAD", self._path(key), {}, {}, _EMPTY_HASH,
+                          now or datetime.now(timezone.utc), presign=True)[0]
+
     def _remember(self, key: str, last_modified: float, meta: dict[str, str]) -> None:
         self._hot[key] = (last_modified, meta)
         self._hot.move_to_end(key)
