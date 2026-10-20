@@ -725,7 +725,9 @@ def _extract_with(url: str, work_dir: str, label: str,
         "no_warnings": False,
         "logger": _YtdlpLog(label),
         "noprogress": True,
-        "cachedir": False,           # nada persistido fora da pasta temporária
+        # Reuse YouTube player signatures between songs while this free instance is awake.
+        # The directory is ephemeral, like the audio cache, and stores no song files.
+        "cachedir": str(CACHE_DIR / "yt_dlp"),
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,
@@ -744,7 +746,9 @@ def _extract_with(url: str, work_dir: str, label: str,
         ydl_opts["cookiefile"] = _prepare_cookies(work_dir)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        metadata_started = time.monotonic()
         info = ydl.extract_info(url, download=False)
+        metadata_seconds = time.monotonic() - metadata_started
 
         if info.get("is_live"):
             raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
@@ -755,7 +759,10 @@ def _extract_with(url: str, work_dir: str, label: str,
                 detail="Duração desconhecida ou faixa de 10 minutos ou mais. Download bloqueado.",
             )
 
+        audio_started = time.monotonic()
         ydl.process_ie_result(info, download=True)
+        log.info("yt-dlp [%s]: metadados %.1fs, download/conversão %.1fs",
+                 label, metadata_seconds, time.monotonic() - audio_started)
 
     files = sorted(Path(work_dir).glob("*.m4a"))
     if not files:
