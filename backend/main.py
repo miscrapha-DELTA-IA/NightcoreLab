@@ -222,8 +222,17 @@ app = FastAPI(
 @app.middleware("http")
 async def _limit_heavy_requests(request: Request, call_next):
     if request.url.path in {"/download", "/align-lyrics"}:
-        token = request.headers.get("X-Gnarly-Token") or request.query_params.get("access_token")
-        failure = _access_control.check(token, request.client.host if request.client else "unknown")
+        client_ip = request.client.host if request.client else "unknown"
+        ticket = request.query_params.get("ticket") if request.url.path == "/download" else None
+        if ticket:
+            try:
+                video_id = _youtube_video_id(request.query_params.get("url", ""))
+            except HTTPException as error:
+                return JSONResponse({"detail": error.detail}, status_code=error.status_code)
+            failure = _access_control.check_ticket(ticket, client_ip, video_id)
+        else:
+            token = request.headers.get("X-Gnarly-Token") or request.query_params.get("access_token")
+            failure = _access_control.check(token, client_ip)
         if failure:
             status, message, retry = failure
             headers = {"Retry-After": str(retry)} if retry else {}
@@ -385,6 +394,26 @@ def _related_entries(info: dict, seed_id: str) -> list[RelatedVideo]:
         if len(videos) == RELATED_LIMIT:
             break
     return videos
+
+
+class AccessTicketRequest(BaseModel):
+    url: HttpUrl
+
+
+@app.post("/access-ticket")
+def access_ticket(payload: AccessTicketRequest, request: Request):
+    """Token stays on the initial HTTPS POST; URLSession redirects get only the
+    single-use ticket, never the long-lived friend credential."""
+    video_id = _youtube_video_id(str(payload.url))
+    token = request.headers.get("X-Gnarly-Token")
+    client_ip = request.client.host if request.client else "unknown"
+    ticket, failure = _access_control.issue_ticket(token, client_ip, video_id)
+    if failure:
+        status, message, retry = failure
+        headers = {"Retry-After": str(retry)} if retry else {}
+        return JSONResponse({"detail": message}, status_code=status, headers=headers)
+    return JSONResponse({"ticket": ticket, "expires_in": 180},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/related", response_model=list[RelatedVideo])
