@@ -50,3 +50,45 @@ Task resumption: inspect latest branch files/commits, PR and workflow runs first
 do not overwrite newer work. Continue incomplete implementation and validation.
 If status is COMPLETE and the correct IPA is already delivered, do not duplicate.
 Update this checkpoint at each milestone, commit/push it before ending a turn.
+
+## Integration milestone — 2026-10-20
+
+User confirmed iPhone-only, to distribute to colleagues; zero paid services.
+The neural feature needs iOS 18+, while the rest of the app keeps its iOS 17 target.
+
+Implemented but not delivery-validated at this milestone:
+- Real Core ML model reader with strided fp16 outputs, Accelerate DSP and golden tests.
+- NeuralStemWorker: cancellable serial streaming decode, normalization, chunked
+  inference, overlap-add, four Float32 WAVs, content-hash/model-version cache.
+- Four real players and independent scalar gains in the existing engine;
+  common host-time start, pause/seek/EOF handling, original source at all 100%.
+- Actual stem assets frozen into Audio/Performance/Story export.
+- Prepare/progress/cancel UI; sliders enabled only when actual stems are ready.
+- Five integration/format/delivery tests, plus five ported DSP golden tests.
+
+Local conversion succeeded: torch 2.12.0+cpu, demucs 4.1.0, coremltools 9.0;
+surgery max error 0.0. Core ML package ~101 MiB. Runtime parity is still mandatory.
+Pinned source: adefo/HTDemucs (actual full repo/revision and source SHA256 values
+are in scripts/neural-stems/model-manifest.json).
+
+Model build is entirely CI-managed, WITHOUT a private release download or any
+API secret in the IPA. A local `gh release create` asset-upload attempt failed
+with credentials error; no usable model release exists. Do not retry that path.
+Reusable neural-stems.yml converts on Ubuntu, uploads a workflow artifact,
+then runs the complete Swift/Core ML versus PyTorch gate on macOS. ios.yml now
+requires this reusable job and embeds its verified compiled-model artifact.
+
+Prior CI troubleshooting:
+- 39477030656: obsolete attempt to download missing private release.
+- 39478978490: rejected a cross-host converted-weight byte hash. Fixed by pinning
+  original safetensors/config SHA256, per-build conversion integrity, plus the
+  independent full-sample numerical parity gate (MIL packing order can vary).
+- 39480090168: model conversion passed; Swift package manifest rejected .v15
+  under tools-version 5.9. Fixed using .macOS("15.0") in commit dd990b3.
+
+NEXT: inspect newest CI run after dd990b3, resolve actual Swift/runtime issues;
+run the app's full PR gates, fix any playback/resampling tests, verify the final
+IPA includes the model and Gnarly identity, then deliver build 50 or later.
+Do not deliver build 49 again and do not claim physical iPhone testing.
+Scheduled continuation exists (one-time, two hours after initial scheduling);
+pause it when work is complete to prevent duplication. Record fresh CI/PR state.

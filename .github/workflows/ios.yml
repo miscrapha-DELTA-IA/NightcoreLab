@@ -24,6 +24,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
+  neural-model:
+    if: >-
+      ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_name == 'stage-20b-vocal-fx-loops-experiments') || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
+    uses: ./.github/workflows/neural-stems.yml
+
   fast-check:
     name: Fast Check — compile, smoke suites and visual contract
     if: >-
@@ -74,6 +79,9 @@ jobs:
 
   build:
     name: build
+    needs: neural-model
+    env:
+      TEST_RUNNER_GNARLY_REQUIRE_NEURAL_MODEL: "1"
     # Manual dispatch can force the entire delivery gate on any branch.
     # Explicit Stage 20B.1 recovery push also runs the full iPhoneOS IPA gate,
     # rather than hiding it behind the exploration-only fast lane.
@@ -92,6 +100,16 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Gnarly-Neural-Model
+          path: NightcoreLab/Resources/NeuralStems
+
+      - name: Require verified on-device separation model
+        run: |
+          test -d NightcoreLab/Resources/NeuralStems/htdemucs_core.mlmodelc
+          python3 -c 'import json; p=json.load(open("NightcoreLab/Resources/NeuralStems/neural-parity.json")); assert p["passed"] and len(p["sources"]) == 4'
 
       - name: Instalar XcodeGen
         run: brew install xcodegen

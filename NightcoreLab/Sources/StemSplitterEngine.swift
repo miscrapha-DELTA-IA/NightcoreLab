@@ -8,7 +8,7 @@ enum StemKind: String, CaseIterable, Codable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .vocal: return "🎤 Voz"
-        case .instrumental: return "🎸 Instrumental"
+        case .instrumental: return "🎸 Outros instrumentos"
         case .drums: return "🥁 Bateria"
         case .bass: return "🔊 Baixo"
         }

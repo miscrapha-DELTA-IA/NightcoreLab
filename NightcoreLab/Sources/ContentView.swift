@@ -363,6 +363,9 @@ struct ContentView: View {
             if !enabled { TelemetryManager.shared.discardPending() }
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase != .active, audio.isPreparingStems {
+                audio.cancelStemPreparation(message: "Separação interrompida ao sair do app. Toque em Separar para tentar novamente.")
+            }
             if phase == .background {
                 if let currentTrack {
                     playbackTransition.saveSession(currentTrack, position: audio.playbackTime)

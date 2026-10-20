@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import AudioToolbox
 import MediaPlayer
 import Observation
@@ -63,6 +64,10 @@ struct StoryAudioSource: Sendable {
     let url: URL
     let settings: RenderSettings
     let stemLevels: [StemKind: Float]?
+    let stemAsset: StemAsset?
+    init(url: URL, settings: RenderSettings, stemLevels: [StemKind: Float]?, stemAsset: StemAsset? = nil) {
+        self.url = url; self.settings = settings; self.stemLevels = stemLevels; self.stemAsset = stemAsset
+    }
 }
 
 // MARK: - AudioEngineManager
@@ -110,7 +115,19 @@ final class AudioEngineManager {
     private let player = AVAudioPlayerNode()
     private let centerCutPlayer = AVAudioPlayerNode()
     /// In-process render effect; the original player remains the transport.
-    private let stemMaskNode = InstantStemAudioUnit.makeNode()
+    private let stemMaskNode = StemGainAudioUnit.makeNode(initialGain: 1)
+    @ObservationIgnored private let neuralStems = NeuralStemPlayback()
+    @ObservationIgnored private var stemPreparationTask: Task<Void, Never>?
+    @ObservationIgnored private var stemPreparationID = UUID()
+    private(set) var isPreparingStems = false
+    private(set) var stemPreparationProgress = 0.0
+    private(set) var stemPreparationMessage = ""
+    private(set) var stemPreparationError: String?
+    var hasNeuralStemModel: Bool {
+        if #available(iOS 18, *) { return NeuralStemWorker.bundledModel != nil }
+        return false
+    }
+    var hasStemSource: Bool { sourceURL != nil }
     private(set) var stemMixEnabled = false
     private(set) var stemLevels: [StemKind: Float] = Dictionary(
         uniqueKeysWithValues: StemKind.allCases.map { ($0, 1) })
@@ -187,7 +204,7 @@ final class AudioEngineManager {
 
     /// Ordem da cadeia, usada para attach e para desconectar ao trocar de música.
     private var processingNodes: [AVAudioNode] {
-        let sources: [AVAudioNode] = [player, centerCutPlayer]
+        let sources: [AVAudioNode] = [player, centerCutPlayer] + neuralStems.nodes
         return sources +
             [upmix, varispeed, timePitch, bassEQ, stemMaskNode,
              reverbNode, performanceMixer, limiter]
@@ -259,6 +276,8 @@ final class AudioEngineManager {
     // MARK: Carregar arquivo
 
     func load(url: URL, preparedFile: AVAudioFile? = nil) throws {
+        cancelStemPreparation()
+        neuralStems.clear()
         stemMixEnabled = false
         stemsAvailable = false
         stemSource = nil
@@ -308,9 +327,10 @@ final class AudioEngineManager {
                           fileFormat: file.processingFormat, graphFormat: graphFormat,
                           performanceMixer: performanceMixer, stemMask: stemMaskNode)
         engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
+        neuralStems.connect(engine: engine, mixer: upmix)
         centerCutPlayer.volume = 0
-        stemsAvailable = true
-        stemSource = .spectral
+        stemsAvailable = false
+        stemSource = nil
         player.volume = 1
         padRuntime.connect(to: engine, mixer: performanceMixer)
         // No mic FX wiring during load/prepare/offline tests. It is done on
@@ -472,6 +492,7 @@ final class AudioEngineManager {
         lyricsClock.didPause(at: position)
         isPlaying = false
         player.stop()
+        neuralStems.stop()
         needsScheduling = true
         scheduledStartTime = position
         removeVisualMeterTap()
@@ -786,8 +807,11 @@ final class AudioEngineManager {
                 if centerCutEnabled { scheduleCenterCut(startingAt: lastKnownTime) }
             }
             lyricsClock.refreshOutputLatency()
-            player.play()
-            if centerCutEnabled, centerCutFile != nil { centerCutPlayer.play() }
+            let anchor = neuralStems.asset == nil ? nil :
+                AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.03))
+            player.play(at: anchor)
+            neuralStems.play(at: anchor)
+            if centerCutEnabled, centerCutFile != nil { centerCutPlayer.play(at: anchor) }
             interruptedSourceURL = nil
             isPlaying = true
             setupNowPlaying()
@@ -802,7 +826,15 @@ final class AudioEngineManager {
         lastKnownTime = currentTime   // captura antes de pausar, enquanto lastRenderTime é válido
         lyricsClock.didPause(at: lastKnownTime)
         player.pause()
+        neuralStems.pause()
         centerCutPlayer.pause()
+        if neuralStems.asset != nil {
+            // Re-anchor every source on resume rather than accumulating up to
+            // one render quantum of skew between sequential pause calls.
+            scheduleGeneration += 1
+            player.stop(); neuralStems.stop(); centerCutPlayer.stop()
+            scheduledStartTime = lastKnownTime; needsScheduling = true
+        }
         isPlaying = false
         setupNowPlaying()
         scheduleIdleStop()
@@ -829,6 +861,7 @@ final class AudioEngineManager {
             // Capture happened at pause/seek, before invalidating node time.
             self.scheduleGeneration += 1
             self.player.stop()
+            self.neuralStems.stop()
             self.engine.stop()
             self.needsScheduling = true
             self.scheduledStartTime = self.lastKnownTime
@@ -852,6 +885,7 @@ final class AudioEngineManager {
         let shouldResume = isPlaying
         scheduleGeneration += 1
         player.stop()
+        neuralStems.stop()
         centerCutPlayer.stop()
         isPlaying = false
         lastKnownTime = target
@@ -949,11 +983,71 @@ final class AudioEngineManager {
 
     /// Immediate AU parameter events. The AU applies each change to the live
     /// render stream with a 50 ms sample ramp; no file preparation or reschedule.
+    private var usesPreparedStemMix: Bool {
+        stemMixEnabled && neuralStems.asset != nil &&
+            StemKind.allCases.contains { (stemLevels[$0] ?? 1) != 1 }
+    }
     private func sendStemParameters() {
-        for (address, kind) in StemKind.allCases.enumerated() {
-            let level = stemMixEnabled ? (stemLevels[kind] ?? 1) : 1
-            stemMaskNode.auAudioUnit.scheduleParameterBlock(
-                AUEventSampleTimeImmediate, 0, AUParameterAddress(address), level)
+        let usesStems = usesPreparedStemMix
+        // All 100% is the original recording. A changed mix is the four actual
+        // neural files; neither path uses InstantStemMasker's approximation.
+        stemMaskNode.auAudioUnit.scheduleParameterBlock(AUEventSampleTimeImmediate, 0, 0, usesStems ? 0 : 1)
+        neuralStems.setLevels(stemLevels, enabled: usesStems)
+    }
+
+    func cancelStemPreparation(message: String = "") {
+        stemPreparationID = UUID()
+        stemPreparationTask?.cancel(); stemPreparationTask = nil
+        isPreparingStems = false; stemPreparationProgress = 0
+        stemPreparationMessage = message; stemPreparationError = nil
+    }
+
+    func prepareNeuralStems() {
+        guard let sourceURL, !isExporting, !isPreparingStems else { return }
+        guard hasNeuralStemModel else {
+            stemPreparationError = "A separação neural precisa de iOS 18 ou superior e do modelo incluído no app."
+            return
+        }
+        let request = UUID(), revision = playbackSourceRevision
+        stemPreparationID = request
+        isPreparingStems = true; stemPreparationProgress = 0; stemPreparationError = nil
+        stemPreparationMessage = "Preparando separação…"
+        let lease = UIApplication.shared.beginBackgroundTask(withName: "Finalizar separação") { [weak self] in
+            Task { @MainActor in self?.cancelStemPreparation() }
+        }
+        stemPreparationTask = Task { [weak self] in
+            defer { if lease != .invalid { UIApplication.shared.endBackgroundTask(lease) } }
+            do {
+                let asset = try await NeuralStemWorker.prepare(source: sourceURL) { [weak self] value, message in
+                    Task { @MainActor in
+                        guard let self, self.stemPreparationID == request,
+                              self.playbackSourceRevision == revision else { return }
+                        self.stemPreparationProgress = value; self.stemPreparationMessage = message
+                    }
+                }
+                try Task.checkCancellation()
+                guard let self, self.stemPreparationID == request,
+                      self.playbackSourceRevision == revision, self.sourceURL == sourceURL,
+                      let file = self.audioFile else { return }
+                let position = self.currentTime, resume = self.isPlaying
+                try self.neuralStems.load(asset, seconds: self.duration)
+                self.scheduleGeneration += 1
+                self.player.stop(); self.centerCutPlayer.stop()
+                self.isPlaying = false
+                self.lastKnownTime = position
+                self.schedule(file, startingAt: position)
+                if self.centerCutEnabled { self.scheduleCenterCut(startingAt: position) }
+                self.stemsAvailable = true; self.stemSource = .demucs
+                self.sendStemParameters()
+                if resume { self.play() }
+                self.isPreparingStems = false; self.stemPreparationProgress = 1
+                self.stemPreparationMessage = "Stems reais prontos · Demucs"
+                self.stemPreparationTask = nil
+            } catch {
+                guard let self, self.stemPreparationID == request else { return }
+                self.isPreparingStems = false; self.stemPreparationTask = nil
+                if !(error is CancellationError) { self.stemPreparationError = error.localizedDescription }
+            }
         }
     }
 
@@ -1033,13 +1127,15 @@ final class AudioEngineManager {
 
         let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb, bass: bass,
                                       reverbPresetRaw: Self.defaultReverbPreset.rawValue)
+        let frozen = try storyAudioSource()
         let progress: @Sendable (Double) -> Void = { [weak self] value in
             Task { @MainActor in self?.exportProgress = value }
         }
 
         let url = try await Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: sourceURL, settings: settings,
-                                   format: format, progress: progress)
+                                   format: format, progress: progress,
+                                   stemLevels: frozen.stemLevels, stemAsset: frozen.stemAsset)
         }.value
 
         exportProgress = 1
@@ -1060,10 +1156,12 @@ final class AudioEngineManager {
         defer { isExporting = false }
         let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb,
                                       bass: bass, reverbPresetRaw: Self.defaultReverbPreset.rawValue)
+        let frozen = try storyAudioSource()
         let task = Task.detached(priority: .userInitiated) {
             try Self.renderOffline(source: sourceURL, settings: settings,
                                    format: format, progress: { _ in },
-                                   performance: timeline)
+                                   performance: timeline, stemLevels: frozen.stemLevels,
+                                   stemAsset: frozen.stemAsset)
         }
         let url = try await withTaskCancellationHandler {
             try await task.value
@@ -1081,7 +1179,8 @@ final class AudioEngineManager {
         let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb, bass: bass,
                                       reverbPresetRaw: Self.defaultReverbPreset.rawValue)
         return StoryAudioSource(url: sourceURL, settings: settings,
-                                stemLevels: stemMixEnabled ? stemLevels : nil)
+                                stemLevels: usesPreparedStemMix ? stemLevels : nil,
+                                stemAsset: usesPreparedStemMix ? neuralStems.asset : nil)
     }
 
     /// Standalone offline graph. Does not seek, pause or replace the live player.
@@ -1094,7 +1193,7 @@ final class AudioEngineManager {
                                    format: .m4a, progress: { _ in },
                                    startTime: startTime, maxDuration: duration,
                                    performance: performance,
-                                   stemLevels: source.stemLevels, fadeEdges: true)
+                                   stemLevels: source.stemLevels, stemAsset: source.stemAsset, fadeEdges: true)
         }
         // Detached tasks do not inherit cancellation automatically.
         // Pressing Cancel must stop offline DSP rather than leaving the CPU busy.
@@ -1120,6 +1219,7 @@ final class AudioEngineManager {
                                at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in self?.playbackFinished(generation: generation) }
         }
+        neuralStems.schedule(at: start)
         needsScheduling = false
     }
 
@@ -1128,6 +1228,7 @@ final class AudioEngineManager {
         guard !isReconfiguringGraph, generation == scheduleGeneration else { return }
         karaokeCompletion?()
         player.stop()
+        neuralStems.stop()
         centerCutPlayer.stop()
         // Pads are an independent performance surface: ending the song must
         // not choke a cymbal or 808 that the user is still hearing.
@@ -1145,6 +1246,7 @@ final class AudioEngineManager {
         cancelIdleStop()
         scheduleGeneration += 1
         player.stop()
+        neuralStems.stop()
         centerCutPlayer.stop()
         needsScheduling = true
         isPlaying = false
@@ -1591,6 +1693,7 @@ final class AudioEngineManager {
                                                   maxDuration: TimeInterval? = nil,
                                                   performance: PerformanceTimeline? = nil,
                                                   stemLevels: [StemKind: Float]? = nil,
+                                                  stemAsset: StemAsset? = nil,
                                                   fadeEdges: Bool = false) throws -> URL {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let sourceRate = file.processingFormat.sampleRate
@@ -1629,8 +1732,11 @@ final class AudioEngineManager {
         let reverb = makeReverb()
         let limiter = makeLimiter()
         [player, upmix, varispeed, timePitch, eq, reverb, limiter].forEach { engine.attach($0) }
-        let stemMask = stemLevels.map { _ in InstantStemAudioUnit.makeNode() }
-        if let stemMask { engine.attach(stemMask) }
+        let realStems = stemAsset == nil || stemLevels == nil ? nil : NeuralStemPlayback()
+        realStems?.nodes.forEach { engine.attach($0) }
+        if let realStems, let stemAsset {
+            try realStems.load(stemAsset, seconds: sourceSeconds)
+        }
         let performanceMixer = padStemURL.map { _ in AVAudioMixerNode() }
         let padPlayer = padStemURL.map { _ in AVAudioPlayerNode() }
         if let performanceMixer, let padPlayer {
@@ -1653,20 +1759,19 @@ final class AudioEngineManager {
         connectGraph(engine: engine, player: player, upmix: upmix, varispeed: varispeed, timePitch: timePitch, eq: eq,
                      reverb: reverb, limiter: limiter,
                      fileFormat: file.processingFormat, graphFormat: renderFormat,
-                     performanceMixer: performanceMixer, stemMask: stemMask)
+                     performanceMixer: performanceMixer)
+        realStems?.connect(engine: engine, mixer: upmix)
+        if let stemLevels {
+            guard realStems != nil else { throw NeuralStemError.invalidOutput }
+            realStems?.setLevels(stemLevels, enabled: true, immediate: true)
+            player.volume = 0
+        }
         if let padPlayer, let performanceMixer {
             engine.connect(padPlayer, to: performanceMixer, format: renderFormat)
         }
 
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
         try engine.start()
-        if let stemMask, let stemLevels {
-            for (address, kind) in StemKind.allCases.enumerated() {
-                stemMask.auAudioUnit.scheduleParameterBlock(
-                    AUEventSampleTimeImmediate, 0, AUParameterAddress(address),
-                    stemLevels[kind] ?? 1)
-            }
-        }
         if let maxDuration {
             let startFrame = AVAudioFramePosition(min(max(startTime, 0) * sourceRate,
                                                       Double(file.length)))
@@ -1680,12 +1785,15 @@ final class AudioEngineManager {
             player.scheduleFile(file, at: nil)
         }
         player.play()
+        realStems?.schedule(at: maxDuration == nil ? 0 : startTime)
+        realStems?.play(at: nil)
         if let padPlayer, let padFile {
             padPlayer.scheduleFile(padFile, at: nil)
             padPlayer.play()
         }
         defer {
             padPlayer?.stop()
+            realStems?.stop()
             player.stop()
             engine.stop()
         }
