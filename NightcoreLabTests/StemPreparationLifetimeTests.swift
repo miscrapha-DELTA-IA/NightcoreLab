@@ -19,7 +19,7 @@ final class StemPreparationLifetimeTests: XCTestCase {
         }
         let gate = StemLifetimeGate()
         let started = expectation(description: "Prediction owns memory")
-        let audio = AudioEngineManager(neuralPreparation: { _, _, _ in
+        let audio = AudioEngineManager(neuralPreparation: { _, _, _, _ in
             started.fulfill()
             await gate.wait() // Model predictions cannot be forcibly preempted.
             throw CancellationError()

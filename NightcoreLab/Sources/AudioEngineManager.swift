@@ -78,7 +78,7 @@ struct StoryAudioSource: Sendable {
 @Observable
 final class AudioEngineManager {
     typealias NeuralPreparation = @Sendable (
-        URL, @escaping @Sendable () -> Void,
+        URL, NeuralStemRequest, @escaping @Sendable () -> Void,
         @escaping @Sendable (Double, String) -> Void
     ) async throws -> StemAsset
 
@@ -134,6 +134,7 @@ final class AudioEngineManager {
     private(set) var stemPreparationProgress = 0.0
     private(set) var stemPreparationMessage = ""
     private(set) var stemPreparationError: String?
+    private(set) var stemPreview: StemAsset?
     var hasNeuralStemModel: Bool {
         if #available(iOS 18, *) { return NeuralStemWorker.bundledModel != nil }
         return false
@@ -253,8 +254,8 @@ final class AudioEngineManager {
     var isAudioEngineRunning: Bool { engine.isRunning }
 
     init(idleStopDelay: Duration = .seconds(10),
-         neuralPreparation: @escaping NeuralPreparation = { source, reclaim, progress in
-             try await NeuralStemWorker.prepare(source: source, reclaimMemory: reclaim, progress: progress)
+         neuralPreparation: @escaping NeuralPreparation = { source, request, reclaim, progress in
+             try await NeuralStemWorker.prepare(source: source, request: request, reclaimMemory: reclaim, progress: progress)
          }) {
         self.idleStopDelay = max(.zero, idleStopDelay)
         self.neuralPreparation = neuralPreparation
@@ -292,6 +293,7 @@ final class AudioEngineManager {
 
     func load(url: URL, preparedFile: AVAudioFile? = nil) throws {
         cancelStemPreparation()
+        stemPreview = nil
         neuralStems.clear()
         stemMixEnabled = false
         stemsAvailable = false
@@ -1025,7 +1027,9 @@ final class AudioEngineManager {
         // cancellation and drains its models. A prediction cannot be preempted.
     }
 
-    func prepareNeuralStems() {
+    func prepareNeuralStemPreview() { prepareNeuralStems(request: .preview(at: currentTime)) }
+
+    func prepareNeuralStems(request kind: NeuralStemRequest = .full) {
         guard let sourceURL, !isExporting, !isPreparingStems else { return }
         guard hasNeuralStemModel else {
             stemPreparationError = "A separação neural precisa de iOS 18 ou superior e do modelo incluído no app."
@@ -1055,7 +1059,7 @@ final class AudioEngineManager {
             do {
                 await NowPlayingArtworkLoader.releaseDecodedCovers()
                 try Task.checkCancellation()
-                let asset = try await prepare(sourceURL, {
+                let asset = try await prepare(sourceURL, kind, {
                     Task { @MainActor in await NowPlayingArtworkLoader.releaseDecodedCovers() }
                 }) { [weak self] value, message in
                     Task { @MainActor in
@@ -1069,6 +1073,13 @@ final class AudioEngineManager {
                 guard let self, self.stemPreparationID == request,
                       self.playbackSourceRevision == revision, self.sourceURL == sourceURL,
                       let file = self.audioFile else { return }
+                if kind.previewTime != nil {
+                    guard asset.preview != nil else { throw NeuralStemError.invalidOutput }
+                    self.stemPreview = asset
+                    self.stemPreparationProgress = 1
+                    self.stemPreparationMessage = "Prévia pronta · compare o original, a voz e o acompanhamento"
+                    return
+                }
                 let position = self.currentTime, resume = self.isPlaying
                 try self.neuralStems.load(asset, seconds: self.duration)
                 self.scheduleGeneration += 1

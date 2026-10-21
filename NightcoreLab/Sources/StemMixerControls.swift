@@ -1,8 +1,10 @@
 import SwiftUI
+import QuickLook
 
 /// Controls the actual cached neural sources, never a proxy on the original mix.
 struct StemMixerControls: View {
     let audio: AudioEngineManager
+    @State private var previewURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -41,6 +43,15 @@ struct StemMixerControls: View {
                 .font(.caption.weight(.semibold))
             } else {
                 Button {
+                    audio.prepareNeuralStemPreview()
+                } label: {
+                    Label("Gerar prévia de 8 segundos", systemImage: "ear")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!audio.hasStemSource || !audio.hasNeuralStemModel || audio.isExporting)
+                .accessibilityIdentifier("stem.preparePreview")
+                Button {
                     audio.prepareNeuralStems()
                 } label: {
                     Label("Separar música", systemImage: "waveform.path")
@@ -64,6 +75,18 @@ struct StemMixerControls: View {
                     Text(audio.stemPreparationMessage).font(.caption2).foregroundStyle(.secondary)
                 }
             }
+            if let asset = audio.stemPreview, let preview = asset.preview {
+                Text("Compare a prévia antes de separar a música inteira.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Button("Original") { listen(to: preview.originalURL) }
+                    Button("Só voz") { if let url = asset.vocalURL { listen(to: url) } }
+                    Button("Sem voz") { listen(to: preview.accompanimentURL) }
+                }
+                .font(.caption.weight(.semibold))
+                Text("A prévia usa um trecho próximo ao ponto da reprodução e o mesmo modelo da separação completa.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             if let error = audio.stemPreparationError {
                 Text(error).font(.caption).foregroundStyle(.orange)
                     .accessibilityIdentifier("stem.preparationError")
@@ -86,5 +109,11 @@ struct StemMixerControls: View {
             }
         }
         .accessibilityIdentifier("music.stemMixer")
+        .quickLookPreview($previewURL)
+    }
+
+    private func listen(to url: URL) {
+        audio.pause()
+        previewURL = url
     }
 }
