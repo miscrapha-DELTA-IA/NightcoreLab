@@ -1,0 +1,104 @@
+name: Free GPU Stems Beta
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'NightcoreLab/Sources/CloudStem*.swift'
+      - 'NightcoreLab/Sources/StemMixerControls.swift'
+      - 'NightcoreLab/Sources/StemSplitterEngine.swift'
+      - 'NightcoreLab/Sources/AudioEngineManager.swift'
+      - 'NightcoreLabTests/CloudStemWorkerTests.swift'
+      - 'NightcoreLabTests/StemPreparationLifetimeTests.swift'
+      - 'scripts/neural-stems/cloud-model-baseline.json'
+      - '.github/workflows/cloud-stems-beta.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cloud-stems-beta-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud-beta:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Verify unchanged qualified model and DSP inputs
+        id: baseline
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          baseline = json.loads(Path('scripts/neural-stems/cloud-model-baseline.json').read_text())
+          for name, expected in baseline['files'].items():
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, 'Requalify model/DSP before reusing artifact: ' + name
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f"run_id={baseline['qualified_run']}\n")
+          print('Unchanged model/DSP; qualified by', baseline['qualified_source'])
+          PY
+      - name: Reuse the previously qualified complete model bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: Gnarly-Neural-Model
+          path: NightcoreLab/Resources/NeuralStems
+          run-id: ${{ steps.baseline.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify complete model resources
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('NightcoreLab/Resources/NeuralStems/htdemucs_staged')
+          assert (root / 'pipeline.json').is_file()
+          assert len(list(root.glob('*.mlmodelc'))) == 26
+          print('All 26 qualified model parts present')
+          PY
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Test cloud contracts and mixer source/cancellation lifecycle
+        run: |
+          set -o pipefail
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for devices in d["devices"].values() for v in devices if v["name"].startswith("iPhone")))')
+          xcodebuild test -project NightcoreLab.xcodeproj -scheme NightcoreLab \
+            -destination "platform=iOS Simulator,id=$device_id" \
+            -derivedDataPath CloudDerivedData -parallel-testing-enabled NO \
+            -resultBundlePath CloudStems.xcresult \
+            -only-testing:NightcoreLabTests/CloudStemWorkerTests \
+            -only-testing:NightcoreLabTests/StemPreparationLifetimeTests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee cloud-stems-tests.log
+      - name: Save focused validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cloud-Stems-Validation
+          path: |
+            CloudStems.xcresult
+            cloud-stems-tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Build complete unsigned iPhone app
+        run: |
+          set -o pipefail
+          xcodebuild build -project NightcoreLab.xcodeproj -scheme NightcoreLab \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath CloudDerivedData SYMROOT="$PWD/CloudBuild" \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+      - name: Package beta IPA
+        run: |
+          test -d CloudBuild/Release-iphoneos/NightcoreLab.app
+          mkdir -p Payload
+          mv CloudBuild/Release-iphoneos/NightcoreLab.app Payload/
+          zip -qry Gnarly-56-FreeGPU.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gnarly-56-FreeGPU-Beta
+          path: Gnarly-56-FreeGPU.ipa
+          retention-days: 7

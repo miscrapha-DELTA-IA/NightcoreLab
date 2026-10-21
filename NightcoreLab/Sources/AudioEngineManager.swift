@@ -1029,14 +1029,21 @@ final class AudioEngineManager {
 
     func prepareNeuralStemPreview() { prepareNeuralStems(request: .preview(at: currentTime)) }
 
-    func prepareNeuralStems(request kind: NeuralStemRequest = .full) {
+    func prepareCloudStems(code: String) { prepareNeuralStems(cloudCode: code) }
+
+    func prepareNeuralStems(request kind: NeuralStemRequest = .full, cloudCode: String? = nil) {
         guard let sourceURL, !isExporting, !isPreparingStems else { return }
-        guard hasNeuralStemModel else {
+        guard cloudCode != nil || hasNeuralStemModel else {
             stemPreparationError = "A separação neural precisa de iOS 18 ou superior e do modelo incluído no app."
             return
         }
         let request = UUID(), revision = playbackSourceRevision
-        let prepare = neuralPreparation
+        let prepare: NeuralPreparation
+        if let cloudCode {
+            prepare = { source, _, _, progress in
+                try await CloudStemWorker.prepare(source: source, betaCode: cloudCode, progress: progress)
+            }
+        } else { prepare = neuralPreparation }
         stemPreparationID = request
         isPreparingStems = true; isCancellingStems = false
         stemPreparationProgress = 0; stemPreparationError = nil
@@ -1091,11 +1098,12 @@ final class AudioEngineManager {
                 self.lastKnownTime = position
                 self.schedule(file, startingAt: position)
                 if self.centerCutEnabled { self.scheduleCenterCut(startingAt: position) }
-                self.stemsAvailable = true; self.stemSource = .demucs
+                self.stemsAvailable = true; self.stemSource = asset.source
+                if asset.source == .roformer { self.stemPreview = nil }
                 self.sendStemParameters()
                 if resume { self.play() }
                 self.stemPreparationProgress = 1
-                self.stemPreparationMessage = "Stems reais prontos · Demucs"
+                self.stemPreparationMessage = "Stems reais prontos · \(asset.source.title)"
             } catch {
                 guard let self, self.stemPreparationID == request else { return }
                 if !(error is CancellationError) { self.stemPreparationError = error.localizedDescription }

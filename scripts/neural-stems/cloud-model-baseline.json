@@ -1,0 +1,23 @@
+{
+  "qualified_run": 39621144478,
+  "qualified_source": "63e604359a6fd2cea9cb7de6a8bb72208f415f2c",
+  "files": {
+    "NightcoreLab/Sources/NeuralStems/BlockedAttention.swift": "fa3280a336eeaad43478d4471bcaa368902f097f62a3105f4bca8bee864e2edf",
+    "NightcoreLab/Sources/NeuralStems/DemucsCoreMLModel.swift": "11e3766ddd53dba0e6257ebd752046f83baf07456e191217e397610ef0b60535",
+    "NightcoreLab/Sources/NeuralStems/DemucsDSP.swift": "d1efb34c4feac8772b9f3e750ffcb52fb804dd44763460f5331ccc431410d347",
+    "NightcoreLab/Sources/NeuralStems/DemucsOverlapAdd.swift": "3b808f1483e02a2241e6e9956ac114e943fca2c0608c4ceaafe9297ecd2fc68e",
+    "NightcoreLab/Sources/NeuralStems/NeuralStemWorker.swift": "981efbefc823164fe03c9d08a30b3df0a295d790f23462bc35f818e58cf19ee8",
+    "NightcoreLab/Sources/NeuralStems/StagedDemucsPipeline.swift": "cc9b52f637a01b9cd4e426f77cde72a66e4ea15daa92e825f63184ced839c624",
+    "NightcoreLab/Sources/NeuralStems/StemGainAudioUnit.swift": "6f2f40b0f019d49d431fe25e24b125d49db453364ac18e4a04099462e8e6b963",
+    "NightcoreLab/Sources/NeuralStems/StemMemoryRecovery.swift": "738e4682bf9d18f2cde08bd912b45a0212b865e4c621e975cefaf99fb6b37c68",
+    "NightcoreLab/Sources/NeuralStems/StemProgressEstimator.swift": "484b18be23989cd3c812c76c69a6ce1e9422306cc2810cecfa6494013dad16f3",
+    "scripts/neural-stems/convert_core.py": "f936b19b16fd5e022fec220845729b0b1a5c0cd660140acc9cc54717a8564b5e",
+    "scripts/neural-stems/convert_staged.py": "3931f0a0225fbe94f6fbd674769e4f4a3d86372837882a4df97e0039be7d8883",
+    "scripts/neural-stems/musical_fixture.py": "c29f527364c17529a631444735f6539fc8e646337a1e0c1c45ec7b5953521a79",
+    "scripts/neural-stems/staged_core.py": "b7a0c4488d71a9735c42a144be8a39de54e3d335ad7aa861ed9dae28f8cc7cce",
+    "scripts/neural-stems/stemcommon.py": "58310eade8feed9bb9ac5d613a27677a78bc42f1b0febced94349067752d3a7f",
+    "scripts/neural-stems/verify-model.py": "5af9478293e628fc27d010ab26eea8b52ff62b93192ca10355bb42bdbbe3fef4",
+    "scripts/neural-stems/model-manifest.json": "cdbcd990d16b684be0e632c6de870dbbf3b5840acd13ba99f588fa2951eb9090",
+    "scripts/neural-stems/requirements.txt": "65b6839074c83ce2f9816acbbc3638f1c6bff50efcf686ad04677e759449b680"
+  }
+}

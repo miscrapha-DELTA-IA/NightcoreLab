@@ -5,6 +5,7 @@ import QuickLook
 struct StemMixerControls: View {
     let audio: AudioEngineManager
     @State private var previewURL: URL?
+    @State private var showCloud = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -15,7 +16,7 @@ struct StemMixerControls: View {
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("stem.reset")
             }
-            Text("Separação real por IA · no iPhone")
+            Text("Separação real por IA")
                 .font(.caption.weight(.semibold))
             if audio.isPreparingStems {
                 ProgressView(value: audio.stemPreparationProgress) {
@@ -33,7 +34,7 @@ struct StemMixerControls: View {
                 Text("Mantenha o app aberto. O tempo varia conforme a música e o iPhone.")
                     .font(.caption2).foregroundStyle(.secondary)
             } else if audio.stemsAvailable {
-                Label("Demucs · stems salvos neste iPhone", systemImage: "checkmark.circle.fill")
+                Label("\(audio.stemSource?.title ?? "IA") · stems salvos neste iPhone", systemImage: "checkmark.circle.fill")
                     .font(.caption2).foregroundStyle(.green)
                 HStack(spacing: 12) {
                     Button("Sem voz") { audio.applyStemPreset(.karaoke) }
@@ -65,15 +66,26 @@ struct StemMixerControls: View {
                     Text("Escolha uma música para separar voz, bateria, baixo e outros instrumentos.")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else if !audio.hasNeuralStemModel {
-                    Text("A separação neural requer iOS 18 ou superior e a versão do app com o modelo incluído.")
+                    Text("A separação no iPhone requer iOS 18 ou superior e o modelo incluído. A opção na nuvem usa internet.")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else {
-                    Text("A música fica no aparelho. A separação funciona sem conta e sem internet.")
+                    Text("No iPhone, a música fica no aparelho e funciona offline. Na nuvem, o áudio é enviado ao Hugging Face e há limite de uso gratuito.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if !audio.stemPreparationMessage.isEmpty {
                     Text(audio.stemPreparationMessage).font(.caption2).foregroundStyle(.secondary)
                 }
+            }
+            if !audio.isPreparingStems {
+                Button {
+                    showCloud = true
+                } label: {
+                    Label("Separar com GPU grátis", systemImage: "cloud")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!audio.hasStemSource || audio.isExporting)
+                .accessibilityIdentifier("stem.prepareCloud")
             }
             if let asset = audio.stemPreview, let preview = asset.preview {
                 Text("Compare a prévia antes de separar a música inteira.")
@@ -84,7 +96,7 @@ struct StemMixerControls: View {
                     Button("Sem voz") { listen(to: preview.accompanimentURL) }
                 }
                 .font(.caption.weight(.semibold))
-                Text("A prévia usa um trecho próximo ao ponto da reprodução e o mesmo modelo da separação completa.")
+                Text("A prévia local usa Demucs em um trecho próximo ao ponto da reprodução.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if let error = audio.stemPreparationError {
@@ -110,6 +122,9 @@ struct StemMixerControls: View {
         }
         .accessibilityIdentifier("music.stemMixer")
         .quickLookPreview($previewURL)
+        .sheet(isPresented: $showCloud) {
+            CloudStemStartView { code in audio.prepareCloudStems(code: code) }
+        }
     }
 
     private func listen(to url: URL) {

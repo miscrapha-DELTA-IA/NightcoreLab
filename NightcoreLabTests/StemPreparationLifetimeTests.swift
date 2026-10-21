@@ -4,6 +4,40 @@ import XCTest
 
 @MainActor
 final class StemPreparationLifetimeTests: XCTestCase {
+    func testCompletedPreparationPreservesRoformerSourceAndEnablesMixer() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        func write(_ name: String, value: Float) throws -> URL {
+            let url = folder.appendingPathComponent(name + ".wav")
+            try autoreleasepool {
+                let file = try AVAudioFile(forWriting: url, settings: format.settings)
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4410)!
+                buffer.frameLength = 4410
+                for channel in 0..<2 { buffer.floatChannelData![channel].update(repeating: value, count: 4410) }
+                try file.write(from: buffer)
+            }
+            return url
+        }
+        let source = try write("source", value: 0.1)
+        let urls = try Dictionary(uniqueKeysWithValues: StemKind.allCases.map {
+            ($0, try write($0.rawValue, value: 0.025))
+        })
+        let asset = StemAsset(urls: urls, source: .roformer)
+        let audio = AudioEngineManager(neuralPreparation: { _, _, _, _ in asset })
+        try XCTSkipUnless(audio.hasNeuralStemModel, "The focused lane reuses the verified model bundle")
+        try audio.load(url: source)
+        audio.prepareNeuralStems()
+        for _ in 0..<1200 where audio.isPreparingStems { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNil(audio.stemPreparationError)
+        XCTAssertTrue(audio.stemsAvailable)
+        XCTAssertEqual(audio.stemSource, .roformer)
+        audio.setStemLevel(.vocal, level: 0)
+        XCTAssertTrue(audio.stemMixEnabled)
+        XCTAssertEqual(audio.stemLevels[.vocal], 0)
+    }
+
     func testCancellationKeepsResourcesLeasedUntilWorkerReallyFinishes() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
