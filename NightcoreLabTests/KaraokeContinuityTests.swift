@@ -74,19 +74,18 @@ final class KaraokeContinuityTests: XCTestCase {
 
     @MainActor
     func testResultCaptureUsesVisibleViewAndDisplayScale() async throws {
-        let controller = UIViewController()
-        controller.view.backgroundColor = .magenta
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 160, height: 240))
-        window.rootViewController = controller; window.isHidden = false
-        defer { window.isHidden = true }
-        controller.view.layoutIfNeeded()
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        let window = try XCTUnwrap(windows.first(where: { !$0.isHidden }))
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 160, height: 240))
+        view.backgroundColor = .magenta
+        window.addSubview(view)
+        defer { view.removeFromSuperview() }
+        view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(150))
-        let image = try KaraokeResultCapture.image(of: controller.view, scale: 2)
-        XCTAssertEqual(image.size, controller.view.bounds.size)
-        XCTAssertEqual(image.cgImage?.width, Int(controller.view.bounds.width * 2))
-        XCTAssertEqual(image.cgImage?.height, Int(controller.view.bounds.height * 2))
+        let image = try KaraokeResultCapture.image(of: view, scale: 2)
+        XCTAssertEqual(image.size, view.bounds.size)
+        XCTAssertEqual(image.cgImage?.width, Int(view.bounds.width * 2))
+        XCTAssertEqual(image.cgImage?.height, Int(view.bounds.height * 2))
         XCTAssertThrowsError(try KaraokeResultCapture.image(of: UIView(), scale: 2))
-        window.isHidden = true
-        try await Task.sleep(for: .milliseconds(150))
     }
 }
