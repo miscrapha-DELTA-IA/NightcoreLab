@@ -32,6 +32,8 @@ enum LyricsStatus: Equatable, Sendable { case idle, searching, ready, unavailabl
 @MainActor
 @Observable
 final class LyricsStore {
+    typealias FallbackGenerator = @Sendable (URL, TimeInterval, [TimeInterval]) async -> [TimedLyricLine]
+    @ObservationIgnored private let fallbackGenerator: FallbackGenerator
 
     @ObservationIgnored let scoring = KaraokeScoringSession()
 
@@ -74,7 +76,10 @@ final class LyricsStore {
     @ObservationIgnored private var latestDNA: SongDNA?
     @ObservationIgnored private var lastObservedTime: TimeInterval = 0
 
-    init(offsetDefaults: UserDefaults = .standard) {
+    init(offsetDefaults: UserDefaults = .standard, fallbackGenerator: FallbackGenerator? = nil) {
+        self.fallbackGenerator = fallbackGenerator ?? { url, duration, bars in
+            await AutoLyricsTranscriber.generate(vocalURL: url, duration: duration, bars: bars)
+        }
         self.offsetDefaults = offsetDefaults
         self.offsetKey = Self.currentOffsetKey()
         let saved = offsetDefaults.double(forKey: offsetKey)
@@ -98,6 +103,12 @@ final class LyricsStore {
     // MARK: Contrato
 
     func attach(clock: PlaybackClock) { self.clock = clock }
+
+    func seek(to time: TimeInterval) {
+        seekHandler?(time)
+        let offset = clock.map { sourceTimelineOffset(for: $0) } ?? 0
+        scoring.seek(to: time + offset)
+    }
 
     func sourceTimelineOffset(for clock: PlaybackClock) -> TimeInterval {
         userOffset * clock.playbackSpeed
@@ -137,17 +148,20 @@ final class LyricsStore {
         needsReview = false
     }
 
-    /// Cache-first, then utility-priority stem preparation and local speech.
+    /// Cache-first, then utility-priority local speech/guide generation.
     /// A later catalog result or track replacement cancels this task.
+    /// The returned handle includes persistence, for callers that need it.
+    @discardableResult
     func loadFallback(trackID: String, plainText: String?, sourceURL: URL,
                       duration: TimeInterval, force: Bool = false,
-                      retryRecognition: Bool = false) {
-        guard self.trackID == trackID, force || status != .ready else { return }
+                      retryRecognition: Bool = false) -> Task<Void, Never>? {
+        guard self.trackID == trackID, force || status != .ready else { return nil }
         loadTask?.cancel()
         loadGeneration = UUID()
         let generation = loadGeneration
         status = .searching
         let bars = latestDNA?.barTimestamps ?? []
+        let generateFallback = fallbackGenerator
         let fingerprint = AutoLyricsTranscriber.fingerprint(source: sourceURL) +
             "|" + (plainText ?? "")
         loadTask = Task.detached(priority: .utility) { [weak self] in
@@ -167,14 +181,16 @@ final class LyricsStore {
                 generated = Self.alignPlain(plainText, duration: duration,
                                             phrases: phrases, bars: bars)
             } else {
-                generated = await AutoLyricsTranscriber.generate(
-                    vocalURL: vocalURL, duration: duration, bars: bars)
+                generated = await generateFallback(vocalURL, duration, bars)
             }
             guard !Task.isCancelled else { return }
+            // A generated guide is ready to display. Slow disk persistence
+            // must not keep the karaoke UI in its searching state.
+            await self?.installFallback(generated, trackID: trackID, generation: generation)
             await AutoLyricsCache.shared.save(generated, trackID: trackID,
                                               fingerprint: fingerprint)
-            await self?.installFallback(generated, trackID: trackID, generation: generation)
         }
+        return loadTask
     }
 
     private func installFallback(_ generated: [TimedLyricLine], trackID: String, generation: UUID) {

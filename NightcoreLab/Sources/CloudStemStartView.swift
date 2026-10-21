@@ -34,7 +34,7 @@ struct CloudStemStartView: View {
             Form {
                 Section {
                     Text("O áudio será enviado ao Hugging Face para separar voz, bateria, baixo e outros instrumentos. Os stems serão salvos neste iPhone para ouvir offline.")
-                    Text("A GPU gratuita tem fila e cota diária. Ao atingir o limite, o pedido para, sem contratar processamento pago. Mantenha o app aberto.")
+                    Text("A GPU gratuita tem fila e cota diária. O pedido fica salvo ao trocar de música ou sair do app. Ao voltar, o app retoma o acompanhamento e os downloads sem iniciar outra separação. Não há contratação automática de processamento pago.")
                     Text("O serviço comunitário é público: a retenção dos arquivos depende do mantenedor, e o app não consegue apagá-los remotamente. Evite gravações confidenciais. Cancelar no iPhone pode não interromper a separação na nuvem.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("Os quatro arquivos podem ser grandes. Prefira Wi-Fi para enviar e baixar.")

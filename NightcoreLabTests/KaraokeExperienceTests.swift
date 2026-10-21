@@ -25,16 +25,34 @@ final class KaraokeExperienceTests: XCTestCase {
                                                   Double(index) / 16_000))
             }
         }
-        let writer = try AVAudioFile(forWriting: url, settings: format.settings)
-        try writer.write(from: buffer)
-        let store = LyricsStore()
+        try autoreleasepool {
+            let writer = try AVAudioFile(forWriting: url, settings: format.settings)
+            try writer.write(from: buffer)
+        }
+        let invalidSpeech = AutoLyricsTranscriber.guide(recognizedWords: [
+            .init(text: "", start: 0, end: 0),
+            .init(text: " ", start: 0, end: 0.5),
+            .init(text: "invalid", start: 0, end: .infinity)
+        ], vocalURL: url, duration: 1, bars: [])
+        XCTAssertFalse(invalidSpeech.isEmpty)
+        XCTAssertTrue(invalidSpeech.allSatisfy { $0.provenance == .rhythmicCue })
+        let store = LyricsStore(fallbackGenerator: { url, duration, bars in
+            let lines = await AutoLyricsTranscriber.generate(vocalURL: url, duration: duration,
+                bars: bars, allowSpeechRecognition: false)
+            XCTAssertFalse(lines.isEmpty, "Local fallback must produce a guide before caching")
+            return lines
+        })
         let trackID = "missing-\(UUID().uuidString)"
         store.beginLoading(trackID: trackID)
-        store.loadFallback(trackID: trackID, plainText: nil,
-                           sourceURL: url, duration: 1)
-        for _ in 0..<100 where store.status != .ready {
-            try await Task.sleep(for: .milliseconds(100))
+        let loading = try XCTUnwrap(store.loadFallback(trackID: trackID, plainText: nil,
+                                                       sourceURL: url, duration: 1))
+        let persisted = expectation(description: "Local guide is installed and persisted")
+        Task {
+            await loading.value
+            persisted.fulfill()
         }
+        await fulfillment(of: [persisted], timeout: 10)
+        XCTAssertEqual(store.trackID, trackID)
         XCTAssertEqual(store.status, .ready)
         XCTAssertFalse(store.lines.isEmpty)
         XCTAssertFalse(store.lines.flatMap(\.words).isEmpty)

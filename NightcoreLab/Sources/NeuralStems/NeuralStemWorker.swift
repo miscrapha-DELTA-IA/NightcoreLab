@@ -16,6 +16,8 @@ enum NeuralStemWorker {
             .deletingLastPathComponent()
     }
     private final class Cancellation: @unchecked Sendable {
+        private let lifecycle: StemWorkLifecycle
+        init(lifecycle: StemWorkLifecycle) { self.lifecycle = lifecycle }
         private let lock = NSLock()
         private var cancelled = false
         private var memoryPressure = false
@@ -30,6 +32,7 @@ enum NeuralStemWorker {
             lock.lock(); let value = cancelled, memory = memoryPressure; lock.unlock()
             if memory { throw NeuralStemError.insufficientMemory }
             if value { throw CancellationError() }
+            try lifecycle.check()
         }
     }
     private struct Manifest: Codable {
@@ -52,8 +55,25 @@ enum NeuralStemWorker {
                         modelURL: URL? = bundledModel,
                         request: NeuralStemRequest = .full,
                         reclaimMemory: @escaping @Sendable () -> Void = {},
+                        lifecycle: StemWorkLifecycle = StemWorkLifecycle(),
                         progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
-        let cancellation = Cancellation()
+        while true {
+            try await lifecycle.waitForForeground()
+            do {
+                return try await prepareAttempt(source: source, cacheFolder: cacheFolder, modelURL: modelURL,
+                    request: request, reclaimMemory: reclaimMemory, lifecycle: lifecycle, progress: progress)
+            } catch is StemWorkLifecycle.Paused {
+                progress(-1, "Pausado em segundo plano · progresso salvo; retoma ao voltar")
+            }
+        }
+    }
+
+    private static func prepareAttempt(source: URL, cacheFolder: URL, modelURL: URL?,
+                        request: NeuralStemRequest,
+                        reclaimMemory: @escaping @Sendable () -> Void,
+                        lifecycle: StemWorkLifecycle,
+                        progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
+        let cancellation = Cancellation(lifecycle: lifecycle)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let memoryObserver = NotificationCenter.default.addObserver(
@@ -153,13 +173,37 @@ enum NeuralStemWorker {
                 return asset
             }
         }
-        guard let modelURL else { throw NeuralStemError.modelMissing }
         try FileManager.default.createDirectory(at: cacheFolder, withIntermediateDirectories: true)
-        let stage = cacheFolder.appendingPathComponent(".partial-" + UUID().uuidString)
+        let workRoot = cacheFolder == cacheRoot ? StemJobJournal.root : cacheFolder
+        let stage = workRoot.appendingPathComponent(".partial-" + DemucsCoreMLModel.identifier + "-" + hash + suffix)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: stage) }
+        // A termination between writing the manifest and renaming the folder
+        // must not turn a finished separation into another inference.
+        if let data = try? Data(contentsOf: stage.appendingPathComponent("complete.json")),
+           let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+           manifest.model == DemucsCoreMLModel.identifier, manifest.sourceHash == hash,
+           manifest.previewStart == previewStart,
+           let frames = try? validate(makeAsset(folder: stage, frames: manifest.frames, previewStart: previewStart),
+                expectedSeconds: previewStart.map { min(7.8, seconds - $0) } ?? seconds),
+           frames == manifest.frames {
+            if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
+            try FileManager.default.moveItem(at: stage, to: folder)
+            progress(1, "Stems salvos recuperados")
+            return makeAsset(folder: folder, frames: frames, previewStart: previewStart)
+        }
+        var completedResult = false
+        defer {
+            let segments = stage.appendingPathComponent("segments", isDirectory: true)
+            let saved = (try? FileManager.default.contentsOfDirectory(atPath: segments.path))?
+                .contains(where: { $0.hasSuffix(".pcm") }) ?? false
+            if !completedResult && !saved { try? FileManager.default.removeItem(at: stage) }
+        }
+        guard let modelURL else { throw NeuralStemError.modelMissing }
         // Four float32 stereo stems + decoded input, with working-space margin.
-        let required = Int64((previewStart == nil ? seconds : min(7.8, seconds)) * sampleRate * 8 * 6 * 1.15) + 200_000_000
+        let existing = FileManager.default.enumerator(at: stage, includingPropertiesForKeys: [.fileSizeKey])?
+            .compactMap { ($0 as? URL).flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize } }
+            .reduce(Int64(0)) { $0 + Int64($1) } ?? 0
+        let required = max(200_000_000, Int64((previewStart == nil ? seconds : min(7.8, seconds)) * sampleRate * 8 * 12 * 1.15) + 200_000_000 - existing)
         if let free = try? cacheFolder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             .volumeAvailableCapacityForImportantUsage, free < required {
             throw NeuralStemError.insufficientSpace
@@ -174,9 +218,12 @@ enum NeuralStemWorker {
         try check()
         let separator = try autoreleasepool { try DemucsCoreMLModel(url: modelURL) }
         try check()
+        let segments = stage.appendingPathComponent("segments", isDirectory: true)
+        try FileManager.default.createDirectory(at: segments, withIntermediateDirectories: true)
         try autoreleasepool {
             try separate(decodedURL, decoded: decoded, separator: separator,
-                         destinations: urls(in: stage), check: check, recover: recover, progress: progress)
+                         destinations: urls(in: stage), segments: segments,
+                         check: check, recover: recover, progress: progress)
         }
         try check()
         if previewStart != nil {
@@ -186,7 +233,9 @@ enum NeuralStemWorker {
         let frames = try validate(staged, expectedSeconds: previewStart == nil ? seconds : Double(decoded.frames) / sampleRate)
         let manifest = Manifest(model: DemucsCoreMLModel.identifier, sourceHash: hash, frames: frames, previewStart: previewStart)
         try JSONEncoder().encode(manifest).write(to: stage.appendingPathComponent("complete.json"), options: .atomic)
+        completedResult = true
         if previewStart == nil { try FileManager.default.removeItem(at: decodedURL) }
+        try FileManager.default.removeItem(at: segments)
         try check()
         if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
         try FileManager.default.moveItem(at: stage, to: folder)
@@ -314,7 +363,7 @@ enum NeuralStemWorker {
     }
 
     private static func separate(_ source: URL, decoded: Decoded, separator: DemucsCoreMLModel,
-                                 destinations: [StemKind: URL], check: () throws -> Void,
+                                 destinations: [StemKind: URL], segments: URL, check: () throws -> Void,
                                  recover: () throws -> Void,
                                  progress: @escaping (Double, String) -> Void) throws {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
@@ -336,6 +385,7 @@ enum NeuralStemWorker {
         var estimator = StemProgressEstimator()
         var remainingMessage = "Separando · medindo o tempo neste iPhone…"
         while start < decoded.frames {
+            try check()
             let segmentStartedAt = ProcessInfo.processInfo.systemUptime
             var recoveredMemory = false
             StemMemoryRecovery.releaseUnusedPages()
@@ -348,7 +398,12 @@ enum NeuralStemWorker {
             for channel in 0..<2 {
                 for i in 0..<valid { segment[channel * length + i] = (channels[channel][i] - decoded.mean) / decoded.standardDeviation }
             }
-            let separated = try StemMemoryRecovery.perform(recover: { _ in
+            let checkpoint = segments.appendingPathComponent("\(start).pcm")
+            let cached = StemSegmentCheckpoint.load(checkpoint, count: 8 * length)
+            let separated: [Float]
+            if let cached { separated = cached }
+            else {
+            separated = try StemMemoryRecovery.perform(recover: { _ in
                 recoveredMemory = true
                 progress(0.05 + 0.94 * Double(start) / Double(decoded.frames),
                          "Liberando memória para continuar…")
@@ -371,6 +426,8 @@ enum NeuralStemWorker {
                 try check()
                 return result
             } }
+            try StemSegmentCheckpoint.save(separated, to: checkpoint)
+            }
             for i in 0..<length {
                 weights[i] += weight[i]
                 for lane in 0..<8 { accumulator[lane * length + i] += separated[lane * length + i] * weight[i] }
@@ -385,8 +442,10 @@ enum NeuralStemWorker {
                 }
                 try writers[source].write(from: output)
             }
-            estimator.record(seconds: ProcessInfo.processInfo.systemUptime - segmentStartedAt,
-                             recoveredMemory: recoveredMemory)
+            if cached == nil {
+                estimator.record(seconds: ProcessInfo.processInfo.systemUptime - segmentStartedAt,
+                                 recoveredMemory: recoveredMemory)
+            }
             let segmentsLeft = Int(ceil(Double(decoded.frames - start - count) / Double(advance)))
             if segmentsLeft > 0 {
                 remainingMessage = estimator.message(segments: segmentsLeft)

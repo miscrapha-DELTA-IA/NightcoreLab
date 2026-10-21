@@ -42,6 +42,10 @@ final class NightcoreAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
+        if identifier == CloudStemTransfer.identifier {
+            CloudStemTransfer.shared.handleEvents(completion: completionHandler)
+            return
+        }
         guard identifier == AudioDownloadManager.backgroundIdentifier else {
             completionHandler()
             return

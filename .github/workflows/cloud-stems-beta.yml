@@ -1,4 +1,4 @@
-name: Free GPU Stems Beta
+name: Gnarly Continuity Beta
 
 on:
   workflow_dispatch:
@@ -10,6 +10,13 @@ on:
       - 'NightcoreLab/Sources/AudioEngineManager.swift'
       - 'NightcoreLabTests/CloudStemWorkerTests.swift'
       - 'NightcoreLabTests/StemPreparationLifetimeTests.swift'
+      - 'NightcoreLab/Sources/StemJobPersistence.swift'
+      - 'NightcoreLab/Sources/NeuralStems/NeuralStemWorker.swift'
+      - 'NightcoreLab/Sources/Karaoke/**'
+      - 'NightcoreLab/Sources/NowPlayingScreen.swift'
+      - 'NightcoreLabTests/StemContinuityTests.swift'
+      - 'NightcoreLabTests/KaraokeContinuityTests.swift'
+      - 'NightcoreLabTests/CloudStemRecoveryTests.swift'
       - 'scripts/neural-stems/cloud-model-baseline.json'
       - '.github/workflows/cloud-stems-beta.yml'
 
@@ -41,7 +48,7 @@ jobs:
               assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, 'Requalify model/DSP before reusing artifact: ' + name
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
               stream.write(f"run_id={baseline['qualified_run']}\n")
-          print('Unchanged model/DSP; qualified by', baseline['qualified_source'])
+          print('Unchanged model/DSP bundle; worker lifecycle tested below. Model qualified by', baseline['qualified_source'])
           PY
       - name: Reuse the previously qualified complete model bundle
         uses: actions/download-artifact@v4
@@ -72,7 +79,12 @@ jobs:
             -derivedDataPath CloudDerivedData -parallel-testing-enabled NO \
             -resultBundlePath CloudStems.xcresult \
             -only-testing:NightcoreLabTests/CloudStemWorkerTests \
+            -only-testing:NightcoreLabTests/CloudStemRecoveryTests \
             -only-testing:NightcoreLabTests/StemPreparationLifetimeTests \
+            -only-testing:NightcoreLabTests/StemContinuityTests \
+            -only-testing:NightcoreLabTests/KaraokeContinuityTests \
+            -only-testing:NightcoreLabTests/KaraokeExperienceTests \
+            -only-testing:NightcoreLabTests/RuntimeStabilizationTests/testExp8HUDLifecycleSimulationAndScrollIsolation \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee cloud-stems-tests.log
       - name: Save focused validation
         if: always()
@@ -96,9 +108,9 @@ jobs:
           test -d CloudBuild/Release-iphoneos/NightcoreLab.app
           mkdir -p Payload
           mv CloudBuild/Release-iphoneos/NightcoreLab.app Payload/
-          zip -qry Gnarly-56-FreeGPU.ipa Payload
+          zip -qry Gnarly-57-Continuity.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: Gnarly-56-FreeGPU-Beta
-          path: Gnarly-56-FreeGPU.ipa
+          name: Gnarly-57-Continuity-Beta
+          path: Gnarly-57-Continuity.ipa
           retention-days: 7

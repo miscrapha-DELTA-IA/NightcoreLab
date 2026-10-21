@@ -339,5 +339,16 @@ final class NeuralStemsRegressionTests: XCTestCase {
             modelURL: nil, progress: { _, _ in })
         XCTAssertNil(fullCache.preview)
         XCTAssertEqual(fullCache.urls, asset.urls)
+
+        // Simulate termination after complete.json, before the atomic rename.
+        // Recovery must use the completed audio even without a model to load.
+        let finished = try XCTUnwrap(fullCache.vocalURL).deletingLastPathComponent()
+        let staged = cache.appendingPathComponent(".partial-" + DemucsCoreMLModel.identifier + "-" + (try CloudStemWorker.hash(source)))
+        try FileManager.default.moveItem(at: finished, to: staged)
+        let recovered = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+            modelURL: nil, progress: { _, _ in })
+        XCTAssertEqual(recovered.urls, fullCache.urls)
+        XCTAssertEqual(try NeuralStemWorker.validate(recovered, expectedSeconds: 2), 88_200)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
     }
 }

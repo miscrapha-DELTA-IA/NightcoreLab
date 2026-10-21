@@ -80,12 +80,19 @@ final class KaraokeScoringSession {
         syntheticFrame = frame
     }
 
+    func seek(to time: Double) {
+        guard mode != .off, time.isFinite else { return }
+        engine.seek(to: time)
+        lastTime = time
+        judgmentVisible = false
+        snapshot = engine.snapshot
+    }
+
     func advance(time: Double, playing: Bool, lines: [TimedLyricLine], pitchShift: Double = 0) {
         guard isHUDVisible, !snapshot.isFinished else { return }
         guard time.isFinite else { return }
         if let previous = lastTime, time < previous - 0.05 || time - previous > 0.5 {
-            // Seeking invalidates a competitive run instead of farming a verse.
-            engine.start(lines: lines, at: time)
+            engine.seek(to: time)
             judgmentVisible = false
         }
         lastTime = time
