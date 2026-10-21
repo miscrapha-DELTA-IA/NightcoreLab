@@ -705,7 +705,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         // Read the two existing versioned caches immediately. Cache misses
         // use the shared AnalysisScheduler detached utility worker; neither
         // decoding nor file hashing ever runs on an audio/render callback.
-        .task(id: audio.playbackSourceRevision) {
+        .task(id: "\(audio.playbackSourceRevision)|\(audio.isPreparingStems)") {
+            guard !audio.isPreparingStems, parentEnergyBudget.allowsNewAnalysis else { return }
             let revision = audio.playbackSourceRevision
             liveUniforms.setSongDNA(nil)
             guard let url = audio.visualAnalysisURL, url.isFileURL else { return }
@@ -752,7 +753,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
         // The source-time lookup is actor isolated at ~8 Hz, not in the 60 Hz
         // SwiftUI/Metal timeline. Only section CHANGES invalidate leaf readers.
-        .task(id: "\(audio.playbackSourceRevision)|\(reactionMode.rawValue)") {
+        .task(id: "\(audio.playbackSourceRevision)|\(reactionMode.rawValue)|\(audio.isPreparingStems)") {
+            guard !audio.isPreparingStems else { return }
             let revision = audio.playbackSourceRevision
             while !Task.isCancelled && revision == audio.playbackSourceRevision {
                 let section = await sectionTracker.modulation(

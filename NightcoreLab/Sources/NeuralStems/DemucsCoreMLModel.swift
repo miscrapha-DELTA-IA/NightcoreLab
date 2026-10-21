@@ -11,8 +11,8 @@ public enum NeuralStemError: Error, LocalizedError {
         case .incompatibleModel: return "O modelo de separação é incompatível com esta versão."
         case .invalidOutput: return "Não foi possível gerar stems válidos neste aparelho."
         case .noAudio: return "A música não contém áudio compatível para separar."
-        case .memoryBudget(let required, let available): return "A separação precisa de \(required) MB livres nesta etapa; o iPhone dispõe de \(available) MB agora. Tente reabrir o app."
-        case .insufficientMemory: return "O iPhone está com pouca memória para separar esta música agora. Tente novamente após reabrir o app."
+        case .memoryBudget(let required, let available): return "A separação precisa de \(required) MB livres nesta etapa; há \(available) MB disponíveis. Aguarde um pouco e toque em Separar música para tentar novamente."
+        case .insufficientMemory: return "O iPhone precisou liberar memória. Aguarde um pouco e toque em Separar música para tentar novamente."
         case .insufficientSpace: return "Libere espaço no iPhone para salvar as faixas separadas."
         }
     }
@@ -26,6 +26,7 @@ public final class DemucsCoreMLModel {
     public static let sources = ["drums", "bass", "other", "vocals"]
     private let pipeline: StagedDemucsPipeline
     private var usingCPU: Bool
+    public var lastModelLoadCount: Int { pipeline.modelLoadCount }
 
     /// A12 / 3–4GB devices cannot afford GPU graph specialization plus the
     /// full-precision model. Keep the identical validated model on the CPU.

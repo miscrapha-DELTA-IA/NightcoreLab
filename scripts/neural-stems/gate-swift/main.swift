@@ -43,13 +43,26 @@ let actual = try model.separate(input, progress: { fraction, name in
                         "physical_bytes": physical.current, "physical_peak_bytes": physical.peak])
     try? FileHandle.standardError.write(contentsOf: Data("Stage \(name): peak=\(peak / 1_048_576)MiB, physical=\(physical.current / 1_048_576)MiB, physicalPeak=\(physical.peak / 1_048_576)MiB\n".utf8))
 })
+let firstInferenceSeconds = Date().timeIntervalSince(started)
+let modelLoads = model.lastModelLoadCount
+guard modelLoads == 26 else { fatalError("Expected exactly one load per compiled stage variant") }
+var repeatedFootprints: [UInt64] = []
 if cpuOnly {
-    // A second full inference catches retained stage plans/weights and tensor
-    // accumulation that a single-segment gate would miss.
-    let repeatOutput = try model.separate(input)
-    guard zip(actual, repeatOutput).allSatisfy({ abs($0.0 - $0.1) < 0.00001 }) else {
-        fatalError("Repeated inference changed the output")
+    // Repeated segments catch allocator/plan retention beyond the first
+    // warm-up. Mirror the app's per-segment and completed-job pool boundary.
+    for _ in 0..<6 {
+        try autoreleasepool {
+            let repeatOutput = try model.separate(input)
+            guard zip(actual, repeatOutput).allSatisfy({ abs($0.0 - $0.1) < 0.00001 }),
+                  model.lastModelLoadCount == 26 else {
+                fatalError("Repeated inference changed output or model load bound")
+            }
+        }
+        malloc_zone_pressure_relief(nil, 0)
+        repeatedFootprints.append(physicalFootprint().current)
     }
+    guard let warm = repeatedFootprints.dropFirst().first, let last = repeatedFootprints.last,
+          last <= warm + 32 * 1_024 * 1_024 else { fatalError("Neural memory grows after warm-up") }
 }
 guard actual.count == reference.count else { fatalError("Different tensor sizes") }
 func compare(_ actual: [Float], reference: [Float], label: String) throws -> (passed: Bool, sources: [[String: Any]]) {
@@ -103,6 +116,8 @@ try FileHandle.standardError.write(contentsOf: Data("Core ML \(cpuOnly ? "CPU" :
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
     "passed":passed, "compute_units":cpuOnly ? "cpuOnly" : "cpuAndGPU",
     "peak_memory_bytes":peak, "physical_peak_bytes":physicalPeak, "memory_metric":"kernel_physical_footprint", "physical_limit_bytes":400 * 1_024 * 1_024, "resident_limit_bytes":800 * 1_024 * 1_024, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":white.sources, "musical_sources":musical.sources,
+    "first_inference_seconds":firstInferenceSeconds, "model_loads_per_segment":modelLoads,
+    "repeated_physical_bytes":repeatedFootprints, "repeated_growth_limit_bytes":32 * 1_024 * 1_024,
     "stft_max_error":spectralError, "stage_memory":stageMemory], options: [.prettyPrinted,.sortedKeys])
 try data.write(to: root.appendingPathComponent(cpuOnly ? "neural-parity-cpu.json" : "neural-parity.json"))
 guard passed else {

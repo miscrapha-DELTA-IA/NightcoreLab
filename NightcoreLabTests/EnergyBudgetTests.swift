@@ -2,13 +2,16 @@ import XCTest
 @testable import NightcoreLab
 
 final class EnergyBudgetTests: XCTestCase {
-    func testXRDecorationsLeaveCPUAndGPUHeadroomAndStemWorkPausesThem() {
+    func testXRBackgroundKeepsMovingAtReducedResolutionDuringStemWork() {
         var xr = EnergyBudget(constrainedDevice: true)
         XCTAssertEqual(xr.shaderFPS, 30)
         XCTAssertEqual(xr.secondaryShaderQuality, 0.25)
         XCTAssertTrue(xr.allowsNewAnalysis)
         xr.neuralWorkActive = true
-        XCTAssertTrue(xr.pausesShader)
+        XCTAssertFalse(xr.pausesShader, "Liquid background must not appear frozen during stems")
+        XCTAssertEqual(xr.liveShaderScale, 0.5)
+        XCTAssertEqual(xr.secondaryShaderQuality, 0)
+        XCTAssertEqual(xr.shaderFPS, 30)
         XCTAssertFalse(xr.allowsNewAnalysis)
         XCTAssertFalse(xr.allowsDecorativeMotion)
         XCTAssertTrue(xr.allowsVisualUpdates, "Transport/progress must keep updating")

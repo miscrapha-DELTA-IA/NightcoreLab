@@ -18,6 +18,9 @@ final class MusicIntelligenceEngine: Sendable {
     private let extractOnsets: OnsetExtractor
     private let extractRhythm: RhythmExtractor
 
+    func suspendForNeuralWork() async { await scheduler.suspendAndDrain() }
+    func resumeAfterNeuralWork() async { await scheduler.resumeAfterDrain() }
+
     init(cache: MusicAnalysisCache = MusicAnalysisCache(),
          scheduler: AnalysisScheduler = AnalysisScheduler(),
          identities: AssetIdentityCache = AssetIdentityCache(),

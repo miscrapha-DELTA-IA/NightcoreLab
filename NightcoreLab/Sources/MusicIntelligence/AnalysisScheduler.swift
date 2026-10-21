@@ -26,12 +26,43 @@ actor AnalysisScheduler {
     private var shared: [String: UUID] = [:]
     private var queue: [UUID] = []
     private var running = 0
+    private var suspensions = 0
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(maxConcurrentAnalyses: Int = 1) { limit = max(1, maxConcurrentAnalyses) }
+
+    /// Heavy neural work has priority over optional FFT/rhythm analysis.
+    /// Wait for cooperative workers to REALLY release their buffers; cancelling
+    /// their consumers alone is not a memory barrier.
+    func suspendAndDrain() async {
+        suspensions += 1
+        for (id, var job) in jobs {
+            for consumer in job.consumers.values {
+                consumer.continuation.resume(throwing: CancellationError())
+            }
+            job.consumers.removeAll()
+            if let worker = job.worker {
+                jobs[id] = job
+                worker.cancel()
+            } else {
+                jobs.removeValue(forKey: id)
+            }
+        }
+        shared.removeAll(); queue.removeAll()
+        if running > 0 {
+            await withCheckedContinuation { drainWaiters.append($0) }
+        }
+    }
+
+    func resumeAfterDrain() {
+        suspensions = max(0, suspensions - 1)
+        startQueuedJobs()
+    }
 
     /// Updates run on this actor, must be brief, and never imply MainActor delivery.
     func run(key: String, onUpdate: Update? = nil,
              operation: @escaping Operation) async throws -> MusicAnalysisResult {
+        guard suspensions == 0 else { throw CancellationError() }
         let consumerID = UUID()
         let result: MusicAnalysisResult = try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -78,6 +109,7 @@ actor AnalysisScheduler {
     }
 
     private func startQueuedJobs() {
+        guard suspensions == 0 else { return }
         while running < limit, !queue.isEmpty {
             let id = queue.removeFirst()
             guard let job = jobs[id] else { continue }
@@ -108,6 +140,11 @@ actor AnalysisScheduler {
         running -= 1
         if shared[job.key] == id { shared.removeValue(forKey: job.key) }
         for consumer in job.consumers.values { consumer.continuation.resume(with: result) }
+        if running == 0 {
+            let waiters = drainWaiters
+            drainWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
         startQueuedJobs()
     }
 }

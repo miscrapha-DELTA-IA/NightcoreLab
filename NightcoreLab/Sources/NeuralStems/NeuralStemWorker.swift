@@ -21,6 +21,11 @@ enum NeuralStemWorker {
         private var memoryPressure = false
         func cancel() { lock.lock(); cancelled = true; lock.unlock() }
         func receivedMemoryWarning() { lock.lock(); memoryPressure = true; lock.unlock() }
+        func resetMemoryPressure() { lock.lock(); memoryPressure = false; lock.unlock() }
+        func checkCancellation() throws {
+            lock.lock(); let value = cancelled; lock.unlock()
+            if value { throw CancellationError() }
+        }
         func check() throws {
             lock.lock(); let value = cancelled, memory = memoryPressure; lock.unlock()
             if memory { throw NeuralStemError.insufficientMemory }
@@ -44,6 +49,7 @@ enum NeuralStemWorker {
 
     static func prepare(source: URL, cacheFolder: URL = cacheRoot,
                         modelURL: URL? = bundledModel,
+                        reclaimMemory: @escaping @Sendable () -> Void = {},
                         progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
         let cancellation = Cancellation()
         return try await withTaskCancellationHandler {
@@ -52,12 +58,27 @@ enum NeuralStemWorker {
                     forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
                 ) { _ in cancellation.receivedMemoryWarning() }
                 queue.async {
-                    defer { NotificationCenter.default.removeObserver(memoryObserver) }
-                    continuation.resume(with: Result {
+                    let result: Result<StemAsset, Error> = autoreleasepool { Result {
                         try cancellation.check()
                         return try run(source: source, cacheFolder: cacheFolder, modelURL: modelURL,
-                                       check: cancellation.check, progress: progress)
-                    })
+                                       check: cancellation.check, recover: {
+                            cancellation.resetMemoryPressure()
+                            reclaimMemory()
+                            StemMemoryRecovery.releaseUnusedPages()
+                            // Give UI cache cleanup a bounded opportunity to finish.
+                            // This sleeps only the utility worker, never MainActor.
+                            for _ in 0..<10 {
+                                try cancellation.checkCancellation()
+                                Thread.sleep(forTimeInterval: 0.1)
+                            }
+                            cancellation.resetMemoryPressure()
+                        }, progress: progress)
+                    } }
+                    NotificationCenter.default.removeObserver(memoryObserver)
+                    // Drain the ENTIRE job before the UI starts another task.
+                    // A queue's .workItem pool drains AFTER continuation.resume.
+                    StemMemoryRecovery.releaseUnusedPages()
+                    continuation.resume(with: result)
                 }
             }
         } onCancel: { cancellation.cancel() }
@@ -97,6 +118,7 @@ enum NeuralStemWorker {
 
     private static func run(source: URL, cacheFolder: URL, modelURL: URL?,
                             check: () throws -> Void,
+                            recover: () throws -> Void,
                             progress: @escaping (Double, String) -> Void) throws -> StemAsset {
         progress(0, "Conferindo música…")
         let hash = try sourceHash(source, check: check)
@@ -134,7 +156,7 @@ enum NeuralStemWorker {
         let separator = try autoreleasepool { try DemucsCoreMLModel(url: modelURL) }
         try check()
         try separate(decodedURL, decoded: decoded, separator: separator,
-                     destinations: urls(in: stage), check: check, progress: progress)
+                     destinations: urls(in: stage), check: check, recover: recover, progress: progress)
         try check()
         let staged = StemAsset(urls: urls(in: stage), source: .demucs)
         let frames = try validate(staged, expectedSeconds: seconds)
@@ -206,6 +228,7 @@ enum NeuralStemWorker {
 
     private static func separate(_ source: URL, decoded: Decoded, separator: DemucsCoreMLModel,
                                  destinations: [StemKind: URL], check: () throws -> Void,
+                                 recover: () throws -> Void,
                                  progress: @escaping (Double, String) -> Void) throws {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let length = StemDSP.segmentSamples
@@ -223,9 +246,13 @@ enum NeuralStemWorker {
         var accumulator = [Float](repeating: 0, count: 8 * length)
         var weights = [Float](repeating: 0, count: length)
         var start = 0
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var completedSegments = 0
+        var remainingMessage = "Separando voz e instrumentos…"
         while start < decoded.frames {
-            try check()
+            StemMemoryRecovery.releaseUnusedPages()
             let valid = min(length, decoded.frames - start)
+            let count = start + length >= decoded.frames ? valid : advance
             file.framePosition = AVAudioFramePosition(start)
             try file.read(into: input, frameCount: AVAudioFrameCount(valid))
             guard Int(input.frameLength) == valid, let channels = input.floatChannelData else { throw NeuralStemError.noAudio }
@@ -233,8 +260,12 @@ enum NeuralStemWorker {
             for channel in 0..<2 {
                 for i in 0..<valid { segment[channel * length + i] = (channels[channel][i] - decoded.mean) / decoded.standardDeviation }
             }
-            let separated = try autoreleasepool {
-                try separator.separate(segment, check: check, admission: { required in
+            let separated = try StemMemoryRecovery.perform(recover: { _ in
+                progress(0.05 + 0.94 * Double(start) / Double(decoded.frames),
+                         "Liberando memória para continuar…")
+                try recover()
+            }) { try autoreleasepool {
+                let result = try separator.separate(segment, check: check, admission: { required in
                     #if !targetEnvironment(simulator)
                     let available = os_proc_available_memory()
                     guard available >= required else {
@@ -243,16 +274,18 @@ enum NeuralStemWorker {
                     }
                     #endif
                 }, progress: { fraction, _ in
-                    let completed = min(Double(decoded.frames), Double(start) + Double(valid) * fraction)
-                    progress(0.05 + 0.94 * completed / Double(decoded.frames), "Separando voz e instrumentos…")
+                    // Report committed output, not the overlapping context;
+                    // otherwise the bar moves backwards at every segment.
+                    let completed = min(Double(decoded.frames), Double(start) + Double(count) * fraction)
+                    progress(0.05 + 0.94 * completed / Double(decoded.frames), remainingMessage)
                 })
-            }
-            try check()
+                try check()
+                return result
+            } }
             for i in 0..<length {
                 weights[i] += weight[i]
                 for lane in 0..<8 { accumulator[lane * length + i] += separated[lane * length + i] * weight[i] }
             }
-            let count = start + length >= decoded.frames ? valid : advance
             output.frameLength = AVAudioFrameCount(count)
             for source in 0..<4 {
                 for channel in 0..<2 {
@@ -263,7 +296,14 @@ enum NeuralStemWorker {
                 }
                 try writers[source].write(from: output)
             }
-            progress(0.05 + 0.94 * Double(start + count) / Double(decoded.frames), "Separando no iPhone…")
+            completedSegments += 1
+            let segmentsLeft = Int(ceil(Double(decoded.frames - start - count) / Double(advance)))
+            if segmentsLeft > 0 {
+                let average = (ProcessInfo.processInfo.systemUptime - startedAt) / Double(completedSegments)
+                let minutes = max(1, Int(ceil(average * Double(segmentsLeft) / 60)))
+                remainingMessage = "Separando no iPhone · cerca de \(minutes) min restantes"
+            }
+            progress(0.05 + 0.94 * Double(start + count) / Double(decoded.frames), remainingMessage)
             if count == valid { break }
             accumulator.withUnsafeMutableBufferPointer { a in
                 for lane in 0..<8 {

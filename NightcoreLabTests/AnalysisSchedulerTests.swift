@@ -119,6 +119,56 @@ final class AnalysisSchedulerTests: XCTestCase {
         XCTAssertLessThanOrEqual(peak, 2)
         XCTAssertEqual(total, 10)
     }
+
+    func testNeuralSuspensionWaitsForWorkerCleanupAndRejectsNewAnalysis() async throws {
+        let scheduler = AnalysisScheduler()
+        let gate = AnalysisTestGate()
+        let started = expectation(description: "Worker owns buffers")
+        let cancellationReceived = expectation(description: "Worker received cancellation")
+        let drained = expectation(description: "Neural work can start")
+        let drainStatus = AnalysisDrainStatus()
+        let result = fixture()
+        let consumer = Task {
+            try await scheduler.run(key: "existing") { _ in
+                await withTaskCancellationHandler {
+                    started.fulfill()
+                    await gate.wait() // Deliberately retains resources after cancellation.
+                } onCancel: { cancellationReceived.fulfill() }
+                try Task.checkCancellation()
+                return result
+            }
+        }
+        await fulfillment(of: [started], timeout: 12)
+        let suspension = Task {
+            await scheduler.suspendAndDrain()
+            await drainStatus.finish()
+            drained.fulfill()
+        }
+        await fulfillment(of: [cancellationReceived], timeout: 12)
+        do { _ = try await consumer.value; XCTFail("Consumer should be cancelled") }
+        catch is CancellationError { }
+        do {
+            _ = try await scheduler.run(key: "during") { _ in
+                XCTFail("Optional analysis cannot run during neural work")
+                return result
+            }
+            XCTFail("Expected suspension rejection")
+        } catch is CancellationError { }
+        // The barrier must stay closed until the actual worker returns.
+        let finishedBeforeCleanup = await drainStatus.finished
+        XCTAssertFalse(finishedBeforeCleanup, "Consumer cancellation alone must not release the memory barrier")
+        await gate.open()
+        await suspension.value
+        await fulfillment(of: [drained], timeout: 12)
+        await scheduler.resumeAfterDrain()
+        let next = try await scheduler.run(key: "after") { _ in result }
+        XCTAssertEqual(next, result)
+    }
+}
+
+private actor AnalysisDrainStatus {
+    private(set) var finished = false
+    func finish() { finished = true }
 }
 
 private actor AnalysisTestGate {

@@ -212,7 +212,11 @@ struct ContentView: View {
         keepOriginalPitch ? 0 : 1200 * log2(speed)
     }
 
-    var body: some View { playerPresentations }
+    var body: some View {
+        var budget = energyBudget
+        budget.neuralWorkActive = audio.isPreparingStems
+        return playerPresentations.environment(\.energyBudget, budget)
+    }
 
     private var nextTrackSelection: PlaybackCoordinator.NextSelection? {
         playbackTransition.nextSelection(navigation: navigationHistory, queue: playbackQueue)
@@ -1660,7 +1664,7 @@ struct ContentView: View {
 
     private func analyzeDiscoveryAudio(track: Track, localURL: URL) {
         discoveryAnalysisTask?.cancel()
-        guard energyBudget.allowsNewAnalysis, localURL.isFileURL else { return }
+        guard energyBudget.allowsNewAnalysis, !audio.isPreparingStems, localURL.isFileURL else { return }
         // One cancelable offline analysis for the confirmed local track, never per frame.
         discoveryAnalysisTask = Task(priority: .utility) {
             do {
