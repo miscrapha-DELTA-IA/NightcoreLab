@@ -106,13 +106,22 @@ public final class DemucsCoreMLModel {
         let rows = shape[shape.count - 2], columns = shape.last!
         let base = zip(prefix, strides).reduce(0) { $0 + $1.0 * $1.1 }
         var result = [Float](repeating: 0, count: rows * columns)
-        for row in 0..<rows {
-            for column in 0..<columns {
-                let offset = base + row * strides[strides.count - 2] + column * strides.last!
-                if array.dataType == .float32 {
-                    result[row * columns + column] = array.dataPointer.assumingMemoryBound(to: Float.self)[offset]
+        let rowStride = strides[strides.count - 2], step = strides.last!
+        // Resolve Core ML's Objective-C pointer once, not millions of times
+        // per segment. Contiguous rows are copied in bulk without arithmetic.
+        let data = array.dataPointer, isFloat = array.dataType == .float32
+        result.withUnsafeMutableBufferPointer { destination in
+            for row in 0..<rows {
+                let offset = base + row * rowStride
+                if isFloat, step == 1 {
+                    destination.baseAddress!.advanced(by: row * columns).update(
+                        from: data.assumingMemoryBound(to: Float.self) + offset, count: columns)
                 } else {
-                    result[row * columns + column] = Float(Float16(bitPattern: array.dataPointer.assumingMemoryBound(to: UInt16.self)[offset]))
+                    for column in 0..<columns {
+                        destination[row * columns + column] = isFloat
+                            ? data.assumingMemoryBound(to: Float.self)[offset + column * step]
+                            : Float(Float16(bitPattern: data.assumingMemoryBound(to: UInt16.self)[offset + column * step]))
+                    }
                 }
             }
         }
@@ -126,9 +135,14 @@ public final class DemucsCoreMLModel {
               values.count == shape[shape.count - 2] * shape.last! else { throw NeuralStemError.incompatibleModel }
         let columns = shape.last!, base = zip(prefix, strides).reduce(0) { $0 + $1.0 * $1.1 }
         let pointer = array.dataPointer.assumingMemoryBound(to: Float.self)
-        for row in 0..<shape[shape.count - 2] {
-            for column in 0..<columns {
-                pointer[base + row * strides[strides.count - 2] + column * strides.last!] = values[row * columns + column]
+        values.withUnsafeBufferPointer { source in
+            for row in 0..<shape[shape.count - 2] {
+                let offset = base + row * strides[strides.count - 2]
+                if strides.last == 1 {
+                    pointer.advanced(by: offset).update(from: source.baseAddress! + row * columns, count: columns)
+                } else {
+                    for column in 0..<columns { pointer[offset + column * strides.last!] = source[row * columns + column] }
+                }
             }
         }
     }
@@ -138,12 +152,18 @@ public final class DemucsCoreMLModel {
         guard array.dataType == .float32, shape.reduce(1, *) == values.count,
               let inner = shape.last, inner > 0 else { throw NeuralStemError.incompatibleModel }
         let pointer = array.dataPointer.assumingMemoryBound(to: Float.self)
+        values.withUnsafeBufferPointer { source in
         for row in 0..<(values.count / inner) {
             var base = 0, remaining = row
             for dim in stride(from: shape.count - 2, through: 0, by: -1) {
                 base += (remaining % shape[dim]) * strides[dim]; remaining /= shape[dim]
             }
-            for i in 0..<inner { pointer[base + i * strides.last!] = values[row * inner + i] }
+            if strides.last == 1 {
+                pointer.advanced(by: base).update(from: source.baseAddress! + row * inner, count: inner)
+            } else {
+                for i in 0..<inner { pointer[base + i * strides.last!] = source[row * inner + i] }
+            }
+        }
         }
     }
 
@@ -154,23 +174,31 @@ public final class DemucsCoreMLModel {
         guard let inner = shape.last, inner > 0 else { throw NeuralStemError.invalidOutput }
         let count = shape.reduce(1, *), rows = count / inner
         var result = [Float](repeating: 0, count: count)
+        let data = array.dataPointer, kind = array.dataType
+        guard kind == .float32 || kind == .float16 || kind == .double else { throw NeuralStemError.invalidOutput }
+        result.withUnsafeMutableBufferPointer { destination in
         for row in 0..<rows {
             var base = 0, remaining = row
             for dim in stride(from: shape.count - 2, through: 0, by: -1) {
                 base += (remaining % shape[dim]) * strides[dim]; remaining /= shape[dim]
             }
             let step = strides.last!
-            switch array.dataType {
+            switch kind {
             case .float32:
-                let pointer = array.dataPointer.assumingMemoryBound(to: Float.self)
-                for i in 0..<inner { result[row * inner + i] = pointer[base + i * step] }
+                let pointer = data.assumingMemoryBound(to: Float.self)
+                if step == 1 {
+                    destination.baseAddress!.advanced(by: row * inner).update(from: pointer + base, count: inner)
+                } else {
+                    for i in 0..<inner { destination[row * inner + i] = pointer[base + i * step] }
+                }
             case .float16:
-                let pointer = array.dataPointer.assumingMemoryBound(to: UInt16.self)
-                for i in 0..<inner { result[row * inner + i] = Float(Float16(bitPattern: pointer[base + i * step])) }
+                let pointer = data.assumingMemoryBound(to: UInt16.self)
+                for i in 0..<inner { destination[row * inner + i] = Float(Float16(bitPattern: pointer[base + i * step])) }
             case .double:
-                let pointer = array.dataPointer.assumingMemoryBound(to: Double.self)
-                for i in 0..<inner { result[row * inner + i] = Float(pointer[base + i * step]) }
-            default: throw NeuralStemError.invalidOutput
+                let pointer = data.assumingMemoryBound(to: Double.self)
+                for i in 0..<inner { destination[row * inner + i] = Float(pointer[base + i * step]) }
+            default: break // Rejected above, before accessing storage.
+            }
             }
         }
         return result

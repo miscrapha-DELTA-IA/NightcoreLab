@@ -36,6 +36,7 @@ enum NeuralStemWorker {
         let model: String
         let sourceHash: String
         let frames: Int64
+        let previewStart: Double?
     }
     struct Decoded {
         let frames: Int
@@ -49,6 +50,7 @@ enum NeuralStemWorker {
 
     static func prepare(source: URL, cacheFolder: URL = cacheRoot,
                         modelURL: URL? = bundledModel,
+                        request: NeuralStemRequest = .full,
                         reclaimMemory: @escaping @Sendable () -> Void = {},
                         progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
         let cancellation = Cancellation()
@@ -61,6 +63,7 @@ enum NeuralStemWorker {
                     let result: Result<StemAsset, Error> = autoreleasepool { Result {
                         try cancellation.check()
                         return try run(source: source, cacheFolder: cacheFolder, modelURL: modelURL,
+                                       request: request,
                                        check: cancellation.check, recover: {
                             cancellation.resetMemoryPressure()
                             reclaimMemory()
@@ -101,8 +104,13 @@ enum NeuralStemWorker {
 
     static func validate(_ asset: StemAsset, expectedSeconds: Double? = nil) throws -> Int64 {
         var frames: AVAudioFramePosition?
-        for kind in StemKind.allCases {
-            guard let url = asset.urls[kind], url.isFileURL else { throw NeuralStemError.invalidOutput }
+        var required = try StemKind.allCases.map { kind -> URL in
+            guard let url = asset.urls[kind] else { throw NeuralStemError.invalidOutput }
+            return url
+        }
+        if let preview = asset.preview { required += [preview.originalURL, preview.accompanimentURL] }
+        for url in required {
+            guard url.isFileURL else { throw NeuralStemError.invalidOutput }
             let file = try AVAudioFile(forReading: url)
             guard file.processingFormat.channelCount == 2,
                   file.processingFormat.sampleRate == sampleRate, file.length > 0,
@@ -117,19 +125,31 @@ enum NeuralStemWorker {
     }
 
     private static func run(source: URL, cacheFolder: URL, modelURL: URL?,
+                            request: NeuralStemRequest,
                             check: () throws -> Void,
                             recover: () throws -> Void,
                             progress: @escaping (Double, String) -> Void) throws -> StemAsset {
         progress(0, "Conferindo música…")
+        let input = try AVAudioFile(forReading: source)
+        let seconds = Double(input.length) / input.processingFormat.sampleRate
+        guard seconds > 0, seconds.isFinite, seconds <= 30 * 60 else { throw NeuralStemError.noAudio }
+        let previewStart: Double?
+        if let requested = request.previewTime {
+            guard requested.isFinite else { throw NeuralStemError.noAudio }
+            let clamped = min(max(0, requested), max(0, seconds - 7.8))
+            previewStart = Double(Int64(clamped * sampleRate)) / sampleRate
+        } else { previewStart = nil }
         let hash = try sourceHash(source, check: check)
-        let folder = cacheFolder.appendingPathComponent(DemucsCoreMLModel.identifier + "-" + hash)
+        let suffix = previewStart.map { "-preview-\(Int64(($0 * sampleRate).rounded()))" } ?? ""
+        let folder = cacheFolder.appendingPathComponent(DemucsCoreMLModel.identifier + "-" + hash + suffix)
         let manifestURL = folder.appendingPathComponent("complete.json")
         if let data = try? Data(contentsOf: manifestURL),
            let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
-           manifest.model == DemucsCoreMLModel.identifier, manifest.sourceHash == hash {
-            let asset = StemAsset(urls: urls(in: folder), source: .demucs)
+           manifest.model == DemucsCoreMLModel.identifier, manifest.sourceHash == hash,
+           manifest.previewStart == previewStart {
+            let asset = makeAsset(folder: folder, frames: manifest.frames, previewStart: previewStart)
             if let count = try? validate(asset), count == manifest.frames {
-                progress(1, "Stems prontos no iPhone")
+                progress(1, previewStart == nil ? "Stems prontos no iPhone" : "Prévia pronta para ouvir")
                 return asset
             }
         }
@@ -138,42 +158,104 @@ enum NeuralStemWorker {
         let stage = cacheFolder.appendingPathComponent(".partial-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stage) }
-        let input = try AVAudioFile(forReading: source)
-        let seconds = Double(input.length) / input.processingFormat.sampleRate
-        guard seconds > 0, seconds.isFinite, seconds <= 30 * 60 else { throw NeuralStemError.noAudio }
         // Four float32 stereo stems + decoded input, with working-space margin.
-        let required = Int64(seconds * sampleRate * 8 * 5 * 1.15) + 200_000_000
+        let required = Int64((previewStart == nil ? seconds : min(7.8, seconds)) * sampleRate * 8 * 6 * 1.15) + 200_000_000
         if let free = try? cacheFolder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             .volumeAvailableCapacityForImportantUsage, free < required {
             throw NeuralStemError.insufficientSpace
         }
-        let decodedURL = stage.appendingPathComponent("source.caf")
+        let decodedURL = stage.appendingPathComponent(previewStart == nil ? "source.caf" : "original.wav")
         progress(0.01, "Preparando áudio…")
-        let decoded = try decode(source, to: decodedURL, check: check)
+        let decoded = try autoreleasepool {
+            try decode(source, to: decodedURL, previewStart: previewStart, check: check)
+        }
         try check()
         progress(0.04, "Preparando separação…")
         try check()
         let separator = try autoreleasepool { try DemucsCoreMLModel(url: modelURL) }
         try check()
-        try separate(decodedURL, decoded: decoded, separator: separator,
-                     destinations: urls(in: stage), check: check, recover: recover, progress: progress)
+        try autoreleasepool {
+            try separate(decodedURL, decoded: decoded, separator: separator,
+                         destinations: urls(in: stage), check: check, recover: recover, progress: progress)
+        }
         try check()
-        let staged = StemAsset(urls: urls(in: stage), source: .demucs)
-        let frames = try validate(staged, expectedSeconds: seconds)
-        let manifest = Manifest(model: DemucsCoreMLModel.identifier, sourceHash: hash, frames: frames)
+        if previewStart != nil {
+            try autoreleasepool { try writeAccompaniment(in: stage, check: check) }
+        }
+        let staged = makeAsset(folder: stage, frames: Int64(decoded.frames), previewStart: previewStart)
+        let frames = try validate(staged, expectedSeconds: previewStart == nil ? seconds : Double(decoded.frames) / sampleRate)
+        let manifest = Manifest(model: DemucsCoreMLModel.identifier, sourceHash: hash, frames: frames, previewStart: previewStart)
         try JSONEncoder().encode(manifest).write(to: stage.appendingPathComponent("complete.json"), options: .atomic)
-        try FileManager.default.removeItem(at: decodedURL)
+        if previewStart == nil { try FileManager.default.removeItem(at: decodedURL) }
         try check()
         if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
         try FileManager.default.moveItem(at: stage, to: folder)
-        progress(1, "Stems prontos no iPhone")
-        return StemAsset(urls: urls(in: folder), source: .demucs)
+        if previewStart != nil { prunePreviews(in: cacheFolder, keeping: folder) }
+        progress(1, previewStart == nil ? "Stems prontos no iPhone" : "Prévia pronta para ouvir")
+        return makeAsset(folder: folder, frames: frames, previewStart: previewStart)
+    }
+
+    private static func makeAsset(folder: URL, frames: Int64, previewStart: Double?) -> StemAsset {
+        let preview = previewStart.map {
+            StemPreviewInfo(startTime: $0, duration: Double(frames) / sampleRate,
+                            originalURL: folder.appendingPathComponent("original.wav"),
+                            accompanimentURL: folder.appendingPathComponent("accompaniment.wav"))
+        }
+        return StemAsset(urls: urls(in: folder), source: .demucs, preview: preview)
+    }
+
+    private static func prunePreviews(in root: URL, keeping current: URL) {
+        let manager = FileManager.default
+        let candidates = (try? manager.contentsOfDirectory(at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles)) ?? []
+        let older = candidates.filter {
+            $0 != current && $0.lastPathComponent.hasPrefix(DemucsCoreMLModel.identifier + "-") &&
+            $0.lastPathComponent.contains("-preview-")
+        }.sorted {
+            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhs > rhs
+        }
+        for folder in older.dropFirst(2) { try? manager.removeItem(at: folder) }
+    }
+
+    /// Actual drums+bass+other waveforms. No EQ proxy or lossy encoding.
+    private static func writeAccompaniment(in folder: URL, check: () throws -> Void) throws {
+        let files = try [StemKind.drums, .bass, .instrumental].map {
+            try AVAudioFile(forReading: folder.appendingPathComponent($0.rawValue + ".wav"))
+        }
+        let format = files[0].processingFormat
+        let buffers = files.map { _ in AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192)! }
+        let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192)!
+        let writer = try AVAudioFile(forWriting: folder.appendingPathComponent("accompaniment.wav"),
+                                     settings: format.settings)
+        var remaining = files[0].length
+        while remaining > 0 {
+            try check()
+            let count = AVAudioFrameCount(min(remaining, 8192))
+            output.frameLength = count
+            for channel in 0..<2 { output.floatChannelData![channel].update(repeating: 0, count: Int(count)) }
+            for (file, buffer) in zip(files, buffers) {
+                try file.read(into: buffer, frameCount: count)
+                guard buffer.frameLength == count else { throw NeuralStemError.invalidOutput }
+                for channel in 0..<2 {
+                    for frame in 0..<Int(count) { output.floatChannelData![channel][frame] += buffer.floatChannelData![channel][frame] }
+                }
+            }
+            try writer.write(from: output)
+            remaining -= Int64(count)
+        }
     }
 
     /// One streaming resample, plus whole-mix statistics. Mono is explicitly
     /// duplicated, never attenuated or silently treated as a second channel.
-    static func decode(_ source: URL, to destination: URL, check: () throws -> Void) throws -> Decoded {
+    static func decode(_ source: URL, to destination: URL, previewStart: Double? = nil,
+                       check: () throws -> Void) throws -> Decoded {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
+        if let previewStart {
+            guard previewStart.isFinite, previewStart >= 0,
+                  previewStart < Double(file.length) / file.processingFormat.sampleRate else { throw NeuralStemError.noAudio }
+        }
         let channels = file.processingFormat.channelCount
         guard (1...2).contains(channels), file.length > 0,
               let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels),
@@ -184,6 +266,11 @@ enum NeuralStemWorker {
               let buffer = AVAudioPCMBuffer(pcmFormat: stereo, frameCapacity: 8192) else { throw NeuralStemError.noAudio }
         let writer = try AVAudioFile(forWriting: destination, settings: stereo.settings,
                                      commonFormat: .pcmFormatFloat32, interleaved: false)
+        let startFrame = previewStart.map { Int64($0 * file.processingFormat.sampleRate) } ?? 0
+        let endFrame = previewStart == nil ? file.length :
+            min(file.length, startFrame + Int64(7.8 * file.processingFormat.sampleRate))
+        let maxOutput = previewStart == nil ? Int.max : StemDSP.segmentSamples
+        file.framePosition = startFrame
         var total = 0, sum = 0.0, squares = 0.0, ended = false
         while true {
             try check()
@@ -192,7 +279,7 @@ enum NeuralStemWorker {
                 // AVAudioFile can fail with a nil NSError when asked to read
                 // beyond EOF. Signal EOF before reading, and drain the
                 // converter's remaining resampler frames normally.
-                let remaining = file.length - file.framePosition
+                let remaining = endFrame - file.framePosition
                 if ended || remaining <= 0 { ended = true; state.pointee = .endOfStream; return nil }
                 let count = AVAudioFrameCount(min(Int64(min(packets, input.frameCapacity)), remaining))
                 guard count > 0 else { state.pointee = .noDataNow; return nil }
@@ -204,9 +291,9 @@ enum NeuralStemWorker {
             }
             if let readError { throw readError }
             if let conversionError { throw conversionError }
-            let n = Int(output.frameLength)
+            let n = min(Int(output.frameLength), maxOutput - total)
             if n > 0, let source = output.floatChannelData, let target = buffer.floatChannelData {
-                buffer.frameLength = output.frameLength
+                buffer.frameLength = AVAudioFrameCount(n)
                 target[0].update(from: source[0], count: n)
                 target[1].update(from: source[Int(channels) - 1], count: n)
                 for i in 0..<n {
@@ -217,7 +304,7 @@ enum NeuralStemWorker {
                 }
                 total += n; try writer.write(from: buffer)
             }
-            if status == .endOfStream { break }
+            if status == .endOfStream || total >= maxOutput { break }
             if status == .error || (n == 0 && ended) { throw NeuralStemError.noAudio }
         }
         guard total > 0 else { throw NeuralStemError.noAudio }
@@ -246,10 +333,11 @@ enum NeuralStemWorker {
         var accumulator = [Float](repeating: 0, count: 8 * length)
         var weights = [Float](repeating: 0, count: length)
         var start = 0
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        var completedSegments = 0
-        var remainingMessage = "Separando voz e instrumentos…"
+        var estimator = StemProgressEstimator()
+        var remainingMessage = "Separando · medindo o tempo neste iPhone…"
         while start < decoded.frames {
+            let segmentStartedAt = ProcessInfo.processInfo.systemUptime
+            var recoveredMemory = false
             StemMemoryRecovery.releaseUnusedPages()
             let valid = min(length, decoded.frames - start)
             let count = start + length >= decoded.frames ? valid : advance
@@ -261,6 +349,7 @@ enum NeuralStemWorker {
                 for i in 0..<valid { segment[channel * length + i] = (channels[channel][i] - decoded.mean) / decoded.standardDeviation }
             }
             let separated = try StemMemoryRecovery.perform(recover: { _ in
+                recoveredMemory = true
                 progress(0.05 + 0.94 * Double(start) / Double(decoded.frames),
                          "Liberando memória para continuar…")
                 try recover()
@@ -296,12 +385,11 @@ enum NeuralStemWorker {
                 }
                 try writers[source].write(from: output)
             }
-            completedSegments += 1
+            estimator.record(seconds: ProcessInfo.processInfo.systemUptime - segmentStartedAt,
+                             recoveredMemory: recoveredMemory)
             let segmentsLeft = Int(ceil(Double(decoded.frames - start - count) / Double(advance)))
             if segmentsLeft > 0 {
-                let average = (ProcessInfo.processInfo.systemUptime - startedAt) / Double(completedSegments)
-                let minutes = max(1, Int(ceil(average * Double(segmentsLeft) / 60)))
-                remainingMessage = "Separando no iPhone · cerca de \(minutes) min restantes"
+                remainingMessage = estimator.message(segments: segmentsLeft)
             }
             progress(0.05 + 0.94 * Double(start + count) / Double(decoded.frames), remainingMessage)
             if count == valid { break }

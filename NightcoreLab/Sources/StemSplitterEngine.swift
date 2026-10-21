@@ -41,10 +41,27 @@ enum StemSource: String, Sendable { case spectral, demucs }
 struct StemAsset: Sendable {
     let urls: [StemKind: URL]
     let source: StemSource
-    init(urls: [StemKind: URL], source: StemSource = .spectral) {
-        self.urls = urls; self.source = source
+    let preview: StemPreviewInfo?
+    init(urls: [StemKind: URL], source: StemSource = .spectral, preview: StemPreviewInfo? = nil) {
+        self.urls = urls; self.source = source; self.preview = preview
     }
     var vocalURL: URL? { urls[.vocal] }
+}
+
+struct StemPreviewInfo: Sendable {
+    let startTime: Double
+    let duration: Double
+    let originalURL: URL
+    let accompanimentURL: URL
+}
+
+enum NeuralStemRequest: Sendable {
+    case full
+    case preview(at: Double)
+    var previewTime: Double? {
+        if case .preview(let time) = self { return time }
+        return nil
+    }
 }
 
 /// Optional verified model slot. A model may replace the native DSP outputs,

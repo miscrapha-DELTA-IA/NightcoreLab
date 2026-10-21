@@ -13,10 +13,10 @@ final class NeuralStemsRegressionTests: XCTestCase {
     }
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: folder) }
 
-    private func write(_ name: String, rate: Double = 44_100, channels: UInt32 = 2,
+    private func write(_ name: String, rate: Double = 44_100, channels: UInt32 = 2, duration: Double = 2,
                        sample: (Int) -> Float) throws -> URL {
         let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels)!
-        let count = Int(rate * 2)
+        let count = Int(rate * duration)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count))!
         buffer.frameLength = AVAudioFrameCount(count)
         for channel in 0..<Int(channels) {
@@ -84,6 +84,22 @@ final class NeuralStemsRegressionTests: XCTestCase {
         let peak = try XCTUnwrap(wave.indices.max(by: { abs(wave[$0]) < abs(wave[$1]) }))
         XCTAssertLessThanOrEqual(abs(peak - 22_050), 2, "Resampling must not insert leading delay into the stems")
         XCTAssertGreaterThan(wave.map { abs($0) }.max() ?? 0, 0.5)
+    }
+
+    func testPreviewDecoderSeeksToSelectedMusicAndNeverExceedsOneModelSegment() throws {
+        let source = try write("preview-seek", duration: 20) { index in
+            let frequency = index < 441_000 ? 220.0 : 880.0
+            return Float(0.1 * sin(2 * .pi * frequency * Double(index) / 44_100))
+        }
+        let destination = folder.appendingPathComponent("preview-original.wav")
+        let decoded = try autoreleasepool {
+            try NeuralStemWorker.decode(source, to: destination, previewStart: 11, check: {})
+        }
+        XCTAssertLessThanOrEqual(decoded.frames, StemDSP.segmentSamples)
+        XCTAssertGreaterThanOrEqual(decoded.frames, StemDSP.segmentSamples - 2)
+        let wave = try samples(destination)
+        XCTAssertGreaterThan(amplitude(wave, frequency: 880), 0.09)
+        XCTAssertLessThan(amplitude(wave, frequency: 220), 0.00001)
     }
 
     func testStemExportStartsAtSelectedSourceTime() throws {
@@ -299,5 +315,29 @@ final class NeuralStemsRegressionTests: XCTestCase {
         let cached = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
             modelURL: nil, progress: { _, _ in })
         XCTAssertEqual(cached.urls, asset.urls)
+
+        let preview = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+            modelURL: model, request: .preview(at: 1), progress: { _, _ in })
+        let info = try XCTUnwrap(preview.preview)
+        XCTAssertNotEqual(preview.urls, asset.urls, "A short preview must never masquerade as complete stems")
+        XCTAssertEqual(info.startTime, 0, "Short songs clamp the preview to their beginning")
+        XCTAssertEqual(info.duration, 2, accuracy: 0.001)
+        XCTAssertEqual(try NeuralStemWorker.validate(preview, expectedSeconds: 2), 88_200)
+        let original = try samples(info.originalURL)
+        XCTAssertGreaterThan(amplitude(original, frequency: 440), 0.09)
+        let accompaniment = try samples(info.accompanimentURL)
+        let drums = try samples(preview.urls[.drums]!)
+        let bass = try samples(preview.urls[.bass]!)
+        let other = try samples(preview.urls[.instrumental]!)
+        for index in stride(from: 0, to: accompaniment.count, by: 31) {
+            XCTAssertEqual(accompaniment[index], drums[index] + bass[index] + other[index], accuracy: 0.000001)
+        }
+        let previewCache = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+            modelURL: nil, request: .preview(at: 1), progress: { _, _ in })
+        XCTAssertEqual(previewCache.preview?.originalURL, info.originalURL)
+        let fullCache = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+            modelURL: nil, progress: { _, _ in })
+        XCTAssertNil(fullCache.preview)
+        XCTAssertEqual(fullCache.urls, asset.urls)
     }
 }
