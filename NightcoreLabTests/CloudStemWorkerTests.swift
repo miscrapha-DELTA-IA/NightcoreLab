@@ -3,7 +3,7 @@ import XCTest
 
 final class CloudStemWorkerTests: XCTestCase {
     let space = URL(string: "https://raphael-deltaia-gnarly-free-stems.hf.space")!
-    let hash = String(repeating: "a", count: 64)
+    let sourceHash = String(repeating: "a", count: 64)
 
     func testOnlyExactHTTPSFileOriginIsAccepted() {
         XCTAssertTrue(CloudStemWorker.permittedSpace(space))
@@ -17,17 +17,17 @@ final class CloudStemWorkerTests: XCTestCase {
     }
 
     func testGradioCompletionBindsFourStemsToOriginalAndRejectsForeignDownloads() throws {
-        let manifest: [String: Any] = ["model": "htdemucs", "source_hash": hash,
+        let manifest: [String: Any] = ["model": "htdemucs", "source_hash": sourceHash,
             "frames": 44_100, "sample_rate": 44_100,
-            "sha256": ["vocals": hash, "other": hash, "drums": hash, "bass": hash]]
+            "sha256": ["vocals": sourceHash, "other": sourceHash, "drums": sourceHash, "bass": sourceHash]]
         var values: [Any] = (0..<4).map { ["url": space.absoluteString + "/gradio_api/file=/tmp/\($0).wav"] }
         values.append(manifest)
         let data = try JSONSerialization.data(withJSONObject: values)
-        let result = try CloudStemWorker.completion(data, space: space, sourceHash: hash)
+        let result = try CloudStemWorker.completion(data, space: space, sourceHash: sourceHash)
         XCTAssertEqual(result.0.count, 4)
         XCTAssertEqual(result.1.frames, 44_100)
         XCTAssertThrowsError(try CloudStemWorker.completion(data, space: space, sourceHash: String(repeating: "b", count: 64)))
         values[0] = ["url": "https://attacker.test/file.wav"]
-        XCTAssertThrowsError(try CloudStemWorker.completion(JSONSerialization.data(withJSONObject: values), space: space, sourceHash: hash))
+        XCTAssertThrowsError(try CloudStemWorker.completion(JSONSerialization.data(withJSONObject: values), space: space, sourceHash: sourceHash))
     }
 }
