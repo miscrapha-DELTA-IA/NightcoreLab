@@ -1,0 +1,114 @@
+name: Publish Gnarly 57 LiveContainer Beta
+
+on:
+  push:
+    branches: [distribution/gnarly-build57-livecontainer]
+    paths:
+      - .github/workflows/livecontainer-beta.yml
+      - distribution/livecontainer/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gnarly-build57-livecontainer-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'miscrapha-DELTA-IA/NightcoreLab' && github.ref == 'refs/heads/distribution/gnarly-build57-livecontainer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: gnarly-build57-livecontainer-beta
+      APP_COMMIT: 21616005a706871bb5ea0697a123a9205393a9f4
+      EXPECTED_SHA256: a12387c7bd3d361c8dd3eeb78ad090559e0e0c24111f15ef0c03e3a8f6440dc9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the original successful build
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/actions/runs/39674158334" > "$RUNNER_TEMP/original-run.json"
+          gh api "repos/$GH_REPO/actions/runs/39674158334" > "$RUNNER_TEMP/qualification-run.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          for name in ('original-run.json', 'qualification-run.json'):
+              run = json.loads((Path(os.environ['RUNNER_TEMP']) / name).read_text())
+              assert run['head_sha'] == os.environ['APP_COMMIT'], 'Unexpected app source: ' + name
+              assert run['conclusion'] == 'success', 'Required validation did not pass: ' + name
+              assert run['repository']['full_name'] == os.environ['GH_REPO']
+          print('IPA build, full qualification and app commit verified.')
+          PY
+
+      - name: Download the exact tested IPA
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '12381489833'
+          run-id: '39674158334'
+          github-token: ${{ github.token }}
+          path: original-ipa
+
+      - name: Verify IPA and catalog before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          python - <<'PY'
+          import hashlib, json, os, plistlib, shutil, struct, zipfile
+          from pathlib import Path
+          candidates = list(Path('original-ipa').rglob('*.ipa'))
+          assert len(candidates) == 1, 'Expected exactly one IPA'
+          ipa = candidates[0]
+          assert hashlib.file_digest(ipa.open('rb'), 'sha256').hexdigest() == os.environ['EXPECTED_SHA256'], 'IPA checksum mismatch'
+          with zipfile.ZipFile(ipa) as archive:
+              info = plistlib.loads(archive.read('Payload/NightcoreLab.app/Info.plist'))
+              executable = archive.read('Payload/NightcoreLab.app/' + info['CFBundleExecutable'])
+              assert executable[:4] == b'\xcf\xfa\xed\xfe'
+              assert struct.unpack_from('<I', executable, 4)[0] == 0x0100000c, 'Expected arm64'
+              assert info['CFBundleDisplayName'] == 'Gnarly'
+              assert info['CFBundleVersion'] == '57'
+              assert info['CFBundleIdentifier'] == 'com.nightcorelab.app'
+          catalog = json.loads(Path('distribution/livecontainer/source.json').read_text())
+          app = catalog['apps'][0]
+          version = app['versions'][0]
+          assert app['bundleIdentifier'] == info['CFBundleIdentifier']
+          assert version['version'] == info['CFBundleShortVersionString']
+          assert version['buildVersion'] == version['buildNumber'] == info['CFBundleVersion']
+          assert version['size'] == ipa.stat().st_size == 112107110
+          assert version['minOSVersion'] == info['MinimumOSVersion']
+          assert app['appPermissions']['privacy'] == {k: v for k, v in info.items() if k.endswith('UsageDescription')}
+          assert version['downloadURL'] == f'https://github.com/{os.environ["GH_REPO"]}/releases/download/{os.environ["RELEASE_TAG"]}/Gnarly-57-Continuity.ipa'
+          shutil.copyfile(ipa, 'release-assets/Gnarly-57-Continuity.ipa')
+          for name in ('source.json', 'SHA256SUMS.txt', 'INSTALAR.md'):
+              shutil.copyfile(Path('distribution/livecontainer') / name, Path('release-assets') / name)
+          print('Verified Gnarly 1.0.0 (57): original bytes, manifest and catalog match.')
+          PY
+          cp distribution/livecontainer/Gnarly-Icon.png release-assets/Gnarly-Icon.png
+          (cd release-assets && sha256sum --check SHA256SUMS.txt)
+
+      - name: Upload assets and publish the beta
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --json targetCommitish > "$RUNNER_TEMP/release-target.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release-target.json').read_text())
+          assert release['targetCommitish'] == os.environ['APP_COMMIT'], 'Release points at a different app'
+          PY
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --title 'Gnarly 57 — beta para LiveContainer' --notes-file distribution/livecontainer/RELEASE-NOTES.md
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')" = "$APP_COMMIT"
+          gh release view "$RELEASE_TAG" --json url,isDraft,isPrerelease,assets --jq '{url,isDraft,isPrerelease,assets:[.assets[]|{name,size,digest}]}'
