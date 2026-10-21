@@ -90,7 +90,7 @@ jobs:
     if: >-
       ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_name == 'stage-20b-vocal-fx-loops-experiments') || (!(startsWith(github.head_ref || github.ref_name, 'exp/') || contains(github.head_ref || github.ref_name, '-experiments')) && (github.ref_name == 'main' || contains(github.ref_name, '-final') || startsWith(github.ref_name, 'release/') || (github.event_name == 'pull_request' && (github.base_ref == 'main' || contains(github.base_ref, '-final') || startsWith(github.base_ref, 'release/') || contains(github.head_ref, '-final') || startsWith(github.head_ref, 'release/')))))) && !contains(github.event.head_commit.message, '[skip ios]') }}
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout

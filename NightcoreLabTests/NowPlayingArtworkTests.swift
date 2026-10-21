@@ -7,6 +7,38 @@ import XCTest
 
 @MainActor
 final class NowPlayingArtworkTests: XCTestCase {
+    func testConcurrentPlayerSurfacesShareOneDecodeAndReleaseOnPressure() async throws {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 40))
+        }
+        let bytes = try XCTUnwrap(image.pngData())
+        actor Reads {
+            var count = 0
+            func read(_ bytes: Data) async -> Data {
+                count += 1
+                try? await Task.sleep(for: .milliseconds(25))
+                return bytes
+            }
+        }
+        let reads = Reads()
+        let store = PlayerArtworkStore { _ in await reads.read(bytes) }
+        let url = URL(fileURLWithPath: "/fixture/shared-cover.png")
+        async let first = store.image(at: url)
+        async let second = store.image(at: url)
+        let (a, b) = await (first, second)
+        XCTAssertNotNil(a)
+        XCTAssertTrue(a === b, "Player/background/system surfaces must share the decoded bitmap")
+        let initialReads = await reads.count
+        XCTAssertEqual(initialReads, 1)
+        let cached = await store.image(at: url)
+        XCTAssertTrue(a === cached)
+        await store.removeAll()
+        let afterPressure = await store.image(at: url)
+        XCTAssertFalse(a === afterPressure)
+        let finalReads = await reads.count
+        XCTAssertEqual(finalReads, 2)
+    }
+
     func testCIBackedCoverBecomesRequestedBitmapArtwork() throws {
         let ciImage = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
             .cropped(to: CGRect(x: 0, y: 0, width: 48, height: 48))

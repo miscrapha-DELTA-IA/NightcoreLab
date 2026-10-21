@@ -184,8 +184,10 @@ final class PadEngineTests: XCTestCase {
     }
 
     @MainActor
-    func testEngineStartupCleansOnlyNightcoreOwnedTempAudio() throws {
-        let temporary = FileManager.default.temporaryDirectory
+    func testDeferredCleanupRemovesOnlyStaleNightcoreOwnedTempAudio() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
         let foreign = temporary.appendingPathComponent(
             UUID().uuidString + ".wav")
         let legacy = temporary.appendingPathComponent(
@@ -194,15 +196,20 @@ final class PadEngineTests: XCTestCase {
             "nightcore_export_fixture_\(UUID().uuidString).wav")
         let ownedStem = temporary.appendingPathComponent(
             "NightcorePerformance-\(UUID().uuidString).wav")
+        let activeExport = temporary.appendingPathComponent("nightcore_export_current.wav")
+        try Data([0x52, 0x49, 0x46, 0x46]).write(to: activeExport)
         let files = [foreign, legacy, owned, ownedStem]
         defer { for file in files { try? FileManager.default.removeItem(at: file) } }
         for file in files {
             try Data([0x52, 0x49, 0x46, 0x46]).write(to: file)
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-48 * 60 * 60)],
+                                                  ofItemAtPath: file.path)
         }
 
-        // A new manager must never destroy unowned WAV inputs.
-        let manager = AudioEngineManager()
-        XCTAssertTrue(manager.performancePadsReady)
+        // The startup task executes this exact cleanup off the main actor.
+        await Task.detached { AudioEngineManager.clearTempAudioFiles(in: temporary) }.value
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeExport.path),
+                      "Deferred startup cleanup must preserve a current export")
         XCTAssertTrue(FileManager.default.fileExists(atPath: foreign.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))

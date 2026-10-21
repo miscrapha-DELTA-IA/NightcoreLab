@@ -1,6 +1,7 @@
 import AVFoundation
 import AudioToolbox
 import CoreML
+import UIKit
 import XCTest
 @testable import NightcoreLab
 
@@ -116,6 +117,38 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertLessThan(level(440), 0.0001, "Seeking a stem mix must not replay its beginning")
     }
 
+    func testCPUSelectionProtectsXRAndFourGBDevices() {
+        XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 3 * 1_024 * 1_024 * 1_024))
+        XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 4 * 1_024 * 1_024 * 1_024))
+        XCTAssertFalse(DemucsCoreMLModel.prefersCPU(physicalMemory: 6 * 1_024 * 1_024 * 1_024))
+    }
+
+    func testComplexPlanesRespectPaddedStridesWithoutFlatteningAllSources() throws {
+        let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        pointer.initialize(repeating: -999, count: 128)
+        defer { pointer.deallocate() }
+        let array = try MLMultiArray(dataPointer: pointer, shape: [1, 2, 2, 2, 3], dataType: .float32,
+                                    strides: [128, 64, 24, 8, 2], deallocator: { _ in })
+        let values: [Float] = [1, 2, 3, 4, 5, 6]
+        try DemucsCoreMLModel.writePlane(values, to: array, prefix: [0, 1, 1])
+        XCTAssertEqual(try DemucsCoreMLModel.readPlane(array, prefix: [0, 1, 1]), values)
+        XCTAssertEqual(pointer[89], -999)
+        XCTAssertEqual(try DemucsCoreMLModel.readPlane(array, prefix: [0, 0, 0]), Array(repeating: -999, count: 6))
+        XCTAssertThrowsError(try DemucsCoreMLModel.readPlane(array, prefix: [0, 2, 0]))
+    }
+
+    func testNeuralPlayersAllocateOnlyWhenActuallyConnected() {
+        let stems = NeuralStemPlayback()
+        XCTAssertTrue(stems.nodes.isEmpty, "Normal player startup must not instantiate eight extra audio units")
+        let engine = AVAudioEngine(), mixer = AVAudioMixerNode()
+        engine.attach(mixer)
+        stems.connect(engine: engine, mixer: mixer)
+        XCTAssertEqual(stems.nodes.count, 8)
+        XCTAssertTrue(stems.nodes.allSatisfy { $0.engine === engine })
+        stems.detach(from: engine)
+        XCTAssertTrue(stems.nodes.isEmpty)
+    }
+
     func testPaddedMultiArrayUsesAllStrides() throws {
         let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 16)
         pointer.initialize(repeating: -999, count: 16)
@@ -180,6 +213,23 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(try settledPeak(), 0, accuracy: 0.000001)
         gain.auAudioUnit.scheduleParameterBlock(AUEventSampleTimeImmediate, 0, 0, 0.5)
         XCTAssertEqual(try settledPeak(), 0.05, accuracy: 0.0001)
+    }
+
+    func testMemoryWarningStopsBeforeLoadingModelAndCleansPartialFiles() async throws {
+        let source = try write("memory-warning") { _ in 0.1 }
+        let cache = folder.appendingPathComponent("cancelled-cache")
+        do {
+            _ = try await NeuralStemWorker.prepare(source: source, cacheFolder: cache,
+                modelURL: folder.appendingPathComponent("must-not-load.mlmodelc")) { progress, _ in
+                if progress == 0.04 {
+                    NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+                }
+            }
+            XCTFail("A memory warning must stop separation before allocating the model")
+        } catch NeuralStemError.insufficientMemory {
+            let remaining = try FileManager.default.contentsOfDirectory(atPath: cache.path)
+            XCTAssertTrue(remaining.isEmpty, "Aborted separation must clean partial files and never commit corrupt stems")
+        }
     }
 
     func testDeliveryContainsAndRunsVerifiedNeuralModel() async throws {

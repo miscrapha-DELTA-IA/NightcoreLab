@@ -30,34 +30,15 @@ enum NowPlayingArtworkLoader {
     }
 
     static func coverImage(at url: URL) async -> UIImage? {
-        guard let data = await coverData(at: url), !Task.isCancelled else { return nil }
-        return image(from: data)
+        await PlayerArtworkStore.shared.image(at: url)
     }
 
-    static func coverData(at coverURL: URL) async -> Data? {
-        let data: Data?
-        if coverURL.isFileURL {
-            data = await Task.detached(priority: .utility) {
-                try? Data(contentsOf: coverURL, options: .mappedIfSafe)
-            }.value
-        } else if coverURL.scheme == "https" {
-            // Reuse thumbnails already seen by WebImage in search/library,
-            // including their disk cache when upgrading while offline.
-            if let cached = await Task.detached(priority: .utility, operation: {
-                SDImageCache.shared.imageFromCache(forKey: coverURL.absoluteString)?.pngData()
-            }).value { return cached }
-            var request = URLRequest(url: coverURL, cachePolicy: .returnCacheDataElseLoad,
-                                     timeoutInterval: 8)
-            request.setValue("image/*", forHTTPHeaderField: "Accept")
-            if let (received, response) = try? await URLSession.shared.data(for: request),
-               (response as? HTTPURLResponse)?.statusCode == 200 {
-                data = received
-            } else { data = nil }
-        } else { data = nil }
-        if let data, coverURL.scheme == "https", let decoded = image(from: data) {
-            SDImageCache.shared.store(decoded, forKey: coverURL.absoluteString, completion: nil)
-        }
-        return data
+    static func coverData(at url: URL) async -> Data? {
+        await PlayerArtworkStore.shared.data(at: url)
+    }
+
+    static func releaseDecodedCovers() async {
+        await PlayerArtworkStore.shared.removeAll()
     }
 
     nonisolated private static func videoFrameData(at url: URL) -> Data? {
@@ -74,13 +55,14 @@ enum NowPlayingArtworkLoader {
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
-    private static func image(from data: Data) -> UIImage? {
+    nonisolated static func image(from data: Data) -> UIImage? {
         guard data.count <= 6 * 1_024 * 1_024,
               let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 1_024
+            kCGImageSourceThumbnailMaxPixelSize: 768,
+            kCGImageSourceShouldCacheImmediately: true
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0,
                                                                options as CFDictionary) else { return nil }
@@ -120,5 +102,74 @@ enum NowPlayingArtworkLoader {
                                        width: fittedSide, height: fittedSide))
             }
         }
+    }
+}
+
+/// Coalesces the cover used by the player, its background and the lock screen.
+/// File IO, SD disk reads and ImageIO decompression stay off MainActor. The
+/// bounded decoded cache is independent of permanent offline cover sidecars.
+actor PlayerArtworkStore {
+    static let shared = PlayerArtworkStore()
+    typealias DataLoader = @Sendable (URL) async -> Data?
+    private let decoded = NSCache<NSURL, UIImage>()
+    private var dataTasks: [URL: Task<Data?, Never>] = [:]
+    private var imageTasks: [URL: Task<UIImage?, Never>] = [:]
+    private let loadData: DataLoader
+    private var generation = 0
+
+    init(loadData: @escaping DataLoader = PlayerArtworkStore.readData) {
+        self.loadData = loadData
+        decoded.totalCostLimit = 12 * 1_024 * 1_024
+        decoded.countLimit = 6
+    }
+
+    func image(at url: URL) async -> UIImage? {
+        if let cached = decoded.object(forKey: url as NSURL) { return cached }
+        if let existing = imageTasks[url] { return await existing.value }
+        let revision = generation
+        let task = Task(priority: .utility) { () -> UIImage? in
+            guard let bytes = await self.data(at: url), !Task.isCancelled else { return nil }
+            return NowPlayingArtworkLoader.image(from: bytes)
+        }
+        imageTasks[url] = task
+        let image = await task.value
+        guard revision == generation else { return image }
+        imageTasks[url] = nil
+        if let image, let bitmap = image.cgImage {
+            decoded.setObject(image, forKey: url as NSURL, cost: bitmap.bytesPerRow * bitmap.height)
+        }
+        return image
+    }
+
+    func data(at url: URL) async -> Data? {
+        if let existing = dataTasks[url] { return await existing.value }
+        let loader = loadData, revision = generation
+        let task = Task.detached(priority: .utility) { await loader(url) }
+        dataTasks[url] = task
+        let data = await task.value
+        if revision == generation { dataTasks[url] = nil }
+        return data
+    }
+
+    func removeAll() {
+        generation &+= 1
+        decoded.removeAllObjects()
+        dataTasks.values.forEach { $0.cancel() }
+        imageTasks.values.forEach { $0.cancel() }
+        dataTasks.removeAll(); imageTasks.removeAll()
+    }
+
+    nonisolated static func readData(at url: URL) async -> Data? {
+        if url.isFileURL { return try? Data(contentsOf: url, options: .mappedIfSafe) }
+        guard url.scheme == "https" else { return nil }
+        // Read original compressed bytes directly. imageFromCache + pngData
+        // used to decode and re-encode a full cover on every player request.
+        if let cached = SDImageCache.shared.diskImageData(forKey: url.absoluteString) { return cached }
+        var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 8)
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        guard let (bytes, response) = try? await URLSession.shared.data(for: request),
+              !Task.isCancelled, (response as? HTTPURLResponse)?.statusCode == 200,
+              bytes.count <= 6 * 1_024 * 1_024 else { return nil }
+        return bytes
     }
 }

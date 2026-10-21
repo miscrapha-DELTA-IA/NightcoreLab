@@ -89,12 +89,17 @@ final class StemGainAudioUnit: AUAudioUnit {
 /// Four independent players in the EXISTING live engine, upstream of the
 /// shared speed/pitch/EQ chain. The original player remains its clock source.
 final class NeuralStemPlayback {
-    private let players = StemKind.allCases.map { _ in AVAudioPlayerNode() }
-    private let gains = StemKind.allCases.map { _ in StemGainAudioUnit.makeNode() }
+    private var players: [AVAudioPlayerNode] = []
+    private var gains: [AVAudioUnitEffect] = []
     private var files: [AVAudioFile] = []
     private(set) var asset: StemAsset?
     var nodes: [AVAudioNode] { players.map { $0 as AVAudioNode } + gains.map { $0 as AVAudioNode } }
     func connect(engine: AVAudioEngine, mixer: AVAudioMixerNode) {
+        if players.isEmpty {
+            players = StemKind.allCases.map { _ in AVAudioPlayerNode() }
+            gains = StemKind.allCases.map { _ in StemGainAudioUnit.makeNode() }
+        }
+        nodes.filter { $0.engine == nil }.forEach { engine.attach($0) }
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
         for i in players.indices {
             engine.connect(players[i], to: gains[i], format: format)
@@ -109,6 +114,11 @@ final class NeuralStemPlayback {
         stop(); files = opened; self.asset = asset
     }
     func clear() { stop(); files = []; asset = nil }
+    func detach(from engine: AVAudioEngine) {
+        clear()
+        for node in nodes where node.engine === engine { engine.detach(node) }
+        players.removeAll(); gains.removeAll()
+    }
     func schedule(at seconds: Double) {
         stop()
         for (player, file) in zip(players, files) {
@@ -123,7 +133,7 @@ final class NeuralStemPlayback {
     func pause() { players.forEach { $0.pause() } }
     func stop() { players.forEach { $0.stop() } }
     func setLevels(_ levels: [StemKind: Float], enabled: Bool, immediate: Bool = false) {
-        for (i, kind) in StemKind.allCases.enumerated() {
+        for (i, kind) in StemKind.allCases.enumerated() where i < gains.count {
             let value: Float = enabled && asset != nil ? (levels[kind] ?? 1) : 0
             if immediate, let unit = gains[i].auAudioUnit as? StemGainAudioUnit {
                 unit.initializeGain(value)

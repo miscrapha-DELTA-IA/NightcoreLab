@@ -10,29 +10,31 @@ struct EnergyBudget: Equatable, Sendable {
     var thermal: Thermal = .nominal
     var reduceMotion = false
     var appState: AppState = .active
+    var constrainedDevice = false
+    var neuralWorkActive = false
 
     var maxVisualFPS: Double {
         guard appState == .active else { return 1 }
         if thermal == .critical { return 1 }
         if thermal == .serious { return 15 }
-        return lowPower || thermal == .fair ? 30 : 60
+        return lowPower || constrainedDevice || thermal == .fair ? 30 : 60
     }
     /// Background-only cadence. Audio callbacks and karaoke remain on their
     /// own clocks; this policy never throttles their execution.
     var shaderFPS: Double { maxVisualFPS }
     var secondaryShaderQuality: Float {
         if thermal.rawValue >= Thermal.serious.rawValue { return 0 }
-        if lowPower || thermal == .fair { return 0.25 }
+        if lowPower || constrainedDevice || thermal == .fair { return 0.25 }
         return 1
     }
     var pausesShader: Bool {
-        appState != .active || reduceMotion || thermal == .critical
+        appState != .active || neuralWorkActive || reduceMotion || thermal == .critical
     }
     var allowsNewAnalysis: Bool {
-        appState == .active && !lowPower && thermal.rawValue < Thermal.serious.rawValue
+        appState == .active && !neuralWorkActive && !lowPower && thermal.rawValue < Thermal.serious.rawValue
     }
     var allowsDecorativeMotion: Bool {
-        appState == .active && !reduceMotion && thermal.rawValue < Thermal.serious.rawValue
+        appState == .active && !neuralWorkActive && !reduceMotion && thermal.rawValue < Thermal.serious.rawValue
     }
     /// Admission only. Explicit exports remain available in Low Power Mode.
     var allowsExport: Bool { appState == .active && thermal != .critical }
@@ -49,7 +51,8 @@ struct EnergyBudget: Equatable, Sendable {
         @unknown default: thermal = .serious
         }
         return Self(lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                    thermal: thermal, reduceMotion: reduceMotion, appState: appState)
+                    thermal: thermal, reduceMotion: reduceMotion, appState: appState,
+                    constrainedDevice: ProcessInfo.processInfo.physicalMemory <= 4 * 1_024 * 1_024 * 1_024)
     }
 }
 

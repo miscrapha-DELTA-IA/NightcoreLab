@@ -1,11 +1,14 @@
 import AVFoundation
 import CryptoKit
 import Foundation
+import Darwin
+import os
+import UIKit
 
 /// Serial, bounded-memory processing. Only this queue owns the model, files,
 /// and overlap-add buffers; nothing runs in an audio callback or on MainActor.
 enum NeuralStemWorker {
-    private static let queue = DispatchQueue(label: "gnarly.neural-stems", qos: .userInitiated,
+    private static let queue = DispatchQueue(label: "gnarly.neural-stems", qos: .utility,
                                              autoreleaseFrequency: .workItem)
     static let sampleRate = 44_100.0
     static var bundledModel: URL? {
@@ -15,9 +18,12 @@ enum NeuralStemWorker {
     private final class Cancellation: @unchecked Sendable {
         private let lock = NSLock()
         private var cancelled = false
+        private var memoryPressure = false
         func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+        func receivedMemoryWarning() { lock.lock(); memoryPressure = true; lock.unlock() }
         func check() throws {
-            lock.lock(); let value = cancelled; lock.unlock()
+            lock.lock(); let value = cancelled, memory = memoryPressure; lock.unlock()
+            if memory { throw NeuralStemError.insufficientMemory }
             if value { throw CancellationError() }
         }
     }
@@ -42,7 +48,11 @@ enum NeuralStemWorker {
         let cancellation = Cancellation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+                let memoryObserver = NotificationCenter.default.addObserver(
+                    forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
+                ) { _ in cancellation.receivedMemoryWarning() }
                 queue.async {
+                    defer { NotificationCenter.default.removeObserver(memoryObserver) }
                     continuation.resume(with: Result {
                         try cancellation.check()
                         return try run(source: source, cacheFolder: cacheFolder, modelURL: modelURL,
@@ -119,8 +129,18 @@ enum NeuralStemWorker {
         progress(0.01, "Preparando áudio…")
         let decoded = try decode(source, to: decodedURL, check: check)
         try check()
-        progress(0.04, "Carregando Demucs…")
-        let separator = try DemucsCoreMLModel(url: modelURL)
+        // The OS exposes the remaining process budget (not all physical RAM).
+        // Refuse before loading rather than risk a jetsam kill with no error UI.
+        #if !targetEnvironment(simulator)
+        guard os_proc_available_memory() >= 1_024 * 1_024 * 1_024 else {
+            throw NeuralStemError.insufficientMemory
+        }
+        #endif
+        progress(0.04, DemucsCoreMLModel.prefersCPU(physicalMemory: ProcessInfo.processInfo.physicalMemory)
+                 ? "Carregando Demucs · modo de pouca memória…" : "Carregando Demucs…")
+        try check()
+        let separator = try autoreleasepool { try DemucsCoreMLModel(url: modelURL) }
+        try check()
         try separate(decodedURL, decoded: decoded, separator: separator,
                      destinations: urls(in: stage), check: check, progress: progress)
         try check()

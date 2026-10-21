@@ -2,6 +2,18 @@ import XCTest
 @testable import NightcoreLab
 
 final class EnergyBudgetTests: XCTestCase {
+    func testXRDecorationsLeaveCPUAndGPUHeadroomAndStemWorkPausesThem() {
+        var xr = EnergyBudget(constrainedDevice: true)
+        XCTAssertEqual(xr.shaderFPS, 30)
+        XCTAssertEqual(xr.secondaryShaderQuality, 0.25)
+        XCTAssertTrue(xr.allowsNewAnalysis)
+        xr.neuralWorkActive = true
+        XCTAssertTrue(xr.pausesShader)
+        XCTAssertFalse(xr.allowsNewAnalysis)
+        XCTAssertFalse(xr.allowsDecorativeMotion)
+        XCTAssertTrue(xr.allowsVisualUpdates, "Transport/progress must keep updating")
+    }
+
     func testNormalAndLowPower() {
         let normal = EnergyBudget()
         XCTAssertEqual(normal.maxVisualFPS, 60)

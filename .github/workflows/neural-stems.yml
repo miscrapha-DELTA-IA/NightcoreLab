@@ -60,13 +60,13 @@ jobs:
         if: always()
         with:
           name: Neural-Stems-Diagnostics
-          path: .cache/gnarly-neural-model/neural-parity.json
+          path: .cache/gnarly-neural-model/neural-parity*.json
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: Gnarly-Neural-Model
           path: |
             NightcoreLab/Resources/NeuralStems/htdemucs_core.mlmodelc
-            NightcoreLab/Resources/NeuralStems/neural-parity.json
+            NightcoreLab/Resources/NeuralStems/neural-parity*.json
             NightcoreLab/Resources/NeuralStems/model-manifest.json
           retention-days: 7

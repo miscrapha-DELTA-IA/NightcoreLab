@@ -246,7 +246,7 @@ final class AudioEngineManager {
 
     init(idleStopDelay: Duration = .seconds(10)) {
         self.idleStopDelay = max(.zero, idleStopDelay)
-        clearTempAudioFiles()
+        Task.detached(priority: .utility) { Self.clearTempAudioFiles() }
         configureSession()
         setupEngine()
         observeInterruptions()
@@ -317,6 +317,7 @@ final class AudioEngineManager {
 
         removeVisualMeterTap()
         engine.stop()
+        neuralStems.detach(from: engine)
         padRuntime.clearSourceClip()
         processingNodes.forEach { engine.disconnectNodeOutput($0) }
         (padRuntime.nodes + padRuntime.releaseNodes).forEach {
@@ -331,7 +332,6 @@ final class AudioEngineManager {
                           performanceMixer: performanceMixer,
                           originalGain: (originalUpmix, stemMaskNode))
         engine.connect(centerCutPlayer, to: upmix, format: graphFormat)
-        neuralStems.connect(engine: engine, mixer: upmix)
         centerCutPlayer.volume = 0
         stemsAvailable = false
         stemSource = nil
@@ -1038,6 +1038,9 @@ final class AudioEngineManager {
                 self.scheduleGeneration += 1
                 self.player.stop(); self.centerCutPlayer.stop()
                 self.isPlaying = false
+                self.engine.stop()
+                self.neuralStems.connect(engine: self.engine, mixer: self.upmix)
+                self.engine.prepare()
                 self.lastKnownTime = position
                 self.schedule(file, startingAt: position)
                 if self.centerCutEnabled { self.scheduleCenterCut(startingAt: position) }
@@ -1544,18 +1547,22 @@ final class AudioEngineManager {
     /// The shared application temp directory can contain inputs for tests,
     /// share extensions and other features: deleting every audio file here
     /// would destroy a source immediately before load(url:).
-    private func clearTempAudioFiles() {
+    nonisolated static func clearTempAudioFiles(in tempDir: URL = FileManager.default.temporaryDirectory) {
         let fileManager = FileManager.default
-        let tempDir = fileManager.temporaryDirectory
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
 
         guard let files = try? fileManager.contentsOfDirectory(
             at: tempDir,
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else { return }
 
         var freedBytes: Int64 = 0
         for url in files {
+            // Only stale files: a deferred cleanup must never delete a new
+            // import, a current export or another live engine's center cut.
+            guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  modified < cutoff else { continue }
             if url.lastPathComponent.hasPrefix("nightcore_import_"),
                (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 try? fileManager.removeItem(at: url)
