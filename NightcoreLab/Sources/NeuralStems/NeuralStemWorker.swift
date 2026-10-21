@@ -178,6 +178,27 @@ enum NeuralStemWorker {
         let workRoot = cacheFolder == cacheRoot ? StemJobJournal.root : cacheFolder
         let stage = workRoot.appendingPathComponent(".partial-" + DemucsCoreMLModel.identifier + "-" + hash + suffix)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
+        // A termination between writing the manifest and renaming the folder
+        // must not turn a finished separation into another inference.
+        if let data = try? Data(contentsOf: stage.appendingPathComponent("complete.json")),
+           let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+           manifest.model == DemucsCoreMLModel.identifier, manifest.sourceHash == hash,
+           manifest.previewStart == previewStart,
+           let frames = try? validate(makeAsset(folder: stage, frames: manifest.frames, previewStart: previewStart),
+                expectedSeconds: previewStart.map { min(7.8, seconds - $0) } ?? seconds),
+           frames == manifest.frames {
+            if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
+            try FileManager.default.moveItem(at: stage, to: folder)
+            progress(1, "Stems salvos recuperados")
+            return makeAsset(folder: folder, frames: frames, previewStart: previewStart)
+        }
+        var completedResult = false
+        defer {
+            let segments = stage.appendingPathComponent("segments", isDirectory: true)
+            let saved = (try? FileManager.default.contentsOfDirectory(atPath: segments.path))?
+                .contains(where: { $0.hasSuffix(".pcm") }) ?? false
+            if !completedResult && !saved { try? FileManager.default.removeItem(at: stage) }
+        }
         // Four float32 stereo stems + decoded input, with working-space margin.
         let existing = FileManager.default.enumerator(at: stage, includingPropertiesForKeys: [.fileSizeKey])?
             .compactMap { ($0 as? URL).flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize } }
@@ -212,6 +233,7 @@ enum NeuralStemWorker {
         let frames = try validate(staged, expectedSeconds: previewStart == nil ? seconds : Double(decoded.frames) / sampleRate)
         let manifest = Manifest(model: DemucsCoreMLModel.identifier, sourceHash: hash, frames: frames, previewStart: previewStart)
         try JSONEncoder().encode(manifest).write(to: stage.appendingPathComponent("complete.json"), options: .atomic)
+        completedResult = true
         if previewStart == nil { try FileManager.default.removeItem(at: decodedURL) }
         try FileManager.default.removeItem(at: segments)
         try check()
