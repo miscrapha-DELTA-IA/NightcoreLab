@@ -38,6 +38,7 @@ enum NowPlayingArtworkLoader {
     }
 
     static func releaseDecodedCovers() async {
+        SDImageCache.shared.clearMemory()
         await PlayerArtworkStore.shared.removeAll()
     }
 

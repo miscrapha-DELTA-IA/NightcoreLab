@@ -9,7 +9,7 @@ func floats(_ url: URL) throws -> [Float] {
     return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
 }
 let root = URL(fileURLWithPath: CommandLine.arguments[1])
-let modelURL = root.appendingPathComponent("htdemucs_core.mlmodelc")
+let modelURL = root.appendingPathComponent("htdemucs_staged")
 let input = try floats(root.appendingPathComponent("golden/mix.f32"))
 let reference = try floats(root.appendingPathComponent("golden/reference.f32"))
 let cpuOnly = CommandLine.arguments.contains("--cpu-only")
@@ -24,7 +24,20 @@ let model = try DemucsCoreMLModel(url: modelURL, cpuOnly: cpuOnly)
 let loadSeconds = Date().timeIntervalSince(loadStarted)
 let afterLoad = peakMemoryBytes()
 let started = Date()
-let actual = try model.separate(input)
+var stageMemory: [[String: Any]] = []
+let actual = try model.separate(input, progress: { fraction, name in
+    let peak = peakMemoryBytes()
+    stageMemory.append(["stage": name, "fraction": fraction, "peak_memory_bytes": peak])
+    try? FileHandle.standardError.write(contentsOf: Data("Stage \(name): peak=\(peak / 1_048_576)MiB\n".utf8))
+})
+if cpuOnly {
+    // A second full inference catches retained stage plans/weights and tensor
+    // accumulation that a single-segment gate would miss.
+    let repeatOutput = try model.separate(input)
+    guard zip(actual, repeatOutput).allSatisfy({ abs($0.0 - $0.1) < 0.00001 }) else {
+        fatalError("Repeated inference changed the output")
+    }
+}
 guard actual.count == reference.count else { fatalError("Different tensor sizes") }
 let size = 2 * StemDSP.segmentSamples
 var report: [[String: Any]] = []
@@ -57,46 +70,15 @@ for channel in 0..<2 {
 let spectralError = zip(goldenSpectrum, swiftSpectrum).map { abs($0.0 - $0.1) }.max() ?? .infinity
 if spectralError >= 0.00001 { passed = false }
 try FileHandle.standardError.write(contentsOf: Data("Full STFT max error: \(spectralError)\n".utf8))
-var diagnostics: [[String: Any]] = []
-if !passed {
-    let config = MLModelConfiguration(); config.computeUnits = .cpuAndGPU
-    let rawModel = try MLModel(contentsOf: modelURL, configuration: config)
-    var feed: [String: MLFeatureValue] = [:]
-    for (name, description) in rawModel.modelDescription.inputDescriptionsByName {
-        let shape = description.multiArrayConstraint!.shape
-        let array = try MLMultiArray(shape: shape, dataType: .float32)
-        try DemucsCoreMLModel.writeStrided(shape.count == 3 ? input : goldenSpectrum, to: array)
-        feed[name] = MLFeatureValue(multiArray: array)
-    }
-    let raw = try rawModel.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
-    for name in raw.featureNames {
-        guard let tensor = raw.featureValue(for: name)?.multiArrayValue else { continue }
-        let frequency = tensor.shape.count == 5
-        let expected = try floats(root.appendingPathComponent(frequency ? "golden/spec-reference.f32" : "golden/time-reference.f32"))
-        let observed = try DemucsCoreMLModel.readStrided(tensor)
-        let count = expected.count / 4
-        for source in 0..<4 {
-            var power = 0.0, error = 0.0
-            for i in (source * count)..<((source + 1) * count) {
-                let x = Double(expected[i]), y = Double(observed[i])
-                power += x*x; error += (x-y)*(x-y)
-            }
-            let nrmse = sqrt(error / max(power, 1e-30))
-            let branch = frequency ? "frequency" : "time"
-            diagnostics.append(["branch":branch, "source":DemucsCoreMLModel.sources[source], "nrmse":nrmse])
-            try FileHandle.standardError.write(contentsOf: Data("Raw \(branch) \(DemucsCoreMLModel.sources[source]): NRMSE=\(nrmse)\n".utf8))
-        }
-    }
-}
 let peak = peakMemoryBytes()
 // Leaves headroom for the UI, playback and streaming writer in a 3GB phone's
 // process budget. This host regression gate does not certify physical iOS RAM.
-if cpuOnly && peak > 1_024 * 1_024 * 1_024 { passed = false }
+if cpuOnly && peak > 400 * 1_024 * 1_024 { passed = false }
 try FileHandle.standardError.write(contentsOf: Data("Core ML \(cpuOnly ? "CPU" : "GPU"): load=\(loadSeconds)s, peak=\(peak / 1_048_576)MiB, baseline=\(beforeLoad / 1_048_576)MiB, loaded=\(afterLoad / 1_048_576)MiB\n".utf8))
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
     "passed":passed, "compute_units":cpuOnly ? "cpuOnly" : "cpuAndGPU",
     "peak_memory_bytes":peak, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":report,
-    "stft_max_error":spectralError, "diagnostics":diagnostics], options: [.prettyPrinted,.sortedKeys])
+    "stft_max_error":spectralError, "stage_memory":stageMemory], options: [.prettyPrinted,.sortedKeys])
 try data.write(to: root.appendingPathComponent(cpuOnly ? "neural-parity-cpu.json" : "neural-parity.json"))
 guard passed else {
     try FileHandle.standardError.write(contentsOf: Data("NEURAL PARITY GATE FAILED; do not ship\n".utf8))

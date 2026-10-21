@@ -12,8 +12,8 @@ enum NeuralStemWorker {
                                              autoreleaseFrequency: .workItem)
     static let sampleRate = 44_100.0
     static var bundledModel: URL? {
-        Bundle.main.url(forResource: "htdemucs_core", withExtension: "mlmodelc") ??
-        Bundle.main.url(forResource: "htdemucs_core", withExtension: "mlmodelc", subdirectory: "NeuralStems")
+        Bundle.main.url(forResource: "pipeline", withExtension: "json", subdirectory: "NeuralStems/htdemucs_staged")?
+            .deletingLastPathComponent()
     }
     private final class Cancellation: @unchecked Sendable {
         private let lock = NSLock()
@@ -129,15 +129,7 @@ enum NeuralStemWorker {
         progress(0.01, "Preparando áudio…")
         let decoded = try decode(source, to: decodedURL, check: check)
         try check()
-        // The OS exposes the remaining process budget (not all physical RAM).
-        // Refuse before loading rather than risk a jetsam kill with no error UI.
-        #if !targetEnvironment(simulator)
-        guard os_proc_available_memory() >= 1_024 * 1_024 * 1_024 else {
-            throw NeuralStemError.insufficientMemory
-        }
-        #endif
-        progress(0.04, DemucsCoreMLModel.prefersCPU(physicalMemory: ProcessInfo.processInfo.physicalMemory)
-                 ? "Carregando Demucs · modo de pouca memória…" : "Carregando Demucs…")
+        progress(0.04, "Preparando separação…")
         try check()
         let separator = try autoreleasepool { try DemucsCoreMLModel(url: modelURL) }
         try check()
@@ -241,7 +233,20 @@ enum NeuralStemWorker {
             for channel in 0..<2 {
                 for i in 0..<valid { segment[channel * length + i] = (channels[channel][i] - decoded.mean) / decoded.standardDeviation }
             }
-            let separated = try autoreleasepool { try separator.separate(segment) }
+            let separated = try autoreleasepool {
+                try separator.separate(segment, check: check, admission: { required in
+                    #if !targetEnvironment(simulator)
+                    let available = os_proc_available_memory()
+                    guard available >= required else {
+                        throw NeuralStemError.memoryBudget(requiredMiB: required / 1_048_576,
+                                                           availableMiB: available / 1_048_576)
+                    }
+                    #endif
+                }, progress: { fraction, _ in
+                    let completed = min(Double(decoded.frames), Double(start) + Double(valid) * fraction)
+                    progress(0.05 + 0.94 * completed / Double(decoded.frames), "Separando voz e instrumentos…")
+                })
+            }
             try check()
             for i in 0..<length {
                 weights[i] += weight[i]

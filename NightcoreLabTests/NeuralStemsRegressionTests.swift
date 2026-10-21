@@ -137,6 +137,21 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertThrowsError(try DemucsCoreMLModel.readPlane(array, prefix: [0, 2, 0]))
     }
 
+    func testOwnedStageOutputCopiesPaddedStorageAndDoesNotAliasIt() throws {
+        let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 16)
+        pointer.initialize(repeating: -999, count: 16)
+        defer { pointer.deallocate() }
+        let values: [Float] = [1, 2, 3, 4, 5, 6]
+        for row in 0..<2 { for column in 0..<3 { pointer[row * 8 + column * 2] = values[row * 3 + column] } }
+        let source = try MLMultiArray(dataPointer: pointer, shape: [1, 2, 3], dataType: .float32,
+                                     strides: [16, 8, 2], deallocator: { _ in })
+        let copy = try StagedDemucsPipeline.ownedCopy(source)
+        XCTAssertEqual(try DemucsCoreMLModel.readStrided(copy), values)
+        pointer.update(repeating: 0, count: 16)
+        XCTAssertEqual(try DemucsCoreMLModel.readStrided(copy), values,
+                       "An output kept for a later stage must own its bytes after the previous model is released")
+    }
+
     func testNeuralPlayersAllocateOnlyWhenActuallyConnected() {
         let stems = NeuralStemPlayback()
         XCTAssertTrue(stems.nodes.isEmpty, "Normal player startup must not instantiate eight extra audio units")

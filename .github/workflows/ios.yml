@@ -108,7 +108,7 @@ jobs:
 
       - name: Require verified on-device separation model
         run: |
-          test -d NightcoreLab/Resources/NeuralStems/htdemucs_core.mlmodelc
+          test -f NightcoreLab/Resources/NeuralStems/htdemucs_staged/pipeline.json
           python3 -c 'import json; p=json.load(open("NightcoreLab/Resources/NeuralStems/neural-parity.json")); assert p["passed"] and len(p["sources"]) == 4'
 
       - name: Instalar XcodeGen
