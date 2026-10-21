@@ -73,6 +73,20 @@ final class TypographyEngineTests: XCTestCase {
         }
     }
 
+    func testCloutVariantsKeepWordTimingAndUseDistinctTilePacks() throws {
+        let baseline = TypographyResolver.resolve(state(), at: 3.25,
+            features: nil, preset: .init(style: .magazineCutout))
+        XCTAssertEqual(TypographyStyle.storyObjectModels.count, 4)
+        for style in TypographyStyle.storyObjectModels {
+            let resolved = TypographyResolver.resolve(state(), at: 3.25,
+                features: nil, preset: .init(style: style))
+            XCTAssertEqual(resolved.words.map(\.progress), baseline.words.map(\.progress))
+            XCTAssertEqual(resolved.activeWordID, baseline.activeWordID)
+            XCTAssertEqual(try XCTUnwrap(resolved.word(id: 0)?.magazine)
+                .appearance(for: style).pack, style)
+        }
+    }
+
     func testNoAudioKeepsBaseNeonAndMagazineUnchanged() {
         for style in [TypographyStyle.neon, .magazineCutout] {
             let preset = TypographyPreset(style: style)

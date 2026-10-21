@@ -13,6 +13,12 @@ struct TypographyMagazineAppearance: Equatable, Sendable {
             font: MagazineCutoutFont(rawValue: fontIndex) ?? .system,
             tone: MagazineCutoutTone(rawValue: toneIndex) ?? .black)
     }
+
+    func appearance(for style: TypographyStyle) -> MagazineWordAppearance {
+        var result = legacy
+        result.pack = style
+        return result
+    }
 }
 
 enum TypographyLineStatus: String, Codable, Sendable {
