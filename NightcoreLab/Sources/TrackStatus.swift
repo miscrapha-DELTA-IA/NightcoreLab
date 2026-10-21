@@ -13,7 +13,7 @@ enum TrackStatus: String, Codable {
 
     var shortDescription: String {
         switch self {
-        case .none: return "Tocar agora"
+        case .none: return "Não baixado"
         case .downloading: return "Baixando áudio…"
         case .downloaded: return "Disponível offline"
         }

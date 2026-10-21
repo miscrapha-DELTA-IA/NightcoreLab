@@ -69,6 +69,8 @@ final class PlaybackQueue: ObservableObject {
 
 struct ContentView: View {
     @State private var audio = AudioEngineManager()
+    @State private var searchSession = SearchSession()
+    @State private var showsDownloads = false
 
     @State private var speed: Float = 1.0
     @State private var reverb: Float = 0
@@ -106,6 +108,7 @@ struct ContentView: View {
     @State private var remoteRelay = RemotePlaybackRelay()
     @State private var coverURL: URL?
     @State private var relatedVideos: [Track] = []
+    @State private var recentlySuggestedIDs: [String] = []
     @State private var suggestionReasons: [String: String] = [:]
     @State private var discoveryEvents: [DiscoveryEvent] = []
     @State private var acousticVectors: [String: DiscoveryFeatureVector] = [:]
@@ -480,9 +483,19 @@ struct ContentView: View {
             .accessibilityLabel("Área de busca, descoberta e fila")
             .accessibilityValue(isMusicWorkspaceExpanded ? "Expandida" : "Recolhida")
 
+            Button { showsDownloads = true } label: {
+                Label("Downloads · \(downloader.cachedIDs.count)", systemImage: "arrow.down.circle")
+                    .font(.caption.weight(.semibold))
+                    .frame(minHeight: 44)
+            }
+            .accessibilityIdentifier("music.downloads")
+            .sheet(isPresented: $showsDownloads) {
+                DownloadsView(downloader: downloader, onPlay: { playTrack($0) })
+            }
+
             VStack(alignment: .leading, spacing: 10) {
                 SearchView(
-                    downloader: downloader, theme: currentTheme,
+                    downloader: downloader, session: searchSession, theme: currentTheme,
                     isEnabled: !audio.isExporting,
                     suggestedTracks: relatedVideos,
                     suggestionReasons: suggestionReasons,
@@ -801,6 +814,17 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(audio.isExporting)
+                    .contextMenu {
+                        Button("Baixar sem tocar", systemImage: "arrow.down.circle") {
+                            downloader.downloadForOffline(track)
+                        }
+                        .disabled(status != .none || audio.isExporting)
+                        if status == .downloading {
+                            Button("Cancelar download", systemImage: "xmark.circle", role: .destructive) {
+                                downloader.cancelDownload(track)
+                            }
+                        }
+                    }
                 }
             }
             }
@@ -1167,6 +1191,8 @@ struct ContentView: View {
                 coverURL = downloadedCoverURL ?? track.thumbnailURL
                 playingTrackID = track.id
                 currentTrack = committedTrack
+                // Invalidate the old lyrics synchronously before the new view can render.
+                lyricsStore.beginLoading(trackID: committedTrack.id, clearExisting: true)
                 if let currentTrack {
                     // End the previous listening interval only after replacement starts.
                     let isManualSkip = !automaticAdvance && navigation == .regular &&
@@ -1224,6 +1250,8 @@ struct ContentView: View {
             coverURL = saved.track.thumbnailURL
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
+            lyricsStore.beginLoading(trackID: saved.track.id, clearExisting: true)
+            startLyricsPrefetch(for: saved.track)
             // AudioEngineManager.load() does not start playback.
         } catch {
             resumeTrack = saved.track
@@ -1298,8 +1326,9 @@ struct ContentView: View {
         let ranked = RecommendationRanker.recommendations(
             mix: videos, history: playHistory.entries, currentID: playingTrackID,
             queued: playbackQueue.tracks, context: RecContext(speed: audio.speed, now: .now),
-            discovery: discoverySnapshot)
+            discovery: discoverySnapshot, recentlySuggested: Set(recentlySuggestedIDs))
         relatedVideos = ranked
+        recentlySuggestedIDs = Array((recentlySuggestedIDs + ranked.map(\.id)).suffix(60))
         let snapshot = discoverySnapshot
         suggestionReasons = Dictionary(uniqueKeysWithValues: ranked.compactMap { track in
             RecommendationRanker.whyAppeared(track, history: playHistory.entries,
@@ -1349,7 +1378,7 @@ struct ContentView: View {
             playbackTransition.clearQueue(playbackQueue)
             navigationHistory.clear()
             playbackTransition.reset()
-            downloader.cancel()
+            downloader.cancelPlaybackSelection()
             resetRelatedVideos()
             applyPitch()
         } catch {

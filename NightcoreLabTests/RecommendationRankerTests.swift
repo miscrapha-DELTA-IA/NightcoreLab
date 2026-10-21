@@ -16,10 +16,10 @@ final class RecommendationRankerTests: XCTestCase {
     }
     private func context(_ speed: Float = 1) -> RecContext { RecContext(speed: speed, now: now) }
 
-    func testColdStartPreservesMixOrderEvenWithSameArtistAndFastSpeed() {
+    func testColdStartAppliesArtistDiversityWithoutReorderingEqualCandidates() {
         let mix = (0..<10).map { track("m\($0)") }
         XCTAssertEqual(RecommendationRanker.recommendations(mix: mix, history: [:], currentID: "playing",
-            queued: [], context: context(1.25)).map(\.id), mix.map(\.id))
+            queued: [], context: context(1.25)).map(\.id), Array(mix.prefix(2)).map(\.id))
     }
 
     func testCompletedArtistRanksAboveUnknownAtSameMixPosition() {
@@ -67,7 +67,7 @@ final class RecommendationRankerTests: XCTestCase {
     func testSourceQuotaAndNoMoreThanTwoPerArtist() {
         let familiar = (0..<10).map { RecCandidate(track: track("h\($0)", artist: "H\($0 / 2)"), mixIndex: nil) }
         let mix = (0..<10).map { RecCandidate(track: track("m\($0)", artist: "M\($0 / 2)"), mixIndex: $0) }
-        for (events, count) in [(0, 0), (15, 4), (30, 7), (90, 7)] {
+        for (events, count) in [(0, 0), (15, 2), (30, 3), (90, 3)] {
             let share = RecommendationRanker.familiarShare(eventCount: events)
             let result = RecommendationRanker.diversify(familiar + mix, familiarShare: share)
             XCTAssertEqual(result.count, 10)
@@ -105,7 +105,7 @@ final class RecommendationRankerTests: XCTestCase {
 
     func testExcludesCurrentQueuedDuplicatesRecentAndSkippedHistory() {
         var history: [String: HistoryEntry] = [:]
-        for i in 0..<10 { history["recent\(i)"] = entry("recent\(i)", age: Double(i)) }
+        for i in 0..<RecommendationRanker.Policy.recentTrackCount { history["recent\(i)"] = entry("recent\(i)", age: Double(i)) }
         history["old"] = entry("old", artist: "Older", age: 1000)
         var skipped = entry("skipped", age: 1000)
         skipped.earlySkips = 1; skipped.lastSkippedAt = now
@@ -121,6 +121,37 @@ final class RecommendationRankerTests: XCTestCase {
         let items = [RecCandidate(track: track("b"), mixIndex: nil), RecCandidate(track: track("a"), mixIndex: nil)]
         let profile = UserTasteProfile(history: [:])
         XCTAssertEqual(RecommendationRanker.rank(items, profile: profile, context: context()).map { $0.track.id }, ["a", "b"])
+    }
+
+    func testRecentMixEntriesAndAlternateUploadsAreExcluded() {
+        let heard = track("heard", artist: "Paramore", title: "Decode")
+        let history = [heard.id: HistoryEntry(hit: TrackHit(id: heard.id, title: "Decode", artist: "Paramore",
+            album: nil, duration: 180, thumb: nil, isSong: true, explicit: false), plays: 1, lastPlayed: now)]
+        let duplicate = track("another-upload", artist: "Paramore", title: "Decode (Official Audio)")
+        let fresh = track("fresh", artist: "Other", title: "New recording")
+        let result = RecommendationRanker.recommendations(mix: [heard, duplicate, fresh], history: history,
+            currentID: "playing", queued: [], context: context())
+        XCTAssertEqual(result.map(\.id), [fresh.id])
+    }
+
+    func testRefreshPrioritizesTracksNotInPreviousSuggestions() {
+        let mix = (0..<30).map { track("new\($0)", artist: "Artist \($0)") }
+        let first = RecommendationRanker.recommendations(mix: mix, history: [:], currentID: "playing",
+            queued: [], context: context())
+        let second = RecommendationRanker.recommendations(mix: mix, history: [:], currentID: "playing",
+            queued: [], context: context(), recentlySuggested: Set(first.map(\.id)))
+        XCTAssertEqual(first.count, 10)
+        XCTAssertEqual(second.count, 10)
+        XCTAssertTrue(Set(first.map(\.id)).isDisjoint(with: second.map(\.id)))
+    }
+
+    func testOneArtistCannotDominateAnInterleavedBatch() {
+        let candidates = (0..<20).map { index in
+            RecCandidate(track: track("song\(index)", artist: index.isMultiple(of: 3) ? "Other \(index)" : "Dominant"),
+                         mixIndex: index)
+        }
+        let result = RecommendationRanker.diversify(candidates, familiarShare: 0)
+        XCTAssertLessThanOrEqual(result.filter { $0.cleanArtist == "Dominant" }.count, 3)
     }
 }
 

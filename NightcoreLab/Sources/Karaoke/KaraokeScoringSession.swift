@@ -6,11 +6,18 @@ import Observation
 @MainActor @Observable
 final class KaraokeScoringSession {
     enum Mode: Equatable { case off, microphone, simulation }
+    struct Result: Identifiable {
+        let id = UUID()
+        let snapshot: KaraokeScoreSnapshot
+        let simulation: Bool
+        let trackTitle: String?
+    }
     private(set) var mode: Mode = .off
     private(set) var snapshot = KaraokeScoreSnapshot()
     private(set) var message: String?
     private(set) var isPresented = false
     private(set) var judgmentVisible = false
+    private(set) var lastResult: Result?
     var isHUDVisible: Bool { isPresented && mode != .off }
     @ObservationIgnored private var engine = KaraokeScoringEngine()
     @ObservationIgnored private var lastTime: Double?
@@ -20,6 +27,7 @@ final class KaraokeScoringSession {
     @ObservationIgnored private var syntheticFrame: KaraokeVoiceFrame?
     @ObservationIgnored private var referenceKey: KeyAnalysisResult?
     @ObservationIgnored private var referenceMelody: MelodicFeatures?
+    @ObservationIgnored private var trackTitle: String?
 
     func present(_ presented: Bool) {
         isPresented = presented
@@ -32,9 +40,10 @@ final class KaraokeScoringSession {
         if mode == .off { engine.key = key; engine.melody = melody }
     }
 
-    func start(mode: Mode, lines: [TimedLyricLine], at time: Double) {
+    func start(mode: Mode, lines: [TimedLyricLine], at time: Double, trackTitle: String? = nil) {
         guard isPresented, mode != .off else { return }
         self.mode = mode
+        self.trackTitle = trackTitle
         message = nil
         engine = KaraokeScoringEngine()
         engine.key = referenceKey; engine.melody = referenceMelody
@@ -44,12 +53,15 @@ final class KaraokeScoringSession {
     }
 
     func stop(message: String? = nil) {
+        if mode != .off { finish() }
         mode = .off; self.message = message
         snapshot = .init(); lastTime = nil; judgmentVisible = false
         microphoneFrame = nil; syntheticFrame = nil
     }
 
     func resetForTrack() {
+        // Auto-advance may replace the song immediately after finish. Keep the
+        // immutable result, including its title, available from the next song.
         stop(); referenceKey = nil; referenceMelody = nil
     }
 
@@ -84,12 +96,14 @@ final class KaraokeScoringSession {
         tickCount += 1
         if tickCount % 2 == 0 || engine.snapshot.judgedVerses != snapshot.judgedVerses {
             snapshot = engine.snapshot
+            if snapshot.isFinished { finish() }
         }
     }
 
     func finish() {
         guard mode != .off else { return }
         engine.finish(); snapshot = engine.snapshot
+        lastResult = Result(snapshot: snapshot, simulation: mode == .simulation, trackTitle: trackTitle)
         microphoneFrame = nil
     }
 }

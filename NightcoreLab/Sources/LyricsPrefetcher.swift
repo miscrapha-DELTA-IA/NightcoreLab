@@ -60,7 +60,8 @@ actor LyricsPrefetcher {
     init(store: LyricsStore) { self.store = store }
 
     /// Chame quando a reprodução COMEÇA (não quando a aba/modo de letras abre).
-    func start(_ meta: TrackMetadata) {
+    func start(_ meta: TrackMetadata) async {
+        guard await store.trackID == meta.videoID else { return }
         task?.cancel()
         activeID = meta.videoID
         warmedID = nil
@@ -88,6 +89,7 @@ actor LyricsPrefetcher {
 
     /// Escolha manual ("trocar letra"): vira definitiva para esta faixa.
     func pin(_ record: LRCLIBRecord, for videoID: String) async {
+        guard await store.trackID == videoID else { return }
         if activeID == videoID { task?.cancel() }
         var c = cache.load(videoID) ?? CachedLyricsChoice(selected: nil, score: 1, needsReview: false,
                                                            pinned: true, alternatives: [], savedAt: Date())
@@ -95,9 +97,9 @@ actor LyricsPrefetcher {
         c.generatedLRC = nil
         cache.save(c, id: videoID)
         if let lrc = record.syncedLyrics {
-            await store.load(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
+            await store.loadIfCurrent(trackID: videoID, rawLRC: lrc, needsReview: false, force: true)
         } else {
-            await store.beginLoading(trackID: videoID, clearExisting: true)
+            await store.beginLoadingIfCurrent(trackID: videoID)
         }
         if let plain = record.plainLyrics, !plain.isEmpty {
             guard let generated = await alignedLRC(videoID: videoID, lyrics: plain) else {
@@ -122,7 +124,7 @@ actor LyricsPrefetcher {
 
     private func run(_ m: TrackMetadata, apply: Bool) async {
         guard !Task.isCancelled, !apply || activeID == m.videoID else { return }
-        if apply { await store.beginLoading(trackID: m.videoID) }
+        if apply, await store.trackID != m.videoID { return }
 
         if let cached = cache.load(m.videoID) { await finish(cached, m, apply); return }
 
@@ -166,7 +168,7 @@ actor LyricsPrefetcher {
     private func finish(_ c: CachedLyricsChoice, _ m: TrackMetadata, _ apply: Bool) async {
         guard apply, !Task.isCancelled, activeID == m.videoID else { return }   // resultado velho de faixa anterior
         if let lrc = c.generatedLRC ?? c.selected?.syncedLyrics {
-            await store.load(trackID: m.videoID, rawLRC: lrc,
+            await store.loadIfCurrent(trackID: m.videoID, rawLRC: lrc,
                              needsReview: c.needsReview || c.generatedLRC != nil,
                              force: c.pinned)
         }
