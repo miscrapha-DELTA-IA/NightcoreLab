@@ -267,5 +267,5 @@ def stages(m, mix, spectrum):
                 modules.append((descriptor, module, args))
         apply(f'decode_t{i}', DecodeTemporal(m, i, temporal_lengths[3-i]),
               [f'dt{i}', f't{3-i}', 'stats'], [temporal_output])
-    instructions[0]['working_memory_bytes'] = 384 * 1024 * 1024
+    instructions[0]['working_memory_bytes'] = 256 * 1024 * 1024
     return instructions, modules, state['frequency'], state['time']

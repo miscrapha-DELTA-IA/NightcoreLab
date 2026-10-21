@@ -94,13 +94,15 @@ let spectralError = zip(goldenSpectrum, swiftSpectrum).map { abs($0.0 - $0.1) }.
 if spectralError >= 0.00001 { passed = false }
 try FileHandle.standardError.write(contentsOf: Data("Full STFT max error: \(spectralError)\n".utf8))
 let peak = peakMemoryBytes()
-// Leaves headroom for the UI, playback and streaming writer in a 3GB phone's
-// process budget. This host regression gate does not certify physical iOS RAM.
-if cpuOnly && peak > 400 * 1_024 * 1_024 { passed = false }
+// The kernel ledger is the footprint charged to the app (dirty/compressed
+// memory); RSS also counts clean mmap/model pages. Keep BOTH in the report.
+// Apple: https://developer.apple.com/videos/play/wwdc2022/10106/
+let physicalPeak = physicalFootprint().peak
+if cpuOnly && (physicalPeak <= 0 || physicalPeak > 400 * 1_024 * 1_024 || peak > 800 * 1_024 * 1_024) { passed = false }
 try FileHandle.standardError.write(contentsOf: Data("Core ML \(cpuOnly ? "CPU" : "GPU"): load=\(loadSeconds)s, peak=\(peak / 1_048_576)MiB, baseline=\(beforeLoad / 1_048_576)MiB, loaded=\(afterLoad / 1_048_576)MiB\n".utf8))
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
     "passed":passed, "compute_units":cpuOnly ? "cpuOnly" : "cpuAndGPU",
-    "peak_memory_bytes":peak, "physical_peak_bytes":physicalFootprint().peak, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":white.sources, "musical_sources":musical.sources,
+    "peak_memory_bytes":peak, "physical_peak_bytes":physicalPeak, "memory_metric":"kernel_physical_footprint", "physical_limit_bytes":400 * 1_024 * 1_024, "resident_limit_bytes":800 * 1_024 * 1_024, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":white.sources, "musical_sources":musical.sources,
     "stft_max_error":spectralError, "stage_memory":stageMemory], options: [.prettyPrinted,.sortedKeys])
 try data.write(to: root.appendingPathComponent(cpuOnly ? "neural-parity-cpu.json" : "neural-parity.json"))
 guard passed else {

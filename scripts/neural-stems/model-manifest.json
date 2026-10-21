@@ -25,5 +25,7 @@
   },
   "execution": "one independently released stage at a time",
   "attention_query_block": 64,
-  "max_cpu_peak_bytes": 419430400
+  "memory_metric": "kernel_physical_footprint",
+  "max_cpu_physical_peak_bytes": 419430400,
+  "max_cpu_resident_peak_bytes": 838860800
 }
