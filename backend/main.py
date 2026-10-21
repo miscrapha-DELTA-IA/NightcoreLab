@@ -211,6 +211,7 @@ RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
 
 from backend_search import router as music_search_router
+from cloud_stems import router as cloud_stems_router
 
 app = FastAPI(
     title="Nightcore Lab Bridge",
@@ -295,6 +296,7 @@ async def _close_r2() -> None:
 
 # JSON metadata API for the SwiftUI Omnibox; /search NDJSON remains backward compatible.
 app.include_router(music_search_router)
+app.include_router(cloud_stems_router)
 
 
 class DownloadRequest(BaseModel):
