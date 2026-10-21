@@ -20,7 +20,7 @@ jobs:
         id: converted
         with:
           path: .cache/gnarly-neural-model
-          key: neural-converted-v1-${{ hashFiles('scripts/neural-stems/model-manifest.json', 'scripts/neural-stems/convert_staged.py', 'scripts/neural-stems/staged_core.py', 'scripts/neural-stems/stemcommon.py', 'scripts/neural-stems/requirements.txt') }}
+          key: neural-converted-v1-${{ hashFiles('scripts/neural-stems/model-manifest.json', 'scripts/neural-stems/convert_staged.py', 'scripts/neural-stems/staged_core.py', 'scripts/neural-stems/musical_fixture.py', 'scripts/neural-stems/stemcommon.py', 'scripts/neural-stems/requirements.txt') }}
       - name: Convert pinned MIT HTDemucs weights
         if: steps.converted.outputs.cache-hit != 'true'
         env:

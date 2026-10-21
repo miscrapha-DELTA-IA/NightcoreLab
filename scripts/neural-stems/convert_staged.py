@@ -13,6 +13,7 @@ import demucs.hdemucs as hd
 import demucs.htdemucs as htd
 import stemcommon as sc
 from staged_core import stages
+from musical_fixture import musical_mix
 
 
 def main():
@@ -47,6 +48,12 @@ def main():
     for name, tensor in [('mix', mix), ('reference', reference), ('spec-input', spectrum),
                          ('spec-reference', frequency), ('time-reference', time)]:
         tensor.numpy().tofile(fixtures / (name + '.f32'))
+    with torch.no_grad():
+        music = musical_mix()
+        music_reference = model(music)
+    music.numpy().tofile(fixtures / 'music-mix.f32')
+    music_reference.numpy().tofile(fixtures / 'music-reference.f32')
+    del music, music_reference
     import coremltools as ct
     hashes = {}
     for instruction, module, inputs in modules:

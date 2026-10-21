@@ -21,3 +21,6 @@ assert (root/'golden/spec-input.f32').stat().st_size==4*2048*336*4
 assert (root/'golden/spec-reference.f32').stat().st_size==4*4*2048*336*4
 assert (root/'golden/time-reference.f32').stat().st_size==4*2*343980*4
 print('Verified immutable source weights, conversion integrity and reference tensors')
+
+assert (root/'golden/music-mix.f32').stat().st_size==2*343980*4
+assert (root/'golden/music-reference.f32').stat().st_size==4*2*343980*4

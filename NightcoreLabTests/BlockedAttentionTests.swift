@@ -25,7 +25,12 @@ final class BlockedAttentionTests: XCTestCase {
                 let probabilities = scores.map { exp($0 - maximum) }
                 let total = probabilities.reduce(0, +)
                 for d in 0..<width {
-                    let expected = (0..<keys).reduce(0) { $0 + probabilities[$1] * Double(v[(head * keys + $1) * width + d]) } / total
+                    var weightedValue = 0.0
+                    for key in 0..<keys {
+                        let offset = (head * keys + key) * width + d
+                        weightedValue += probabilities[key] * Double(v[offset])
+                    }
+                    let expected = weightedValue / total
                     XCTAssertEqual(Double(output[(head * queries + query) * width + d]), expected, accuracy: 0.000002)
                 }
             }
