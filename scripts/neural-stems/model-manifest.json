@@ -1,5 +1,5 @@
 {
-  "model_id": "htdemucs-v4-core-fp32-v1",
+  "model_id": "htdemucs-v4-staged-fp32-tiled-v2",
   "license": "MIT",
   "sources": [
     "drums",
@@ -22,5 +22,10 @@
   "source_files": {
     "htdemucs.yaml": "239c445d0b14454d541ad8bd9bb271c9e536d267e8a4625208744cbb2e7bb66c",
     "955717e8.safetensors": "d9fa14133cfcc034a6758923bb3a8ca9f8dfd0b582134643bbf83f72c17576dd"
-  }
+  },
+  "execution": "one independently released stage at a time",
+  "attention_query_block": 64,
+  "memory_metric": "kernel_physical_footprint",
+  "max_cpu_physical_peak_bytes": 419430400,
+  "max_cpu_resident_peak_bytes": 838860800
 }

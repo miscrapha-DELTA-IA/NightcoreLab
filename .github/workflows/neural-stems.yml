@@ -20,7 +20,7 @@ jobs:
         id: converted
         with:
           path: .cache/gnarly-neural-model
-          key: neural-converted-v1-${{ hashFiles('scripts/neural-stems/model-manifest.json', 'scripts/neural-stems/convert_core.py', 'scripts/neural-stems/stemcommon.py', 'scripts/neural-stems/requirements.txt') }}
+          key: neural-converted-v1-${{ hashFiles('scripts/neural-stems/model-manifest.json', 'scripts/neural-stems/convert_staged.py', 'scripts/neural-stems/staged_core.py', 'scripts/neural-stems/musical_fixture.py', 'scripts/neural-stems/stemcommon.py', 'scripts/neural-stems/requirements.txt') }}
       - name: Convert pinned MIT HTDemucs weights
         if: steps.converted.outputs.cache-hit != 'true'
         env:
@@ -32,7 +32,7 @@ jobs:
           pip install torch==2.12.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r scripts/neural-stems/requirements.txt
           mkdir -p .cache/gnarly-neural-model
-          python scripts/neural-stems/convert_core.py --convert-only --output .cache/gnarly-neural-model/htdemucs_core.mlpackage
+          python scripts/neural-stems/convert_staged.py --output .cache/gnarly-neural-model
       - name: Verify converted weights
         run: python scripts/neural-stems/verify-model.py .cache/gnarly-neural-model
       - uses: actions/upload-artifact@v4
@@ -66,7 +66,7 @@ jobs:
         with:
           name: Gnarly-Neural-Model
           path: |
-            NightcoreLab/Resources/NeuralStems/htdemucs_core.mlmodelc
+            NightcoreLab/Resources/NeuralStems/htdemucs_staged
             NightcoreLab/Resources/NeuralStems/neural-parity*.json
             NightcoreLab/Resources/NeuralStems/model-manifest.json
           retention-days: 7

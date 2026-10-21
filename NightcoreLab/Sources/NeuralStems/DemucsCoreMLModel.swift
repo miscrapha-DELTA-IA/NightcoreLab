@@ -4,12 +4,14 @@ import Foundation
 
 public enum NeuralStemError: Error, LocalizedError {
     case modelMissing, incompatibleModel, invalidOutput, noAudio, insufficientSpace, insufficientMemory
+    case memoryBudget(requiredMiB: Int, availableMiB: Int)
     public var errorDescription: String? {
         switch self {
         case .modelMissing: return "O modelo de separação não está incluído nesta versão do app."
         case .incompatibleModel: return "O modelo de separação é incompatível com esta versão."
         case .invalidOutput: return "Não foi possível gerar stems válidos neste aparelho."
         case .noAudio: return "A música não contém áudio compatível para separar."
+        case .memoryBudget(let required, let available): return "A separação precisa de \(required) MB livres nesta etapa; o iPhone dispõe de \(available) MB agora. Tente reabrir o app."
         case .insufficientMemory: return "O iPhone está com pouca memória para separar esta música agora. Tente novamente após reabrir o app."
         case .insufficientSpace: return "Libere espaço no iPhone para salvar as faixas separadas."
         }
@@ -20,13 +22,10 @@ public enum NeuralStemError: Error, LocalizedError {
 /// spectral proxy or original-audio gain mask participates in separation.
 /// One worker owns this instance and invokes predictions serially.
 public final class DemucsCoreMLModel {
-    public static let identifier = "htdemucs-v4-core-fp32-v1"
+    public static let identifier = "htdemucs-v4-staged-fp32-tiled-v2"
     public static let sources = ["drums", "bass", "other", "vocals"]
-    private let url: URL
-    private var model: MLModel
+    private let pipeline: StagedDemucsPipeline
     private var usingCPU: Bool
-    private let mixName: String
-    private let specName: String
 
     /// A12 / 3–4GB devices cannot afford GPU graph specialization plus the
     /// full-precision model. Keep the identical validated model on the CPU.
@@ -35,46 +34,30 @@ public final class DemucsCoreMLModel {
     }
 
     public init(url: URL, cpuOnly: Bool = false) throws {
-        self.url = url
+        pipeline = try StagedDemucsPipeline(root: url)
         #if targetEnvironment(simulator)
         usingCPU = true
         #else
         usingCPU = cpuOnly || Self.prefersCPU(physicalMemory: ProcessInfo.processInfo.physicalMemory)
         #endif
-        let config = MLModelConfiguration()
-        // The ANE is deliberately excluded for this graph; some paths produce
-        // invalid spectral outputs. Simulator GPU is not a valid test backend.
-        config.computeUnits = usingCPU ? .cpuOnly : .cpuAndGPU
-        model = try MLModel(contentsOf: url, configuration: config)
-        let metadata = model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
-        guard metadata["gnarly.model_id"] == Self.identifier,
-              metadata["sources"] == Self.sources.joined(separator: ","),
-              metadata["segment_samples"] == String(StemDSP.segmentSamples) else {
-            throw NeuralStemError.incompatibleModel
-        }
-        let inputs = model.modelDescription.inputDescriptionsByName
-        guard let mix = inputs.first(where: { $0.value.multiArrayConstraint?.shape.map(\.intValue) == [1, 2, StemDSP.segmentSamples] }),
-              let spec = inputs.first(where: { $0.value.multiArrayConstraint?.shape.map(\.intValue) == [1, 4, StemDSP.bins, StemDSP.frames] }) else {
-            throw NeuralStemError.incompatibleModel
-        }
-        mixName = mix.key; specName = spec.key
     }
 
     /// Planar stereo, exactly 343980 samples/channel → [source][channel][sample].
-    public func separate(_ input: [Float]) throws -> [Float] {
+    public func separate(_ input: [Float], check: () throws -> Void = {},
+                         admission: (Int) throws -> Void = { _ in },
+                         progress: (Double, String) -> Void = { _, _ in }) throws -> [Float] {
         guard input.count == 2 * StemDSP.segmentSamples else { throw NeuralStemError.noAudio }
-        do { return try predict(input) }
+        do { return try predict(input, check: check, admission: admission, progress: progress) }
         catch NeuralStemError.invalidOutput where !usingCPU {
-            // A device-specific GPU failure must never become silent/fake stems.
-            let config = MLModelConfiguration(); config.computeUnits = .cpuOnly
-            model = try MLModel(contentsOf: url, configuration: config)
             usingCPU = true
-            return try predict(input)
+            return try predict(input, check: check, admission: admission, progress: progress)
         }
     }
 
-    private func predict(_ input: [Float]) throws -> [Float] {
-        try Task.checkCancellation()
+    private func predict(_ input: [Float], check: () throws -> Void,
+                         admission: (Int) throws -> Void,
+                         progress: (Double, String) -> Void) throws -> [Float] {
+        try check()
         let length = StemDSP.segmentSamples
         let mix = try MLMultiArray(shape: [1, 2, NSNumber(value: length)], dataType: .float32)
         let spectrum = try MLMultiArray(shape: [1, 4, NSNumber(value: StemDSP.bins), NSNumber(value: StemDSP.frames)], dataType: .float32)
@@ -85,13 +68,10 @@ public final class DemucsCoreMLModel {
             try Self.writePlane(spec.re, to: spectrum, prefix: [0, channel * 2])
             try Self.writePlane(spec.im, to: spectrum, prefix: [0, channel * 2 + 1])
         }
-        let output = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: [mixName: mix, specName: spectrum]))
-        try Task.checkCancellation()
-        let arrays = output.featureNames.compactMap { output.featureValue(for: $0)?.multiArrayValue }
-        guard let spec = arrays.first(where: { $0.shape.map(\.intValue) == [1, 4, 4, StemDSP.bins, StemDSP.frames] }),
-              let time = arrays.first(where: { $0.shape.map(\.intValue) == [1, 4, 2, length] }) else {
-            throw NeuralStemError.incompatibleModel
-        }
+        let output = try pipeline.run(mix: mix, spectrum: spectrum, cpuOnly: usingCPU,
+                                      check: check, admission: admission, progress: progress)
+        try check()
+        guard let spec = output["frequency"], let time = output["time"] else { throw NeuralStemError.invalidOutput }
         var result = try Self.readStrided(time)
         for source in 0..<4 {
             for channel in 0..<2 {

@@ -45,3 +45,5 @@ venv/
 NightcoreLab/Resources/NeuralStems/*.mlmodelc/
 NightcoreLab/Resources/NeuralStems/neural-parity*.json
 NightcoreLab/Resources/NeuralStems/model-manifest.json
+
+NightcoreLab/Resources/NeuralStems/htdemucs_staged/

@@ -1022,6 +1022,8 @@ final class AudioEngineManager {
         stemPreparationTask = Task { [weak self] in
             defer { if lease != .invalid { UIApplication.shared.endBackgroundTask(lease) } }
             do {
+                await NowPlayingArtworkLoader.releaseDecodedCovers()
+                try Task.checkCancellation()
                 let asset = try await NeuralStemWorker.prepare(source: sourceURL) { [weak self] value, message in
                     Task { @MainActor in
                         guard let self, self.stemPreparationID == request,

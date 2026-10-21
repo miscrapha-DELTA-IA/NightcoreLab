@@ -137,6 +137,40 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertThrowsError(try DemucsCoreMLModel.readPlane(array, prefix: [0, 2, 0]))
     }
 
+    func testSpectralTileCopiesCorrectFrequencyRowsForAllFourSources() throws {
+        let source = try MLMultiArray(shape: [1, 4, 4, 20, 7], dataType: .float32)
+        let destination = try MLMultiArray(shape: [1, 4, 4, 8, 7], dataType: .float32)
+        let sourceValues = (0..<source.count).map { Float($0) }
+        try DemucsCoreMLModel.writeStrided(sourceValues, to: source)
+        try DemucsCoreMLModel.writeStrided(Array(repeating: -999, count: destination.count), to: destination)
+        try StagedDemucsPipeline.copyFrequencies(source, start: 3, count: 5, to: destination, at: 2)
+        let values = try DemucsCoreMLModel.readStrided(destination)
+        for lane in 0..<16 {
+            for frequency in 0..<8 {
+                for time in 0..<7 {
+                    let expected = (2..<7).contains(frequency) ? sourceValues[(lane * 20 + frequency + 1) * 7 + time] : -999
+                    XCTAssertEqual(values[(lane * 8 + frequency) * 7 + time], expected)
+                }
+            }
+        }
+        XCTAssertThrowsError(try StagedDemucsPipeline.copyFrequencies(source, start: 19, count: 2, to: destination, at: 0))
+    }
+
+    func testOwnedStageOutputCopiesPaddedStorageAndDoesNotAliasIt() throws {
+        let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 16)
+        pointer.initialize(repeating: -999, count: 16)
+        defer { pointer.deallocate() }
+        let values: [Float] = [1, 2, 3, 4, 5, 6]
+        for row in 0..<2 { for column in 0..<3 { pointer[row * 8 + column * 2] = values[row * 3 + column] } }
+        let source = try MLMultiArray(dataPointer: pointer, shape: [1, 2, 3], dataType: .float32,
+                                     strides: [16, 8, 2], deallocator: { _ in })
+        let copy = try StagedDemucsPipeline.ownedCopy(source)
+        XCTAssertEqual(try DemucsCoreMLModel.readStrided(copy), values)
+        pointer.update(repeating: 0, count: 16)
+        XCTAssertEqual(try DemucsCoreMLModel.readStrided(copy), values,
+                       "An output kept for a later stage must own its bytes after the previous model is released")
+    }
+
     func testNeuralPlayersAllocateOnlyWhenActuallyConnected() {
         let stems = NeuralStemPlayback()
         XCTAssertTrue(stems.nodes.isEmpty, "Normal player startup must not instantiate eight extra audio units")
