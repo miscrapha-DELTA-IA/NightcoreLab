@@ -18,6 +18,17 @@ func peakMemoryBytes() -> Int64 {
     getrusage(RUSAGE_SELF, &usage)
     return Int64(usage.ru_maxrss)
 }
+func physicalFootprint() -> (current: UInt64, peak: Int64) {
+    var info = task_vm_info_data_t()
+    let capacity = MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size
+    var count = mach_msg_type_number_t(capacity)
+    let status = withUnsafeMutablePointer(to: &info) { pointer in
+        pointer.withMemoryRebound(to: integer_t.self, capacity: capacity) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return status == KERN_SUCCESS ? (info.phys_footprint, info.ledger_phys_footprint_peak) : (0, 0)
+}
 let beforeLoad = peakMemoryBytes()
 let loadStarted = Date()
 let model = try DemucsCoreMLModel(url: modelURL, cpuOnly: cpuOnly)
@@ -27,8 +38,10 @@ let started = Date()
 var stageMemory: [[String: Any]] = []
 let actual = try model.separate(input, progress: { fraction, name in
     let peak = peakMemoryBytes()
-    stageMemory.append(["stage": name, "fraction": fraction, "peak_memory_bytes": peak])
-    try? FileHandle.standardError.write(contentsOf: Data("Stage \(name): peak=\(peak / 1_048_576)MiB\n".utf8))
+    let physical = physicalFootprint()
+    stageMemory.append(["stage": name, "fraction": fraction, "peak_memory_bytes": peak,
+                        "physical_bytes": physical.current, "physical_peak_bytes": physical.peak])
+    try? FileHandle.standardError.write(contentsOf: Data("Stage \(name): peak=\(peak / 1_048_576)MiB, physical=\(physical.current / 1_048_576)MiB, physicalPeak=\(physical.peak / 1_048_576)MiB\n".utf8))
 })
 if cpuOnly {
     // A second full inference catches retained stage plans/weights and tensor
@@ -87,7 +100,7 @@ if cpuOnly && peak > 400 * 1_024 * 1_024 { passed = false }
 try FileHandle.standardError.write(contentsOf: Data("Core ML \(cpuOnly ? "CPU" : "GPU"): load=\(loadSeconds)s, peak=\(peak / 1_048_576)MiB, baseline=\(beforeLoad / 1_048_576)MiB, loaded=\(afterLoad / 1_048_576)MiB\n".utf8))
 let data = try JSONSerialization.data(withJSONObject: ["model":DemucsCoreMLModel.identifier,
     "passed":passed, "compute_units":cpuOnly ? "cpuOnly" : "cpuAndGPU",
-    "peak_memory_bytes":peak, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":white.sources, "musical_sources":musical.sources,
+    "peak_memory_bytes":peak, "physical_peak_bytes":physicalFootprint().peak, "before_load_bytes":beforeLoad, "after_load_bytes":afterLoad, "load_seconds":loadSeconds, "seconds":Date().timeIntervalSince(started), "sources":white.sources, "musical_sources":musical.sources,
     "stft_max_error":spectralError, "stage_memory":stageMemory], options: [.prettyPrinted,.sortedKeys])
 try data.write(to: root.appendingPathComponent(cpuOnly ? "neural-parity-cpu.json" : "neural-parity.json"))
 guard passed else {

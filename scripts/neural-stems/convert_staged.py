@@ -99,7 +99,8 @@ def main():
         gc.collect()
     pipeline = {'model_id': manifest['model_id'], 'sources': model.sources,
                 'segment_samples': sc.SEG_SAMPLES, 'attention_query_block': 64,
-                'stage_headroom_bytes': 256 * 1024 * 1024, 'stages': instructions}
+                'stage_headroom_bytes': 256 * 1024 * 1024, 'spectral_tile_rows': 32,
+                'spectral_halo_rows': 2, 'stages': instructions}
     (root / 'pipeline.json').write_text(json.dumps(pipeline, indent=2))
     evidence = {'model_id': manifest['model_id'], 'source_revision': revision,
                 'source_files': manifest['source_files'], 'surgery_max_error': error,

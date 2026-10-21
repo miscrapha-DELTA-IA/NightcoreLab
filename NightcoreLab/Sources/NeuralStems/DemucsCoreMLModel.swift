@@ -22,7 +22,7 @@ public enum NeuralStemError: Error, LocalizedError {
 /// spectral proxy or original-audio gain mask participates in separation.
 /// One worker owns this instance and invokes predictions serially.
 public final class DemucsCoreMLModel {
-    public static let identifier = "htdemucs-v4-staged-fp32-global-attention-v1"
+    public static let identifier = "htdemucs-v4-staged-fp32-tiled-v2"
     public static let sources = ["drums", "bass", "other", "vocals"]
     private let pipeline: StagedDemucsPipeline
     private var usingCPU: Bool

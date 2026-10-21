@@ -12,6 +12,7 @@ final class StagedDemucsPipeline {
         let outputs: [String]
         let inputShapes: [[Int]]
         let outputShapes: [[Int]]
+        let workingMemoryBytes: Int?
     }
     struct Manifest: Decodable {
         let modelId: String
@@ -19,6 +20,8 @@ final class StagedDemucsPipeline {
         let segmentSamples: Int
         let attentionQueryBlock: Int
         let stageHeadroomBytes: Int
+        let spectralTileRows: Int
+        let spectralHaloRows: Int
         let stages: [Instruction]
     }
     let manifest: Manifest
@@ -32,7 +35,8 @@ final class StagedDemucsPipeline {
               manifest.sources == DemucsCoreMLModel.sources,
               manifest.segmentSamples == StemDSP.segmentSamples,
               manifest.attentionQueryBlock == BlockedAttention.blockRows,
-              manifest.stages.count == 25 else { throw NeuralStemError.incompatibleModel }
+              manifest.spectralTileRows == 32, manifest.spectralHaloRows == 2,
+              manifest.stages.count == 29 else { throw NeuralStemError.incompatibleModel }
         for stage in manifest.stages {
             guard !stage.name.isEmpty, stage.name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }),
                   stage.inputs.count == stage.inputShapes.count,
@@ -40,6 +44,11 @@ final class StagedDemucsPipeline {
             if stage.kind == "coreml" {
                 guard FileManager.default.fileExists(atPath: root.appendingPathComponent(stage.name + ".mlmodelc").path)
                 else { throw NeuralStemError.modelMissing }
+            } else if stage.kind == "spectral_decode" {
+                for variant in ["edge", "inner"] {
+                    guard FileManager.default.fileExists(atPath: root.appendingPathComponent(stage.name + "_" + variant + ".mlmodelc").path)
+                    else { throw NeuralStemError.modelMissing }
+                }
             } else if stage.kind != "attention" { throw NeuralStemError.incompatibleModel }
         }
     }
@@ -54,7 +63,7 @@ final class StagedDemucsPipeline {
         }
         for (index, instruction) in manifest.stages.enumerated() {
             try check()
-            try admission(manifest.stageHeadroomBytes)
+            try admission(instruction.workingMemoryBytes ?? manifest.stageHeadroomBytes)
             let output: [MLMultiArray] = try autoreleasepool {
                 let input = try instruction.inputs.enumerated().map { i, key -> MLMultiArray in
                     guard let tensor = state[key], tensor.shape.map(\.intValue) == instruction.inputShapes[i]
@@ -77,34 +86,12 @@ final class StagedDemucsPipeline {
                         return tensor
                     }
                 }
-                let configuration = MLModelConfiguration()
-                configuration.computeUnits = cpuOnly ? .cpuOnly : .cpuAndGPU
-                let model = try MLModel(contentsOf: root.appendingPathComponent(instruction.name + ".mlmodelc"),
-                                        configuration: configuration)
-                let metadata = model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
-                guard metadata["gnarly.model_id"] == DemucsCoreMLModel.identifier,
-                      metadata["gnarly.stage"] == instruction.name else { throw NeuralStemError.incompatibleModel }
-                var feed: [String: MLMultiArray] = [:]
-                for i in input.indices {
-                    let name = "input_\(i)"
-                    if let description = model.modelDescription.inputDescriptionsByName[name] {
-                        guard description.multiArrayConstraint?.shape.map(\.intValue) == instruction.inputShapes[i]
-                        else { throw NeuralStemError.incompatibleModel }
-                        feed[name] = input[i]
-                    }
+                if instruction.kind == "spectral_decode" {
+                    return [try tiledSpectral(instruction, input: input, cpuOnly: cpuOnly,
+                                              check: check, admission: admission)]
                 }
-                guard feed.count == model.modelDescription.inputDescriptionsByName.count else {
-                    throw NeuralStemError.incompatibleModel
-                }
-                let prediction = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
-                try check()
-                return try instruction.outputs.indices.map { i in
-                    guard let tensor = prediction.featureValue(for: "output_\(i)")?.multiArrayValue,
-                          tensor.shape.map(\.intValue) == instruction.outputShapes[i] else {
-                        throw NeuralStemError.incompatibleModel
-                    }
-                    return try Self.ownedCopy(tensor)
-                }
+                return try predict(name: instruction.name, input: input, outputShapes: instruction.outputShapes,
+                                   cpuOnly: cpuOnly, check: check)
             }
             for (key, tensor) in zip(instruction.outputs, output) { state[key] = tensor }
             for key in instruction.inputs {
@@ -115,6 +102,100 @@ final class StagedDemucsPipeline {
         }
         guard let frequency = state["frequency"], let time = state["time"] else { throw NeuralStemError.invalidOutput }
         return ["frequency": frequency, "time": time]
+    }
+
+    private func predict(name: String, input: [MLMultiArray], outputShapes: [[Int]],
+                         cpuOnly: Bool, check: () throws -> Void) throws -> [MLMultiArray] {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = cpuOnly ? .cpuOnly : .cpuAndGPU
+        let model = try MLModel(contentsOf: root.appendingPathComponent(name + ".mlmodelc"), configuration: configuration)
+        let metadata = model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
+        guard metadata["gnarly.model_id"] == DemucsCoreMLModel.identifier,
+              metadata["gnarly.stage"] == name else { throw NeuralStemError.incompatibleModel }
+        var feed: [String: MLMultiArray] = [:]
+        for i in input.indices {
+            let key = "input_\(i)"
+            if let description = model.modelDescription.inputDescriptionsByName[key] {
+                guard description.multiArrayConstraint?.shape == input[i].shape else { throw NeuralStemError.incompatibleModel }
+                feed[key] = input[i]
+            }
+        }
+        guard feed.count == model.modelDescription.inputDescriptionsByName.count else { throw NeuralStemError.incompatibleModel }
+        let prediction = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
+        try check()
+        return try outputShapes.indices.map { i in
+            guard let tensor = prediction.featureValue(for: "output_\(i)")?.multiArrayValue,
+                  tensor.shape.map(\.intValue) == outputShapes[i] else { throw NeuralStemError.incompatibleModel }
+            return try Self.ownedCopy(tensor)
+        }
+    }
+
+    /// The large decoder rewrite is a 3x3 spectral convolution. Frequency
+    /// tiles have TWO input halo rows: one for rewrite, one for the overlapping
+    /// stride4/kernel8 transpose convolution. Full time context is preserved.
+    /// Edge models use34 rows; interior models36. No fake padded neurons.
+    private func tiledSpectral(_ stage: Instruction, input: [MLMultiArray], cpuOnly: Bool,
+                               check: () throws -> Void, admission: (Int) throws -> Void) throws -> MLMultiArray {
+        guard input.count == 3, stage.outputShapes.count == 1 else { throw NeuralStemError.incompatibleModel }
+        let result = try MLMultiArray(shape: stage.outputShapes[0].map { NSNumber(value: $0) }, dataType: .float32)
+        let frequencies = input[0].shape[input[0].shape.count - 2].intValue
+        for start in stride(from: 0, to: frequencies, by: 32) {
+            try check()
+            try admission(96 * 1_024 * 1_024)
+            try autoreleasepool {
+                let end = min(frequencies, start + 32)
+                let lo = max(0, start - 2), hi = min(frequencies, end + 2)
+                let tile = try [0, 1].map { i -> MLMultiArray in
+                    var shape = input[i].shape
+                    shape[shape.count - 2] = NSNumber(value: hi - lo)
+                    let tensor = try MLMultiArray(shape: shape, dataType: .float32)
+                    try Self.copyFrequencies(input[i], start: lo, count: hi - lo, to: tensor, at: 0)
+                    return tensor
+                } + [input[2]]
+                var shape = stage.outputShapes[0]
+                shape[shape.count - 2] = (hi - lo) * 4
+                let variant = hi - lo == 34 ? "edge" : "inner"
+                let output = try predict(name: stage.name + "_" + variant, input: tile,
+                                         outputShapes: [shape], cpuOnly: cpuOnly, check: check)[0]
+                try Self.copyFrequencies(output, start: (start - lo) * 4, count: (end - start) * 4,
+                                         to: result, at: start * 4)
+            }
+        }
+        return result
+    }
+
+    /// All tensors have frequency on their penultimate axis, including the
+    /// final [batch,source,complex_channel,frequency,time] tensor.
+    static func copyFrequencies(_ source: MLMultiArray, start: Int, count: Int,
+                                to destination: MLMultiArray, at target: Int) throws {
+        let shape = source.shape.map(\.intValue), targetShape = destination.shape.map(\.intValue)
+        let src = source.strides.map(\.intValue), dst = destination.strides.map(\.intValue)
+        guard shape.count >= 2, shape.count == targetShape.count,
+              source.dataType == .float32, destination.dataType == .float32 else { throw NeuralStemError.incompatibleModel }
+        let axis = shape.count - 2
+        guard start >= 0, count > 0, start + count <= shape[axis], target >= 0, target + count <= targetShape[axis],
+              shape.indices.allSatisfy({ $0 == axis || shape[$0] == targetShape[$0] }) else { throw NeuralStemError.incompatibleModel }
+        let sourceData = source.dataPointer.assumingMemoryBound(to: Float.self)
+        let targetData = destination.dataPointer.assumingMemoryBound(to: Float.self)
+        let lanes = shape.prefix(axis).reduce(1, *)
+        for lane in 0..<lanes {
+            var from = 0, to = 0, remainder = lane
+            if axis > 0 {
+                for dimension in stride(from: axis - 1, through: 0, by: -1) {
+                    from += (remainder % shape[dimension]) * src[dimension]
+                    to += (remainder % shape[dimension]) * dst[dimension]
+                    remainder /= shape[dimension]
+                }
+            }
+            for row in 0..<count {
+                let fromRow = from + (start + row) * src[axis], toRow = to + (target + row) * dst[axis]
+                if src.last == 1, dst.last == 1 {
+                    targetData.advanced(by: toRow).update(from: sourceData + fromRow, count: shape.last!)
+                } else {
+                    for t in 0..<shape.last! { targetData[toRow + t * dst.last!] = sourceData[fromRow + t * src.last!] }
+                }
+            }
+        }
     }
 
     /// No temporary full-size Swift Array, and no connection to a model's

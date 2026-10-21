@@ -160,21 +160,35 @@ class TransformerOut(nn.Module):
         return x, self.down_t(xt.transpose(1, 2))
 
 
-class Decode(nn.Module):
-    def __init__(self, m, index, spectral_length, temporal_length):
+class DecodeSpectral(nn.Module):
+    def __init__(self, m, index, length):
         super().__init__()
-        self.spectral, self.temporal = m.decoder[index], m.tdecoder[index]
-        assert not self.temporal.empty
-        self.spectral_length, self.temporal_length = spectral_length, temporal_length
+        self.layer = m.decoder[index]
+        # With this pinned checkpoint, the optional global GroupNorms are
+        # identities. Any DConv normalizes each frequency independently.
+        assert not self.layer.norm
+        self.length = length
         self.last = index == len(m.decoder) - 1
 
-    def forward(self, x, xt, skip, skip_t, stats):
-        x, _ = self.spectral(x, skip, self.spectral_length)
-        xt, _ = self.temporal(xt, skip_t, self.temporal_length)
+    def forward(self, x, skip, stats):
+        x, _ = self.layer(x, skip, self.length)
         if self.last:
-            x = x.reshape(1, 4, 4, 2048, 336) * stats[1] + stats[0]
-            xt = xt.reshape(1, 4, 2, 343980) * stats[3] + stats[2]
-        return x, xt
+            x = x.reshape(1, 4, 4, x.shape[-2], 336) * stats[1] + stats[0]
+        return x
+
+
+class DecodeTemporal(nn.Module):
+    def __init__(self, m, index, length):
+        super().__init__()
+        self.layer = m.tdecoder[index]
+        self.length = length
+        self.last = index == len(m.tdecoder) - 1
+
+    def forward(self, x, skip, stats):
+        x, _ = self.layer(x, skip, self.length)
+        if self.last:
+            x = x.reshape(1, 4, 2, 343980) * stats[3] + stats[2]
+        return x
 
 
 def tiled_attention(q, k, v, block=64):
@@ -222,7 +236,36 @@ def stages(m, mix, spectrum):
     n = m.crosstransformer.num_layers
     apply('transform_out', TransformerOut(m, shape[2], shape[3]), [f'x{n}', f'xt{n}'], ['ds0', 'dt0'])
     for i in range(4):
-        outputs = [f'ds{i+1}', f'dt{i+1}'] if i != 3 else ['frequency', 'time']
-        apply(f'decode{i}', Decode(m, i, spectral_lengths[3-i], temporal_lengths[3-i]),
-              [f'ds{i}', f'dt{i}', f's{3-i}', f't{3-i}', 'stats'], outputs)
+        spectral_output = f'ds{i+1}' if i != 3 else 'frequency'
+        temporal_output = f'dt{i+1}' if i != 3 else 'time'
+        spectral_inputs = [f'ds{i}', f's{3-i}', 'stats']
+        module = DecodeSpectral(m, i, spectral_lengths[3-i]).eval()
+        full_args = tuple(state[key].contiguous() for key in spectral_inputs)
+        frequencies = full_args[0].shape[-2]
+        if frequencies <= 32:
+            apply(f'decode_s{i}', module, spectral_inputs, [spectral_output])
+        else:
+            chunks, variants = [], {}
+            for start in range(0, frequencies, 32):
+                end = min(frequencies, start + 32)
+                lo, hi = max(0, start - 2), min(frequencies, end + 2)
+                args = (full_args[0][..., lo:hi, :].contiguous(),
+                        full_args[1][..., lo:hi, :].contiguous(), full_args[2])
+                output = module(*args)
+                offset, count = (start - lo) * 4, (end - start) * 4
+                chunks.append(output[..., offset:offset + count, :])
+                variant = 'edge' if hi - lo == 34 else 'inner'
+                variants[variant] = args
+            state[spectral_output] = torch.cat(chunks, dim=-2)
+            instructions.append({'name': f'decode_s{i}', 'kind': 'spectral_decode',
+                                 'inputs': spectral_inputs, 'outputs': [spectral_output],
+                                 'input_shapes': [list(x.shape) for x in full_args],
+                                 'output_shapes': [list(state[spectral_output].shape)]})
+            for variant, args in variants.items():
+                outputs = module(*args)
+                descriptor = {'name': f'decode_s{i}_{variant}', 'outputs': [spectral_output]}
+                modules.append((descriptor, module, args))
+        apply(f'decode_t{i}', DecodeTemporal(m, i, temporal_lengths[3-i]),
+              [f'dt{i}', f't{3-i}', 'stats'], [temporal_output])
+    instructions[0]['working_memory_bytes'] = 384 * 1024 * 1024
     return instructions, modules, state['frequency'], state['time']

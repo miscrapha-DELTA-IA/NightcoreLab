@@ -1,5 +1,5 @@
 {
-  "model_id": "htdemucs-v4-staged-fp32-global-attention-v1",
+  "model_id": "htdemucs-v4-staged-fp32-tiled-v2",
   "license": "MIT",
   "sources": [
     "drums",
