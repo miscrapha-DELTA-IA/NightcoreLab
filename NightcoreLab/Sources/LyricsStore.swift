@@ -32,6 +32,8 @@ enum LyricsStatus: Equatable, Sendable { case idle, searching, ready, unavailabl
 @MainActor
 @Observable
 final class LyricsStore {
+    typealias FallbackGenerator = @Sendable (URL, TimeInterval, [TimeInterval]) async -> [TimedLyricLine]
+    @ObservationIgnored private let fallbackGenerator: FallbackGenerator
 
     @ObservationIgnored let scoring = KaraokeScoringSession()
 
@@ -74,7 +76,10 @@ final class LyricsStore {
     @ObservationIgnored private var latestDNA: SongDNA?
     @ObservationIgnored private var lastObservedTime: TimeInterval = 0
 
-    init(offsetDefaults: UserDefaults = .standard) {
+    init(offsetDefaults: UserDefaults = .standard, fallbackGenerator: FallbackGenerator? = nil) {
+        self.fallbackGenerator = fallbackGenerator ?? { url, duration, bars in
+            await AutoLyricsTranscriber.generate(vocalURL: url, duration: duration, bars: bars)
+        }
         self.offsetDefaults = offsetDefaults
         self.offsetKey = Self.currentOffsetKey()
         let saved = offsetDefaults.double(forKey: offsetKey)
@@ -154,6 +159,7 @@ final class LyricsStore {
         let generation = loadGeneration
         status = .searching
         let bars = latestDNA?.barTimestamps ?? []
+        let generateFallback = fallbackGenerator
         let fingerprint = AutoLyricsTranscriber.fingerprint(source: sourceURL) +
             "|" + (plainText ?? "")
         loadTask = Task.detached(priority: .utility) { [weak self] in
@@ -173,8 +179,7 @@ final class LyricsStore {
                 generated = Self.alignPlain(plainText, duration: duration,
                                             phrases: phrases, bars: bars)
             } else {
-                generated = await AutoLyricsTranscriber.generate(
-                    vocalURL: vocalURL, duration: duration, bars: bars)
+                generated = await generateFallback(vocalURL, duration, bars)
             }
             guard !Task.isCancelled else { return }
             await AutoLyricsCache.shared.save(generated, trackID: trackID,

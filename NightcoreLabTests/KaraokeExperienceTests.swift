@@ -29,14 +29,25 @@ final class KaraokeExperienceTests: XCTestCase {
             let writer = try AVAudioFile(forWriting: url, settings: format.settings)
             try writer.write(from: buffer)
         }
-        let store = LyricsStore()
+        let started = expectation(description: "Local fallback starts")
+        let generated = expectation(description: "Local fallback finishes without a speech service")
+        let store = LyricsStore(fallbackGenerator: { url, duration, bars in
+            started.fulfill()
+            let lines = await AutoLyricsTranscriber.generate(vocalURL: url, duration: duration,
+                bars: bars, allowSpeechRecognition: false)
+            XCTAssertFalse(lines.isEmpty, "Local fallback must produce a guide before caching")
+            generated.fulfill()
+            return lines
+        })
         let trackID = "missing-\(UUID().uuidString)"
         store.beginLoading(trackID: trackID)
         store.loadFallback(trackID: trackID, plainText: nil,
                            sourceURL: url, duration: 1)
+        await fulfillment(of: [started, generated], timeout: 5)
         for _ in 0..<100 where store.status != .ready {
             try await Task.sleep(for: .milliseconds(100))
         }
+        XCTAssertEqual(store.trackID, trackID)
         XCTAssertEqual(store.status, .ready)
         XCTAssertFalse(store.lines.isEmpty)
         XCTAssertFalse(store.lines.flatMap(\.words).isEmpty)

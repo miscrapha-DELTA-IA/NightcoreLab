@@ -66,8 +66,8 @@ enum AutoLyricsTranscriber {
     }
 
     static func generate(vocalURL: URL, duration: TimeInterval,
-                         bars: [TimeInterval]) async -> [TimedLyricLine] {
-        if SFSpeechRecognizer.authorizationStatus() == .authorized,
+                         bars: [TimeInterval], allowSpeechRecognition: Bool = true) async -> [TimedLyricLine] {
+        if allowSpeechRecognition, SFSpeechRecognizer.authorizationStatus() == .authorized,
            let recognizer = SFSpeechRecognizer(locale: .current),
            recognizer.supportsOnDeviceRecognition,
            let words = await recognizeFullTrack(vocalURL, recognizer: recognizer),
