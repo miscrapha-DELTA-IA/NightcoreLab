@@ -246,9 +246,13 @@ enum NeuralStemWorker {
         var accumulator = [Float](repeating: 0, count: 8 * length)
         var weights = [Float](repeating: 0, count: length)
         var start = 0
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var completedSegments = 0
+        var remainingMessage = "Separando voz e instrumentos…"
         while start < decoded.frames {
             StemMemoryRecovery.releaseUnusedPages()
             let valid = min(length, decoded.frames - start)
+            let count = start + length >= decoded.frames ? valid : advance
             file.framePosition = AVAudioFramePosition(start)
             try file.read(into: input, frameCount: AVAudioFrameCount(valid))
             guard Int(input.frameLength) == valid, let channels = input.floatChannelData else { throw NeuralStemError.noAudio }
@@ -270,8 +274,10 @@ enum NeuralStemWorker {
                     }
                     #endif
                 }, progress: { fraction, _ in
-                    let completed = min(Double(decoded.frames), Double(start) + Double(valid) * fraction)
-                    progress(0.05 + 0.94 * completed / Double(decoded.frames), "Separando voz e instrumentos…")
+                    // Report committed output, not the overlapping context;
+                    // otherwise the bar moves backwards at every segment.
+                    let completed = min(Double(decoded.frames), Double(start) + Double(count) * fraction)
+                    progress(0.05 + 0.94 * completed / Double(decoded.frames), remainingMessage)
                 })
                 try check()
                 return result
@@ -280,7 +286,6 @@ enum NeuralStemWorker {
                 weights[i] += weight[i]
                 for lane in 0..<8 { accumulator[lane * length + i] += separated[lane * length + i] * weight[i] }
             }
-            let count = start + length >= decoded.frames ? valid : advance
             output.frameLength = AVAudioFrameCount(count)
             for source in 0..<4 {
                 for channel in 0..<2 {
@@ -291,7 +296,14 @@ enum NeuralStemWorker {
                 }
                 try writers[source].write(from: output)
             }
-            progress(0.05 + 0.94 * Double(start + count) / Double(decoded.frames), "Separando no iPhone…")
+            completedSegments += 1
+            let segmentsLeft = Int(ceil(Double(decoded.frames - start - count) / Double(advance)))
+            if segmentsLeft > 0 {
+                let average = (ProcessInfo.processInfo.systemUptime - startedAt) / Double(completedSegments)
+                let minutes = max(1, Int(ceil(average * Double(segmentsLeft) / 60)))
+                remainingMessage = "Separando no iPhone · cerca de \(minutes) min restantes"
+            }
+            progress(0.05 + 0.94 * Double(start + count) / Double(decoded.frames), remainingMessage)
             if count == valid { break }
             accumulator.withUnsafeMutableBufferPointer { a in
                 for lane in 0..<8 {
