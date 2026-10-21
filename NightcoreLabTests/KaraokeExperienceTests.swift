@@ -25,8 +25,10 @@ final class KaraokeExperienceTests: XCTestCase {
                                                   Double(index) / 16_000))
             }
         }
-        let writer = try AVAudioFile(forWriting: url, settings: format.settings)
-        try writer.write(from: buffer)
+        try autoreleasepool {
+            let writer = try AVAudioFile(forWriting: url, settings: format.settings)
+            try writer.write(from: buffer)
+        }
         let store = LyricsStore()
         let trackID = "missing-\(UUID().uuidString)"
         store.beginLoading(trackID: trackID)

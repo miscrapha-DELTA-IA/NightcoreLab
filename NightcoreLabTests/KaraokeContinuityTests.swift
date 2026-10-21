@@ -73,17 +73,20 @@ final class KaraokeContinuityTests: XCTestCase {
     }
 
     @MainActor
-    func testResultCaptureUsesVisibleViewAndDisplayScale() throws {
+    func testResultCaptureUsesVisibleViewAndDisplayScale() async throws {
         let controller = UIViewController()
         controller.view.backgroundColor = .magenta
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 160, height: 240))
         window.rootViewController = controller; window.isHidden = false
         defer { window.isHidden = true }
         controller.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(150))
         let image = try KaraokeResultCapture.image(of: controller.view, scale: 2)
         XCTAssertEqual(image.size, controller.view.bounds.size)
         XCTAssertEqual(image.cgImage?.width, Int(controller.view.bounds.width * 2))
         XCTAssertEqual(image.cgImage?.height, Int(controller.view.bounds.height * 2))
         XCTAssertThrowsError(try KaraokeResultCapture.image(of: UIView(), scale: 2))
+        window.isHidden = true
+        try await Task.sleep(for: .milliseconds(150))
     }
 }

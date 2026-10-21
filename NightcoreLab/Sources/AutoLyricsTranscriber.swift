@@ -208,9 +208,9 @@ enum AutoLyricsTranscriber {
                                             frameCapacity: 4096) else { return fallbackBars(duration: duration, bars: bars) }
         var windows: [(TimeInterval, Double)] = []
         var framesRead: AVAudioFramePosition = 0
-        while true {
+        while framesRead < file.length {
             try Task.checkCancellation()
-            try file.read(into: buffer)
+            try file.read(into: buffer, frameCount: AVAudioFrameCount(min(4_096, file.length - framesRead)))
             let count = Int(buffer.frameLength)
             if count == 0 { break }
             guard let channel = buffer.floatChannelData?[0] else { break }
