@@ -7,6 +7,7 @@ restart, deploy or idle spin-down. The anonymous provider quota is the billing g
 from __future__ import annotations
 
 import hashlib
+from contextlib import closing
 import hmac
 import os
 import re
@@ -60,7 +61,7 @@ def _reserve(secret: str, address: str) -> None:
         daily = min(2, max(1, int(os.getenv("STEMS_CLOUD_DAILY_JOBS", "2"))))
     except ValueError:
         daily = 1
-    with sqlite3.connect(database, timeout=2) as db:
+    with closing(sqlite3.connect(database, timeout=2)) as db, db:
         db.execute("CREATE TABLE IF NOT EXISTS admissions (created REAL, client TEXT)")
         db.execute("BEGIN IMMEDIATE")
         db.execute("DELETE FROM admissions WHERE created <= ?", (now - 86400,))
