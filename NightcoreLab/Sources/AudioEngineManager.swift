@@ -1098,11 +1098,12 @@ final class AudioEngineManager {
                 self.lastKnownTime = position
                 self.schedule(file, startingAt: position)
                 if self.centerCutEnabled { self.scheduleCenterCut(startingAt: position) }
-                self.stemsAvailable = true; self.stemSource = .demucs
+                self.stemsAvailable = true; self.stemSource = asset.source
+                if asset.source == .roformer { self.stemPreview = nil }
                 self.sendStemParameters()
                 if resume { self.play() }
                 self.stemPreparationProgress = 1
-                self.stemPreparationMessage = "Stems reais prontos · Demucs"
+                self.stemPreparationMessage = "Stems reais prontos · \(asset.source.title)"
             } catch {
                 guard let self, self.stemPreparationID == request else { return }
                 if !(error is CancellationError) { self.stemPreparationError = error.localizedDescription }

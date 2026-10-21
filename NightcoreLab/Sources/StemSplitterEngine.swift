@@ -36,7 +36,16 @@ enum StemMixPreset: String, CaseIterable, Identifiable {
     }
 }
 
-enum StemSource: String, Sendable { case spectral, demucs }
+enum StemSource: String, Sendable {
+    case spectral, demucs, roformer
+    var title: String {
+        switch self {
+        case .spectral: return "DSP"
+        case .demucs: return "Demucs"
+        case .roformer: return "BS-Roformer"
+        }
+    }
+}
 
 struct StemAsset: Sendable {
     let urls: [StemKind: URL]

@@ -35,22 +35,26 @@ struct CloudStemStartView: View {
                 Section {
                     Text("O áudio será enviado ao Hugging Face para separar voz, bateria, baixo e outros instrumentos. Os stems serão salvos neste iPhone para ouvir offline.")
                     Text("A GPU gratuita tem fila e cota diária. Ao atingir o limite, o pedido para, sem contratar processamento pago. Mantenha o app aberto.")
-                    Text("Os arquivos ficam temporariamente no Space público. Evite gravações confidenciais. Cancelar no iPhone pode não interromper um processamento que já começou na nuvem.")
+                    Text("O serviço comunitário é público: a retenção dos arquivos depende do mantenedor, e o app não consegue apagá-los remotamente. Evite gravações confidenciais. Cancelar no iPhone pode não interromper a separação na nuvem.")
                         .font(.footnote).foregroundStyle(.secondary)
-                } header: { Text("GPU gratuita · Demucs") }
+                    Text("Os quatro arquivos podem ser grandes. Prefira Wi-Fi para enviar e baixar.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: { Text("GPU gratuita · separação real por IA") }
                 Section {
-                    SecureField("Código de acesso do beta", text: $code)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    DisclosureGroup("Código de acesso, se solicitado") {
+                        SecureField("Código do beta (opcional)", text: $code)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
                     if let error { Text(error).foregroundStyle(.orange) }
                     Button("Enviar música e separar") {
                         let value = code.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard CloudStemBetaCode.save(value) else {
+                        guard value.isEmpty || CloudStemBetaCode.save(value) else {
                             error = "Não foi possível salvar o código com segurança."; return
                         }
                         start(value); dismiss()
                     }
-                    .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).count < 16)
-                } footer: { Text("Use o código fornecido pelo administrador do beta. Sua senha e seu token do Hugging Face não são necessários.") }
+                    .disabled(!code.isEmpty && code.trimmingCharacters(in: .whitespacesAndNewlines).count < 16)
+                } footer: { Text("A opção comunitária não exige login ou código. Se seu servidor usar acesso restrito, informe o código do beta. Não informe senha ou token do Hugging Face.") }
             }
             .navigationTitle("Separar na nuvem")
             .navigationBarTitleDisplayMode(.inline)

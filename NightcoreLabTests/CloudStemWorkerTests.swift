@@ -30,4 +30,25 @@ final class CloudStemWorkerTests: XCTestCase {
         values[0] = ["url": "https://attacker.test/file.wav"]
         XCTAssertThrowsError(try CloudStemWorker.completion(JSONSerialization.data(withJSONObject: values), space: space, sourceHash: sourceHash))
     }
+
+    func testPublicRoformerContractMapsNamedFilesAndRejectsOtherOriginsOrDuplicates() throws {
+        let community = CloudStemWorker.communityURL
+        let labels = ["01_vocals.wav", "02_drums.wav", "03_bass.wav", "04_other.wav"]
+        var files: [[String: Any]] = labels.map {
+            ["orig_name": $0, "url": community.absoluteString + "/gradio_api/file=/tmp/gradio/test/" + $0]
+        }
+        func response() throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["Ready", files, NSNull(), "unused HTML"] as [Any])
+        }
+        let urls = try CloudStemWorker.communityCompletion(response(), space: community)
+        XCTAssertTrue(urls[0].lastPathComponent.contains("vocals"))
+        XCTAssertTrue(urls[1].lastPathComponent.contains("other"))
+        XCTAssertTrue(urls[2].lastPathComponent.contains("drums"))
+        XCTAssertTrue(urls[3].lastPathComponent.contains("bass"))
+        XCTAssertThrowsError(try CloudStemWorker.communityCompletion(response(), space: space))
+        files[0]["url"] = "https://attacker.test/gradio_api/file=test.wav"
+        XCTAssertThrowsError(try CloudStemWorker.communityCompletion(response(), space: community))
+        files[0] = files[1]
+        XCTAssertThrowsError(try CloudStemWorker.communityCompletion(response(), space: community))
+    }
 }
