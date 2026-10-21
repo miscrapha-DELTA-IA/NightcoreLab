@@ -1,5 +1,7 @@
 """Admission, quotas and signed audio binding without GPU/network access."""
 import os
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import main
+import cloud_stems
 from zerogpu_space.tickets import issue, verify
 
 
@@ -137,6 +140,33 @@ class FreeCloudStemTests(unittest.TestCase):
         with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "community_bs_roformer",
                 "STEMS_CLOUD_SPACE_URL": COMMUNITY_URL}):
             self.assertEqual(self.request().status_code, 200)
+
+
+class CommunityRuntimeIdentityTests(unittest.TestCase):
+    def test_only_audited_running_gradio_on_zerogpu_is_accepted(self):
+        revision = cloud_stems.COMMUNITY_REVISION
+        valid = {"sha": revision, "sdk": "gradio", "runtime": {
+            "sha": revision, "stage": "RUNNING", "hardware": {"current": "zero-a10g"}}}
+        cases = [(valid, True)]
+        for field, value in (("sha", "changed"), ("sdk", "docker")):
+            cases.append(({**valid, field: value}, False))
+        for field, value in (("sha", "old"), ("stage", "PAUSED"), ("hardware", {"current": "l4"})):
+            cases.append(({**valid, "runtime": {**valid["runtime"], field: value}}, False))
+        for payload, expected in cases:
+            with self.subTest(payload=payload), \
+                 patch.object(cloud_stems, "_community_health", (0, False)), \
+                 patch("cloud_stems.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
+                self.assertEqual(cloud_stems._community_runtime_ready(), expected)
+
+    def test_ready_check_is_cached_without_gpu_or_repeated_network_calls(self):
+        revision = cloud_stems.COMMUNITY_REVISION
+        payload = {"sha": revision, "sdk": "gradio", "runtime": {
+            "sha": revision, "stage": "RUNNING", "hardware": {"current": "zero-a10g"}}}
+        with patch.object(cloud_stems, "_community_health", (0, False)), \
+             patch("cloud_stems.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())) as network:
+            self.assertTrue(cloud_stems._community_runtime_ready())
+            self.assertTrue(cloud_stems._community_runtime_ready())
+            self.assertEqual(network.call_count, 1)
 
 
 if __name__ == "__main__":
