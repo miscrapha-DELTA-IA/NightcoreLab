@@ -5,7 +5,6 @@ import Foundation
 /// the current prediction so its tensors do not remain resident while suspended.
 final class StemWorkLifecycle: @unchecked Sendable {
     struct Paused: Error {}
-    static let shared = StemWorkLifecycle()
     private let lock = NSLock()
     private var backgrounded = false
     func setBackgrounded(_ value: Bool) {

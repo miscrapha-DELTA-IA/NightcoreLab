@@ -130,6 +130,7 @@ final class AudioEngineManager {
     @ObservationIgnored private var stemPreparationTask: Task<Void, Never>?
     @ObservationIgnored private var stemPreparationID = UUID()
     @ObservationIgnored private let neuralPreparation: NeuralPreparation
+    @ObservationIgnored private let stemLifecycle: StemWorkLifecycle
     @ObservationIgnored private var preparedStemAssets: [URL: StemAsset] = [:]
     @ObservationIgnored private var stemBackgroundLease: UIBackgroundTaskIdentifier = .invalid
     private(set) var stemPreparationTitle = ""
@@ -260,11 +261,14 @@ final class AudioEngineManager {
     var isAudioEngineRunning: Bool { engine.isRunning }
 
     init(idleStopDelay: Duration = .seconds(10),
-         neuralPreparation: @escaping NeuralPreparation = { source, request, reclaim, progress in
-             try await NeuralStemWorker.prepare(source: source, request: request, reclaimMemory: reclaim, progress: progress)
-         }) {
+         neuralPreparation: NeuralPreparation? = nil) {
+        let lifecycle = StemWorkLifecycle()
+        self.stemLifecycle = lifecycle
         self.idleStopDelay = max(.zero, idleStopDelay)
-        self.neuralPreparation = neuralPreparation
+        self.neuralPreparation = neuralPreparation ?? { source, request, reclaim, progress in
+            try await NeuralStemWorker.prepare(source: source, request: request, reclaimMemory: reclaim,
+                                               lifecycle: lifecycle, progress: progress)
+        }
         Task.detached(priority: .utility) { Self.clearTempAudioFiles() }
         configureSession()
         setupEngine()
@@ -1042,7 +1046,7 @@ final class AudioEngineManager {
     func prepareCloudStems(code: String) { prepareNeuralStems(cloudCode: code) }
 
     func setStemAppBackgrounded(_ backgrounded: Bool) {
-        StemWorkLifecycle.shared.setBackgrounded(backgrounded)
+        stemLifecycle.setBackgrounded(backgrounded)
         if !backgrounded {
             endStemBackgroundLease()
             if !isPreparingStems, canResumeStemPreparation {

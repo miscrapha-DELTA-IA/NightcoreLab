@@ -16,6 +16,8 @@ enum NeuralStemWorker {
             .deletingLastPathComponent()
     }
     private final class Cancellation: @unchecked Sendable {
+        private let lifecycle: StemWorkLifecycle
+        init(lifecycle: StemWorkLifecycle) { self.lifecycle = lifecycle }
         private let lock = NSLock()
         private var cancelled = false
         private var memoryPressure = false
@@ -30,7 +32,7 @@ enum NeuralStemWorker {
             lock.lock(); let value = cancelled, memory = memoryPressure; lock.unlock()
             if memory { throw NeuralStemError.insufficientMemory }
             if value { throw CancellationError() }
-            try StemWorkLifecycle.shared.check()
+            try lifecycle.check()
         }
     }
     private struct Manifest: Codable {
@@ -53,12 +55,13 @@ enum NeuralStemWorker {
                         modelURL: URL? = bundledModel,
                         request: NeuralStemRequest = .full,
                         reclaimMemory: @escaping @Sendable () -> Void = {},
+                        lifecycle: StemWorkLifecycle = StemWorkLifecycle(),
                         progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
         while true {
-            try await StemWorkLifecycle.shared.waitForForeground()
+            try await lifecycle.waitForForeground()
             do {
                 return try await prepareAttempt(source: source, cacheFolder: cacheFolder, modelURL: modelURL,
-                    request: request, reclaimMemory: reclaimMemory, progress: progress)
+                    request: request, reclaimMemory: reclaimMemory, lifecycle: lifecycle, progress: progress)
             } catch is StemWorkLifecycle.Paused {
                 progress(-1, "Pausado em segundo plano · progresso salvo; retoma ao voltar")
             }
@@ -68,8 +71,9 @@ enum NeuralStemWorker {
     private static func prepareAttempt(source: URL, cacheFolder: URL, modelURL: URL?,
                         request: NeuralStemRequest,
                         reclaimMemory: @escaping @Sendable () -> Void,
+                        lifecycle: StemWorkLifecycle,
                         progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
-        let cancellation = Cancellation()
+        let cancellation = Cancellation(lifecycle: lifecycle)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let memoryObserver = NotificationCenter.default.addObserver(
