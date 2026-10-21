@@ -1,0 +1,43 @@
+{
+  "name": "Gnarly Beta",
+  "identifier": "com.nightcorelab.gnarly.beta",
+  "subtitle": "Beta do Gnarly para LiveContainer",
+  "description": "Distribuição de teste. Requer LiveContainer configurado e iOS 17+. GPU pública gratuita sujeita a cota; dados separados da instalação direta.",
+  "website": "https://github.com/miscrapha-DELTA-IA/NightcoreLab/releases/tag/gnarly-build56-livecontainer-beta",
+  "iconURL": "https://github.com/miscrapha-DELTA-IA/NightcoreLab/releases/download/gnarly-build56-livecontainer-beta/Gnarly-Icon.png",
+  "apps": [
+    {
+      "name": "Gnarly",
+      "bundleIdentifier": "com.nightcorelab.app",
+      "developerName": "Raphael · Gnarly",
+      "subtitle": "Build 56 · música, karaokê e stems",
+      "localizedDescription": "Omnibox, fila, reprodução offline, karaokê e quatro stems. GPU gratuita opcional em Space público do Hugging Face, sem alternativa paga automática. Consulte a release para instalação, limites e testes.",
+      "iconURL": "https://github.com/miscrapha-DELTA-IA/NightcoreLab/releases/download/gnarly-build56-livecontainer-beta/Gnarly-Icon.png",
+      "category": "entertainment",
+      "beta": true,
+      "versions": [
+        {
+          "version": "1.0.0",
+          "buildVersion": "56",
+          "buildNumber": "56",
+          "marketingVersion": "Gnarly 56 · GPU grátis",
+          "date": "2026-10-21",
+          "localizedDescription": "Beta com omnibox, karaokê, stems locais e GPU gratuita/BS-Roformer. GPU sujeita a fila e cota. Execução no LiveContainer ainda em validação física.",
+          "downloadURL": "https://github.com/miscrapha-DELTA-IA/NightcoreLab/releases/download/gnarly-build56-livecontainer-beta/Gnarly-56-FreeGPU.ipa",
+          "size": 112012192,
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {
+          "NSLocalNetworkUsageDescription": "O Gnarly acessa a rede local para baixar áudio do servidor de extração no seu computador.",
+          "NSMicrophoneUsageDescription": "O microfone permite cantar com Vocal FX e pontuar o karaokê. A análise vocal é local e o retorno é desativado em rotas inseguras.",
+          "NSPhotoLibraryAddUsageDescription": "Permite salvar vídeos Story na galeria para publicar no YouTube Shorts e em outras redes sociais.",
+          "NSSpeechRecognitionUsageDescription": "Com sua permissão, o reconhecimento de fala no dispositivo cria legendas para músicas sem letra disponível."
+        }
+      }
+    }
+  ],
+  "news": []
+}
