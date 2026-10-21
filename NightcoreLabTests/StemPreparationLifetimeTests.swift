@@ -24,7 +24,7 @@ final class StemPreparationLifetimeTests: XCTestCase {
         let urls = try Dictionary(uniqueKeysWithValues: StemKind.allCases.map { ($0, try write($0.rawValue, frames: 4_410)) })
         let gate = StemLifetimeGate()
         let started = expectation(description: "First song preparation started")
-        let audio = AudioEngineManager(restoresStemJobs: false, neuralPreparation: { source, _, _, _ in
+        let audio = AudioEngineManager(neuralPreparation: { source, _, _, _ in
             XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
             started.fulfill(); await gate.wait()
             try Task.checkCancellation()

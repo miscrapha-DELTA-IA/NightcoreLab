@@ -58,6 +58,21 @@ final class KaraokeContinuityTests: XCTestCase {
     }
 
     @MainActor
+    func testExplicitShortSeekDoesNotAwardPointsForTheSkippedGap() {
+        let session = KaraokeScoringSession()
+        session.present(true); session.start(mode: .microphone, lines: lines, at: 0)
+        session.microphoneFrame = { _ in self.voice }
+        for i in 1...8 { session.advance(time: Double(i) / 20, playing: true, lines: lines) }
+        let earned = session.snapshot.totalScore
+        session.seek(to: 0.7)
+        XCTAssertEqual(session.snapshot.totalScore, earned)
+        session.advance(time: 0.75, playing: true, lines: lines)
+        session.advance(time: 0.8, playing: true, lines: lines)
+        XCTAssertLessThanOrEqual(session.snapshot.totalScore - earned, 11)
+        XCTAssertGreaterThan(session.snapshot.totalScore, earned)
+    }
+
+    @MainActor
     func testResultCaptureUsesVisibleViewAndDisplayScale() throws {
         let controller = UIViewController()
         controller.view.backgroundColor = .magenta

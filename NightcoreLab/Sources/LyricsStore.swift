@@ -99,6 +99,12 @@ final class LyricsStore {
 
     func attach(clock: PlaybackClock) { self.clock = clock }
 
+    func seek(to time: TimeInterval) {
+        seekHandler?(time)
+        let offset = clock.map { sourceTimelineOffset(for: $0) } ?? 0
+        scoring.seek(to: time + offset)
+    }
+
     func sourceTimelineOffset(for clock: PlaybackClock) -> TimeInterval {
         userOffset * clock.playbackSpeed
     }

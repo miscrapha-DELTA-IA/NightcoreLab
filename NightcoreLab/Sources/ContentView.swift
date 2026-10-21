@@ -426,6 +426,7 @@ struct ContentView: View {
         .task {
             selectedCreativePresetID = CreativePresetCatalog.liveSelection(selectedCreativePresetID)
             downloader.warmUp()
+            await audio.restorePendingStemJobIfNeeded()
         }
     }
 

@@ -271,7 +271,7 @@ struct KaraokeLyricsView: View {
                             .onTapGesture {
                                 followsPlayback = true
                                 animateLineTransition = false
-                                store.seekHandler?(line.start)
+                                store.seek(to: line.start)
                                 scrollTo(line.id, proxy: proxy, reason: .seek)
                             }
                             .accessibilityElement(children: .combine)

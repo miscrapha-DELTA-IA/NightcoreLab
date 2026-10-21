@@ -139,7 +139,10 @@ enum CloudStemWorker {
                let detail = object["detail"] as? String {
                 throw Failure.message(String(detail.prefix(240)))
             }
-            throw Failure.message("GPU gratuita indisponível ou cota esgotada. Tente mais tarde ou use o iPhone.")
+            if (response as? HTTPURLResponse)?.statusCode == 429 {
+                throw Failure.message("O serviço aplicou um limite temporário. Aguarde o intervalo informado antes de iniciar uma nova separação.")
+            }
+            throw Failure.message("O serviço da GPU não respondeu corretamente. O pedido salvo será preservado para retomada.")
         }
     }
     private static func json(_ body: [String: Any], url: URL) throws -> URLRequest {
@@ -302,6 +305,10 @@ enum CloudStemWorker {
                 try? FileManager.default.removeItem(at: pendingURL)
                 CloudStemTransfer.shared.remove(digest + "-" + eventID)
                 throw ProviderFailure.rejected
+            }
+            catch {
+                CloudStemTransfer.shared.remove(digest + "-" + eventID)
+                throw error
             }
             try pending.save(to: pendingURL)
             CloudStemTransfer.shared.remove(digest + "-" + eventID)

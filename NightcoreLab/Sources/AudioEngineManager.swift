@@ -259,7 +259,7 @@ final class AudioEngineManager {
         subsystem: "com.nightcorelab.app", category: "AudioTransport")
     var isAudioEngineRunning: Bool { engine.isRunning }
 
-    init(idleStopDelay: Duration = .seconds(10), restoresStemJobs: Bool = true,
+    init(idleStopDelay: Duration = .seconds(10),
          neuralPreparation: @escaping NeuralPreparation = { source, request, reclaim, progress in
              try await NeuralStemWorker.prepare(source: source, request: request, reclaimMemory: reclaim, progress: progress)
          }) {
@@ -270,14 +270,6 @@ final class AudioEngineManager {
         setupEngine()
         observeInterruptions()
         setupRemoteTransportControls()
-        if restoresStemJobs {
-            Task { @MainActor [weak self] in
-                let saved = await Task.detached(priority: .utility) { StemJobJournal.load() }.value
-                guard let self, !self.isPreparingStems, let saved else { return }
-                self.canResumeStemPreparation = true
-                if saved.automaticResume { self.resumeStemPreparation() }
-            }
-        }
     }
 
     /// Anexa a cadeia de masterização e aplica os valores iniciais dos controles.
@@ -1079,9 +1071,18 @@ final class AudioEngineManager {
             cloudCode: job.cloud ? CloudStemBetaCode.read() : nil, restoring: job)
     }
 
+    func restorePendingStemJobIfNeeded() async {
+        let saved = await Task.detached(priority: .utility) { StemJobJournal.load() }.value
+        guard !isPreparingStems, let saved else { return }
+        canResumeStemPreparation = true
+        stemPreparationTitle = saved.title
+        if saved.automaticResume { resumeStemPreparation() }
+    }
+
     func prepareNeuralStems(request kind: NeuralStemRequest = .full, cloudCode: String? = nil) {
         guard let sourceURL, !isExporting, !isPreparingStems else { return }
-        startStemPreparation(source: sourceURL, title: fileName, kind: kind, cloudCode: cloudCode)
+        startStemPreparation(source: sourceURL, title: fileName ?? sourceURL.deletingPathExtension().lastPathComponent,
+                             kind: kind, cloudCode: cloudCode)
     }
 
     private func startStemPreparation(source: URL, title: String, kind: NeuralStemRequest,
