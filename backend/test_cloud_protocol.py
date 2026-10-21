@@ -29,11 +29,21 @@ class GradioWireContractTests(unittest.TestCase):
                 if ticket != "signed-test-ticket":
                     raise gr.Error("Invalid authorization")
                 return (path, path, path, path, {"model": "htdemucs"})
+            def community(path, mode, force):
+                assert mode == "Core instruments — 4 tracks"
+                assert force is False
+                return ("Ready", [path] * 4, None, "force=false")
             with gr.Blocks(analytics_enabled=False) as demo:
                 audio, ticket = gr.File(type="filepath"), gr.Textbox()
                 files = [gr.File() for _ in range(4)]
                 metadata = gr.JSON()
                 gr.Button().click(separate, [audio, ticket], files + [metadata], api_name="separate")
+                community_audio = gr.Audio(type="filepath")
+                mode = gr.Radio(["Core instruments — 4 tracks"])
+                state = gr.State(False)
+                community_outputs = [gr.Markdown(), gr.File(file_count="multiple"), gr.File(), gr.HTML()]
+                gr.Button().click(community, [community_audio, mode, state], community_outputs,
+                                  api_name="community")
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
@@ -63,6 +73,16 @@ class GradioWireContractTests(unittest.TestCase):
                         result = client.get(file["url"])
                         self.assertEqual(result.status_code, 200)
                         self.assertEqual(result.content, source.read_bytes())
+                    # The simple HTTP API omits the third State argument, exactly
+                    # like the public four-stem BS-Roformer endpoint.
+                    response = client.post("/gradio_api/call/community", json={"data": [
+                        {"path": path, "meta": {"_type": "gradio.FileData"}}, "Core instruments — 4 tracks"]})
+                    self.assertEqual(response.status_code, 200)
+                    response = client.get("/gradio_api/call/community/" + response.json()["event_id"])
+                    complete = next(c for c in response.text.split("\n\n") if "event: complete" in c)
+                    values = json.loads(next(line[6:] for line in complete.splitlines() if line.startswith("data: ")))
+                    self.assertEqual(len(values[1]), 4)
+                    self.assertEqual(values[3], "force=false")
             finally:
                 demo.close()
 

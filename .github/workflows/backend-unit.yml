@@ -20,6 +20,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt pytest gradio==6.30.0
+        run: pip install -r backend/requirements.txt pytest gradio==6.30.0 soundfile==0.13.1
       - name: Run offline unit tests
         run: python -m pytest -q backend

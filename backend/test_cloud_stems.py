@@ -1,5 +1,7 @@
 """Admission, quotas and signed audio binding without GPU/network access."""
 import os
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import main
+import cloud_stems
 from zerogpu_space.tickets import issue, verify
 
 
@@ -24,6 +27,9 @@ class FreeCloudStemTests(unittest.TestCase):
         self.patch = patch.dict(os.environ, self.env)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        self.health = patch("cloud_stems._community_runtime_ready", return_value=True)
+        self.health.start()
+        self.addCleanup(self.health.stop)
         self.client = TestClient(main.app)
         self.body = {"sha256": "a" * 64, "bytes": 1234, "seconds": 293}
 
@@ -91,6 +97,76 @@ class FreeCloudStemTests(unittest.TestCase):
         for payload in ([], {}, {"aud": self.url}, {"exp": "tomorrow"}):
             with self.assertRaises(ValueError):
                 verify(self.secret, issue(self.secret, payload), self.url, now=1000)
+
+    def test_community_profile_needs_no_account_secret_or_beta_code(self):
+        from cloud_stems import COMMUNITY_URL, COMMUNITY_MODEL
+        with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "community_bs_roformer",
+                "STEMS_CLOUD_SPACE_URL": COMMUNITY_URL, "STEMS_CLOUD_SIGNING_KEY": "",
+                "STEMS_CLOUD_BETA_CODE": ""}):
+            config = self.client.get("/v1/stems/cloud").json()
+            self.assertTrue(config["enabled"])
+            self.assertTrue(config["provider_available"])
+            self.assertFalse(config["requires_beta_code"])
+            response = self.client.post("/v1/stems/cloud/ticket", json=self.body)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["model"], COMMUNITY_MODEL)
+            self.assertEqual(response.json()["space_url"], COMMUNITY_URL)
+            self.assertEqual(response.json()["provider"], "community_bs_roformer")
+            self.assertEqual(self.request().status_code, 429)
+
+    def test_community_profile_cannot_be_retargeted_or_use_paid_mode(self):
+        for url in (self.url, "https://replicate.com"):
+            with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "community_bs_roformer",
+                    "STEMS_CLOUD_SPACE_URL": url}):
+                self.assertEqual(self.request().status_code, 503)
+        with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "unknown"}):
+            self.assertEqual(self.request().status_code, 503)
+
+    def test_community_optional_private_beta_code_remains_enforced(self):
+        from cloud_stems import COMMUNITY_URL
+        with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "community_bs_roformer",
+                "STEMS_CLOUD_SPACE_URL": COMMUNITY_URL}):
+            self.assertTrue(self.client.get("/v1/stems/cloud").json()["requires_beta_code"])
+            self.assertEqual(self.client.post("/v1/stems/cloud/ticket", json=self.body).status_code, 401)
+            self.assertEqual(self.request().status_code, 200)
+
+    def test_changed_or_offline_community_app_does_not_consume_admission(self):
+        from cloud_stems import COMMUNITY_URL
+        with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "community_bs_roformer",
+                "STEMS_CLOUD_SPACE_URL": COMMUNITY_URL}), \
+             patch("cloud_stems._community_runtime_ready", return_value=False):
+            self.assertFalse(self.client.get("/v1/stems/cloud").json()["provider_available"])
+            self.assertEqual(self.request().status_code, 503)
+        with patch.dict(os.environ, {"STEMS_CLOUD_PROVIDER": "community_bs_roformer",
+                "STEMS_CLOUD_SPACE_URL": COMMUNITY_URL}):
+            self.assertEqual(self.request().status_code, 200)
+
+
+class CommunityRuntimeIdentityTests(unittest.TestCase):
+    def test_only_audited_running_gradio_on_zerogpu_is_accepted(self):
+        revision = cloud_stems.COMMUNITY_REVISION
+        valid = {"sha": revision, "sdk": "gradio", "runtime": {
+            "sha": revision, "stage": "RUNNING", "hardware": {"current": "zero-a10g"}}}
+        cases = [(valid, True)]
+        for field, value in (("sha", "changed"), ("sdk", "docker")):
+            cases.append(({**valid, field: value}, False))
+        for field, value in (("sha", "old"), ("stage", "PAUSED"), ("hardware", {"current": "l4"})):
+            cases.append(({**valid, "runtime": {**valid["runtime"], field: value}}, False))
+        for payload, expected in cases:
+            with self.subTest(payload=payload), \
+                 patch.object(cloud_stems, "_community_health", (0, False)), \
+                 patch("cloud_stems.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
+                self.assertEqual(cloud_stems._community_runtime_ready(), expected)
+
+    def test_ready_check_is_cached_without_gpu_or_repeated_network_calls(self):
+        revision = cloud_stems.COMMUNITY_REVISION
+        payload = {"sha": revision, "sdk": "gradio", "runtime": {
+            "sha": revision, "stage": "RUNNING", "hardware": {"current": "zero-a10g"}}}
+        with patch.object(cloud_stems, "_community_health", (0, False)), \
+             patch("cloud_stems.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(payload).encode())) as network:
+            self.assertTrue(cloud_stems._community_runtime_ready())
+            self.assertTrue(cloud_stems._community_runtime_ready())
+            self.assertEqual(network.call_count, 1)
 
 
 if __name__ == "__main__":
