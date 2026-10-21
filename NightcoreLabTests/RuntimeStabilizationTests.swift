@@ -431,12 +431,20 @@ final class RuntimeStabilizationTests: XCTestCase {
         session.present(true)
         session.start(mode: .simulation, lines: lines, at: 0)
         for step in 1...20 { session.advance(time: Double(step) / 20, playing: true, lines: lines) }
-        // Rewinding explicitly starts a fresh run, never accumulates farmed points.
+        // Seeking preserves a run. Only an explicit restart/track reset clears
+        // it, and replaying an evaluated interval must not farm more points.
+        let beforeSeek = session.snapshot
+        XCTAssertGreaterThan(beforeSeek.totalScore, 0)
         session.advance(time: 0, playing: true, lines: lines)
         session.advance(time: 0, playing: true, lines: lines)
-        XCTAssertEqual(session.snapshot.totalScore, 0)
+        XCTAssertEqual(session.snapshot.totalScore, beforeSeek.totalScore)
+        XCTAssertEqual(session.snapshot.judgedVerses, beforeSeek.judgedVerses)
+        for step in 1...20 { session.advance(time: Double(step) / 20, playing: true, lines: lines) }
+        XCTAssertEqual(session.snapshot.totalScore, beforeSeek.totalScore)
+        XCTAssertEqual(session.snapshot.judgedVerses, beforeSeek.judgedVerses)
         session.resetForTrack()
         XCTAssertFalse(session.isHUDVisible)
+        XCTAssertEqual(session.snapshot.totalScore, 0)
         session.start(mode: .simulation, lines: lines, at: 0)
         XCTAssertFalse(session.snapshot.hasHarmonicReference)
     }
