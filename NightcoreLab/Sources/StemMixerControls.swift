@@ -5,6 +5,7 @@ import QuickLook
 struct StemMixerControls: View {
     let audio: AudioEngineManager
     @State private var previewURL: URL?
+    @State private var showCloud = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -15,7 +16,7 @@ struct StemMixerControls: View {
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("stem.reset")
             }
-            Text("Separação real por IA · no iPhone")
+            Text("Separação real por IA · Demucs")
                 .font(.caption.weight(.semibold))
             if audio.isPreparingStems {
                 ProgressView(value: audio.stemPreparationProgress) {
@@ -61,6 +62,15 @@ struct StemMixerControls: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!audio.hasStemSource || !audio.hasNeuralStemModel || audio.isExporting)
                 .accessibilityIdentifier("stem.prepareNeural")
+                Button {
+                    showCloud = true
+                } label: {
+                    Label("Separar com GPU grátis", systemImage: "cloud")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!audio.hasStemSource || audio.isExporting)
+                .accessibilityIdentifier("stem.prepareCloud")
                 if !audio.hasStemSource {
                     Text("Escolha uma música para separar voz, bateria, baixo e outros instrumentos.")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -68,7 +78,7 @@ struct StemMixerControls: View {
                     Text("A separação neural requer iOS 18 ou superior e a versão do app com o modelo incluído.")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else {
-                    Text("A música fica no aparelho. A separação funciona sem conta e sem internet.")
+                    Text("No iPhone, a música fica no aparelho e funciona offline. Na nuvem, o áudio é enviado ao Hugging Face e há limite de uso gratuito.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if !audio.stemPreparationMessage.isEmpty {
@@ -110,6 +120,9 @@ struct StemMixerControls: View {
         }
         .accessibilityIdentifier("music.stemMixer")
         .quickLookPreview($previewURL)
+        .sheet(isPresented: $showCloud) {
+            CloudStemStartView { code in audio.prepareCloudStems(code: code) }
+        }
     }
 
     private func listen(to url: URL) {

@@ -177,6 +177,7 @@ RELATED_SCAN_LIMIT = 20
 
 from backend_search import router as music_search_router
 from stems_dev import router as stems_dev_router
+from cloud_stems import router as cloud_stems_router
 
 app = FastAPI(
     title="Nightcore Lab Bridge",
@@ -189,6 +190,7 @@ app = FastAPI(
 app.include_router(music_search_router)
 # Authenticated, disabled-by-default local HTDemucs development endpoint.
 app.include_router(stems_dev_router)
+app.include_router(cloud_stems_router)
 
 
 class DownloadRequest(BaseModel):
