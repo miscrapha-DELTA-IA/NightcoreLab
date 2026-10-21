@@ -173,7 +173,6 @@ enum NeuralStemWorker {
                 return asset
             }
         }
-        guard let modelURL else { throw NeuralStemError.modelMissing }
         try FileManager.default.createDirectory(at: cacheFolder, withIntermediateDirectories: true)
         let workRoot = cacheFolder == cacheRoot ? StemJobJournal.root : cacheFolder
         let stage = workRoot.appendingPathComponent(".partial-" + DemucsCoreMLModel.identifier + "-" + hash + suffix)
@@ -199,6 +198,7 @@ enum NeuralStemWorker {
                 .contains(where: { $0.hasSuffix(".pcm") }) ?? false
             if !completedResult && !saved { try? FileManager.default.removeItem(at: stage) }
         }
+        guard let modelURL else { throw NeuralStemError.modelMissing }
         // Four float32 stereo stems + decoded input, with working-space margin.
         let existing = FileManager.default.enumerator(at: stage, includingPropertiesForKeys: [.fileSizeKey])?
             .compactMap { ($0 as? URL).flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize } }
