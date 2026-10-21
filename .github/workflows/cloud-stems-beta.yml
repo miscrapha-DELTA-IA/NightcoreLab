@@ -84,6 +84,7 @@ jobs:
             -only-testing:NightcoreLabTests/StemContinuityTests \
             -only-testing:NightcoreLabTests/KaraokeContinuityTests \
             -only-testing:NightcoreLabTests/KaraokeExperienceTests \
+            -only-testing:NightcoreLabTests/RuntimeStabilizationTests/testExp8HUDLifecycleSimulationAndScrollIsolation \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee cloud-stems-tests.log
       - name: Save focused validation
         if: always()
