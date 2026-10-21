@@ -1043,7 +1043,12 @@ final class AudioEngineManager {
 
     func setStemAppBackgrounded(_ backgrounded: Bool) {
         StemWorkLifecycle.shared.setBackgrounded(backgrounded)
-        if !backgrounded { endStemBackgroundLease() }
+        if !backgrounded {
+            endStemBackgroundLease()
+            if !isPreparingStems, canResumeStemPreparation {
+                Task { @MainActor [weak self] in await self?.restorePendingStemJobIfNeeded() }
+            }
+        }
         else if isPreparingStems {
             if !stemPreparationIsCloud {
                 stemPreparationMessage = "Pausado em segundo plano · progresso salvo; retoma ao voltar"
@@ -1077,6 +1082,21 @@ final class AudioEngineManager {
         canResumeStemPreparation = true
         stemPreparationTitle = saved.title
         if saved.automaticResume { resumeStemPreparation() }
+    }
+
+    func discardSavedStemPreparation() {
+        guard !isPreparingStems, let job = StemJobJournal.load() else { return }
+        canResumeStemPreparation = false
+        isPreparingStems = true; isCancellingStems = true
+        stemPreparationError = nil; stemPreparationMessage = "Descartando tarefa salva…"
+        Task { @MainActor [weak self] in
+            await Task.detached(priority: .utility) {
+                if job.cloud { CloudStemWorker.discardSavedRequest(source: job.source) }
+                job.remove()
+            }.value
+            self?.isPreparingStems = false; self?.isCancellingStems = false
+            self?.stemPreparationMessage = "Tarefa salva descartada."
+        }
     }
 
     func prepareNeuralStems(request kind: NeuralStemRequest = .full, cloudCode: String? = nil) {
@@ -1155,12 +1175,22 @@ final class AudioEngineManager {
                     if error is CancellationError {
                         await Task.detached(priority: .utility) { journal.remove() }.value
                     } else {
-                        journal.automaticResume = false
-                        try? await Task.detached(priority: .utility) { try journal.save() }.value
+                        var resumable = true
+                        if journal.cloud {
+                            resumable = await Task.detached(priority: .utility) {
+                                CloudStemWorker.hasSavedRequest(source: journal.source)
+                            }.value
+                        }
+                        if resumable {
+                            journal.automaticResume = journal.cloud && error is URLError
+                            try? await Task.detached(priority: .utility) { try journal.save() }.value
+                        } else {
+                            await Task.detached(priority: .utility) { journal.remove() }.value
+                        }
                     }
                 }
                 guard let self, self.stemPreparationID == request else { return }
-                self.canResumeStemPreparation = !(error is CancellationError) && journal != nil
+                self.canResumeStemPreparation = !(error is CancellationError) && StemJobJournal.load() != nil
                 if !(error is CancellationError) { self.stemPreparationError = error.localizedDescription }
                 else if self.stemPreparationMessage == "Cancelando separação…" {
                     self.stemPreparationMessage = "Separação cancelada."

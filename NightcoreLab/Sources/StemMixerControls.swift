@@ -6,6 +6,7 @@ struct StemMixerControls: View {
     let audio: AudioEngineManager
     @State private var previewURL: URL?
     @State private var showCloud = false
+    @State private var showDiscard = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -109,6 +110,7 @@ struct StemMixerControls: View {
             if audio.canResumeStemPreparation && !audio.isPreparingStems {
                 Button("Retomar separação salva") { audio.resumeStemPreparation() }
                     .accessibilityIdentifier("stem.resume")
+                Button("Descartar tarefa salva", role: .destructive) { showDiscard = true }
             }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {
@@ -131,6 +133,11 @@ struct StemMixerControls: View {
         .quickLookPreview($previewURL)
         .sheet(isPresented: $showCloud) {
             CloudStemStartView { code in audio.prepareCloudStems(code: code) }
+        }
+        .confirmationDialog("Descartar a tarefa salva?", isPresented: $showDiscard, titleVisibility: .visible) {
+            Button("Descartar tarefa", role: .destructive) { audio.discardSavedStemPreparation() }
+        } message: {
+            Text("Os arquivos parciais da nuvem serão descartados. Um processamento já iniciado no serviço pode continuar e consumir sua cota.")
         }
     }
 

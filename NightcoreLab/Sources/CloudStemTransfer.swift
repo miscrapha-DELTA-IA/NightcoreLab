@@ -11,7 +11,11 @@ final class CloudStemTransfer: NSObject, URLSessionDownloadDelegate, @unchecked 
     private var finishEvents: (() -> Void)?
     private let root: URL
     private let customConfiguration: URLSessionConfiguration?
-    private lazy var session: URLSession = {
+    private let sessionLock = NSLock()
+    private var storedSession: URLSession?
+    private var session: URLSession {
+        sessionLock.lock(); defer { sessionLock.unlock() }
+        if let storedSession { return storedSession }
         let config = customConfiguration ?? URLSessionConfiguration.background(withIdentifier: Self.identifier)
         if customConfiguration == nil {
             config.sessionSendsLaunchEvents = true
@@ -19,8 +23,10 @@ final class CloudStemTransfer: NSObject, URLSessionDownloadDelegate, @unchecked 
         }
         config.waitsForConnectivity = true
         config.timeoutIntervalForResource = 7_200
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }()
+        let created = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        storedSession = created
+        return created
+    }
     init(configuration: URLSessionConfiguration? = nil, directory: URL? = nil) {
         customConfiguration = configuration
         root = directory ?? StemJobJournal.root.appendingPathComponent("transfers", isDirectory: true)

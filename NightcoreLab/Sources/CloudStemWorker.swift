@@ -35,6 +35,16 @@ enum CloudStemWorker {
             try JSONEncoder().encode(self).write(to: url, options: .atomic)
         }
     }
+    static func hasSavedRequest(source: URL, workFolder: URL = StemJobJournal.root) -> Bool {
+        guard let digest = try? hash(source),
+              let data = try? Data(contentsOf: workFolder.appendingPathComponent("cloud-" + digest).appendingPathComponent("pending.json")),
+              let pending = try? JSONDecoder().decode(Pending.self, from: data) else { return false }
+        return pending.admission != nil
+    }
+    static func discardSavedRequest(source: URL) {
+        guard let digest = try? hash(source) else { return }
+        try? FileManager.default.removeItem(at: StemJobJournal.root.appendingPathComponent("cloud-" + digest))
+    }
     enum ProviderFailure: LocalizedError {
         case rejected
         var errorDescription: String? { "A GPU encerrou este pedido sem concluir. Se a cota do provedor acabou, aguarde a renovação; a troca de música não cria outro pedido." }
@@ -210,12 +220,15 @@ enum CloudStemWorker {
         let session = requestSession ?? URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
         defer { if requestSession == nil { session.invalidateAndCancel() } }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let required = Int64(seconds * 44_100 * 8 * 4) + Int64(size) + 100_000_000
+        let stage = workFolder.appendingPathComponent("cloud-" + digest, isDirectory: true)
+        let savedBytes = names.reduce(Int64(0)) { sum, item in
+            sum + Int64((try? stage.appendingPathComponent(item.1 + ".wav").resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        let required = max(100_000_000, Int64(seconds * 44_100 * 8 * 4) + Int64(size) + 100_000_000 - savedBytes)
         if let free = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             .volumeAvailableCapacityForImportantUsage, free < required {
             throw NeuralStemError.insufficientSpace
         }
-        let stage = workFolder.appendingPathComponent("cloud-" + digest, isDirectory: true)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
         let pendingURL = stage.appendingPathComponent("pending.json")
         var pending = (try? Data(contentsOf: pendingURL)).flatMap { try? JSONDecoder().decode(Pending.self, from: $0) } ?? Pending()
@@ -280,6 +293,10 @@ enum CloudStemWorker {
         pending.submitting = true
         try pending.save(to: pendingURL)
         let (callData, callResponse) = try await session.data(for: call)
+        if let http = callResponse as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            pending.submitting = false
+            try pending.save(to: pendingURL)
+        }
         try requireSuccess(callResponse)
         guard let callObject = try JSONSerialization.jsonObject(with: callData) as? [String: String],
               let eventID = callObject["event_id"],
@@ -330,15 +347,27 @@ enum CloudStemWorker {
             let temporary: URL
             if FileManager.default.fileExists(atPath: destination.path) { temporary = destination }
             else { temporary = try await transfer(urls[index], key) }
+            var valid = false
+            defer {
+                if !valid {
+                    try? FileManager.default.removeItem(at: temporary)
+                    CloudStemTransfer.shared.remove(key)
+                }
+            }
             let byteCount = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
             let checksum = try hash(temporary)
+            let audio = try AVAudioFile(forReading: temporary)
             let maximumFrames = expected?.frames ?? Int64((seconds * 44_100).rounded())
-            guard byteCount <= maximumFrames * 8 + 1_000_000,
+            guard byteCount > 0, byteCount <= maximumFrames * 8 + 1_000_000,
+                  audio.processingFormat.sampleRate == 44_100,
+                  audio.processingFormat.channelCount == 2,
+                  abs(Double(audio.length) / 44_100 - seconds) <= 0.1,
                   expected == nil || checksum == expected?.sha256[item.1] else {
                 throw Failure.message("Um stem chegou incompleto. Tente novamente mais tarde.")
             }
             hashes[item.1] = checksum
             if temporary != destination { try FileManager.default.moveItem(at: temporary, to: destination) }
+            valid = true
             CloudStemTransfer.shared.remove(key)
         }
         let result = asset(stage, model: admission.model)
