@@ -99,16 +99,4 @@ jobs:
 
       - name: Upload assets and publish the beta
         shell: bash
-        run: |
-          set -euo pipefail
-          gh release view "$RELEASE_TAG" --json targetCommitish > "$RUNNER_TEMP/release-target.json"
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release-target.json').read_text())
-          assert release['targetCommitish'] == os.environ['APP_COMMIT'], 'Release points at a different app'
-          PY
-          gh release upload "$RELEASE_TAG" release-assets/* --clobber
-          gh release edit "$RELEASE_TAG" --draft=false --prerelease --title 'Gnarly 57 — beta para LiveContainer' --notes-file distribution/livecontainer/RELEASE-NOTES.md
-          test "$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')" = "$APP_COMMIT"
-          gh release view "$RELEASE_TAG" --json url,isDraft,isPrerelease,assets --jq '{url,isDraft,isPrerelease,assets:[.assets[]|{name,size,digest}]}'
+        run: python3 distribution/livecontainer/publish-release.py
