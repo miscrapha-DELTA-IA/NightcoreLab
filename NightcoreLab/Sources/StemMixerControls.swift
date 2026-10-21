@@ -19,6 +19,7 @@ struct StemMixerControls: View {
             Text("Separação real por IA")
                 .font(.caption.weight(.semibold))
             if audio.isPreparingStems {
+                Text(audio.stemPreparationTitle).font(.caption.weight(.semibold)).lineLimit(1)
                 ProgressView(value: audio.stemPreparationProgress) {
                     Text(audio.stemPreparationMessage).font(.caption)
                 }
@@ -31,7 +32,9 @@ struct StemMixerControls: View {
                         .font(.caption.weight(.semibold))
                         .disabled(audio.isCancellingStems)
                 }
-                Text("Mantenha o app aberto. O tempo varia conforme a música e o iPhone.")
+                Text(audio.stemPreparationIsCloud
+                     ? "Você pode trocar de música. O pedido e os downloads ficam salvos; ao voltar ao app, ele retoma o acompanhamento."
+                     : "Você pode trocar de música. Em segundo plano, a separação pausa e retoma os trechos salvos ao voltar.")
                     .font(.caption2).foregroundStyle(.secondary)
             } else if audio.stemsAvailable {
                 Label("\(audio.stemSource?.title ?? "IA") · stems salvos neste iPhone", systemImage: "checkmark.circle.fill")
@@ -102,6 +105,10 @@ struct StemMixerControls: View {
             if let error = audio.stemPreparationError {
                 Text(error).font(.caption).foregroundStyle(.orange)
                     .accessibilityIdentifier("stem.preparationError")
+            }
+            if audio.canResumeStemPreparation && !audio.isPreparingStems {
+                Button("Retomar separação salva") { audio.resumeStemPreparation() }
+                    .accessibilityIdentifier("stem.resume")
             }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {

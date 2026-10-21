@@ -6,7 +6,6 @@
     "NightcoreLab/Sources/NeuralStems/DemucsCoreMLModel.swift": "11e3766ddd53dba0e6257ebd752046f83baf07456e191217e397610ef0b60535",
     "NightcoreLab/Sources/NeuralStems/DemucsDSP.swift": "d1efb34c4feac8772b9f3e750ffcb52fb804dd44763460f5331ccc431410d347",
     "NightcoreLab/Sources/NeuralStems/DemucsOverlapAdd.swift": "3b808f1483e02a2241e6e9956ac114e943fca2c0608c4ceaafe9297ecd2fc68e",
-    "NightcoreLab/Sources/NeuralStems/NeuralStemWorker.swift": "981efbefc823164fe03c9d08a30b3df0a295d790f23462bc35f818e58cf19ee8",
     "NightcoreLab/Sources/NeuralStems/StagedDemucsPipeline.swift": "cc9b52f637a01b9cd4e426f77cde72a66e4ea15daa92e825f63184ced839c624",
     "NightcoreLab/Sources/NeuralStems/StemGainAudioUnit.swift": "6f2f40b0f019d49d431fe25e24b125d49db453364ac18e4a04099462e8e6b963",
     "NightcoreLab/Sources/NeuralStems/StemMemoryRecovery.swift": "738e4682bf9d18f2cde08bd912b45a0212b865e4c621e975cefaf99fb6b37c68",
@@ -19,5 +18,6 @@
     "scripts/neural-stems/verify-model.py": "5af9478293e628fc27d010ab26eea8b52ff62b93192ca10355bb42bdbbe3fef4",
     "scripts/neural-stems/model-manifest.json": "cdbcd990d16b684be0e632c6de870dbbf3b5840acd13ba99f588fa2951eb9090",
     "scripts/neural-stems/requirements.txt": "65b6839074c83ce2f9816acbbc3638f1c6bff50efcf686ad04677e759449b680"
-  }
+  },
+  "worker_validation": "Worker lifecycle/checkpoint changes are tested on the current source; only the unchanged model and DSP inputs reuse the qualified bundle."
 }

@@ -28,8 +28,11 @@ struct KaraokeSummary: Identifiable, Equatable {
 struct KaraokeResultCard: View {
     let summary: KaraokeSummary
     let theme: AppTheme
-    let onShare: () -> Void
     let onReplay: () -> Void
+    @Environment(\.displayScale) private var displayScale
+    @State private var capture = KaraokeResultCapture()
+    @State private var sharePayload: ShareExportPayload?
+    @State private var captureFailed = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -61,8 +64,11 @@ struct KaraokeResultCard: View {
                 metric(summary.mode == .microphone ? "PRECISÃO VOCAL" : "SINCRONIA",
                        value: "\(summary.accuracy)%")
             }
-            Button(action: onShare) {
-                Label("🔥 Compartilhar Story", systemImage: "square.and.arrow.up")
+            Button {
+                do { sharePayload = ShareExportPayload(image: try capture.image(scale: displayScale)) }
+                catch { captureFailed = true }
+            } label: {
+                Label("Compartilhar resultado", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
@@ -84,7 +90,14 @@ struct KaraokeResultCard: View {
         .padding(.horizontal, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
+        .background(KaraokeResultCaptureAnchor(capture: capture))
         .accessibilityIdentifier("karaoke.resultCard")
+        .sheet(item: $sharePayload) { payload in
+            ShareExportService(image: payload.image)
+        }
+        .alert("Não foi possível capturar o resultado", isPresented: $captureFailed) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Tente compartilhar novamente com a tela de resultado aberta.") }
     }
 
     private func metric(_ label: String, value: String) -> some View {

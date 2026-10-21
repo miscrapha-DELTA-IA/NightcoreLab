@@ -60,8 +60,10 @@ struct KaraokeScoringEngine {
     private var points = 0.0
     private var elapsed = 0.0
     private var earned = 0.0
-    private var verseElapsed = 0.0
-    private var verseEarned = 0.0
+    private var verseElapsed: [Int: Double] = [:]
+    private var verseEarned: [Int: Double] = [:]
+    private var judged: Set<Int> = []
+    private var visited: [ClosedRange<Double>] = []
     private var priorVoice = KaraokeVoiceFrame.silence
     private var attackTime: Double?
     private(set) var snapshot = KaraokeScoreSnapshot()
@@ -76,11 +78,11 @@ struct KaraokeScoringEngine {
         key = reference; melody = contour; pitchShift = shift
         lastTime = time.isFinite ? max(0, time) : 0
         verses = lines.compactMap { line in
-            guard line.start.isFinite, line.end.isFinite, line.end > lastTime,
+            guard line.start.isFinite, line.end.isFinite, line.end > 0,
                   line.end > line.start, !line.text.trimmingCharacters(in: .whitespaces).isEmpty
             else { return nil }
             // Joining a song mid-verse evaluates only its remaining portion.
-            let start = max(line.start, lastTime)
+            let start = max(line.start, 0)
             let windows: [ClosedRange<Double>] = line.words.compactMap { word in
                 let lower = max(start, word.start), upper = min(line.end, word.end)
                 guard !word.text.isEmpty, lower.isFinite, upper.isFinite, upper > lower else { return nil }
@@ -88,7 +90,34 @@ struct KaraokeScoringEngine {
             }
             return windows.isEmpty ? nil : Verse(start: start, end: line.end, windows: windows.sorted { $0.lowerBound < $1.lowerBound })
         }
+        cursor = verses.firstIndex(where: { $0.end > lastTime }) ?? verses.count
         snapshot.hasHarmonicReference = reliableKey != nil
+    }
+
+    /// A transport seek changes the scoring cursor, never the earned result.
+    /// The visited ledger prevents awarding the same sung interval twice.
+    mutating func seek(to time: Double) {
+        guard time.isFinite, !snapshot.isFinished else { return }
+        lastTime = max(0, time)
+        cursor = verses.firstIndex(where: { $0.end > lastTime }) ?? verses.count
+        priorVoice = .silence; attackTime = nil
+        snapshot.vocalAccuracy = 0
+    }
+
+    private mutating func unvisitedDuration(from lower: Double, to upper: Double) -> Double {
+        var remaining = upper - lower
+        for interval in visited {
+            remaining -= max(0, min(upper, interval.upperBound) - max(lower, interval.lowerBound))
+        }
+        var merged: [ClosedRange<Double>] = []
+        var a = lower, b = upper
+        for interval in visited {
+            if interval.upperBound < a { merged.append(interval) }
+            else if interval.lowerBound > b { merged.append(a...b); a = interval.lowerBound; b = interval.upperBound }
+            else { a = min(a, interval.lowerBound); b = max(b, interval.upperBound) }
+        }
+        merged.append(a...b); visited = merged
+        return max(0, remaining)
     }
 
     private var reliableKey: KeyHypothesis? {
@@ -135,8 +164,9 @@ struct KaraokeScoringEngine {
             for window in verse.windows {
                 let a = max(coveredEnd, window.lowerBound), b = min(upper, window.upperBound)
                 guard b > a else { continue }
-                let duration = b - a
                 coveredEnd = b
+                let duration = unvisitedDuration(from: a, to: b)
+                guard duration > 0 else { continue }
                 var quality = 0.0
                 if voiced {
                     let attack = attackTime.map { abs($0 - window.lowerBound) <= 0.3 ? 1.0 : 0.0 } ?? 0
@@ -153,7 +183,8 @@ struct KaraokeScoringEngine {
                     }
                 }
                 elapsed += duration; earned += duration * quality
-                verseElapsed += duration; verseEarned += duration * quality
+                verseElapsed[cursor, default: 0] += duration
+                verseEarned[cursor, default: 0] += duration * quality
                 points += 100 * duration * quality * Double(snapshot.multiplier)
                 snapshot.vocalAccuracy = quality
             }
@@ -181,21 +212,24 @@ struct KaraokeScoringEngine {
     }
 
     private mutating func judgeVerse() {
-        guard verseElapsed > 0 else { return }
-        let accuracy = verseEarned / verseElapsed
-        snapshot.lastVerseWasSilent = verseEarned == 0
+        guard !judged.contains(cursor), let duration = verseElapsed[cursor], duration > 0 else { return }
+        let earned = verseEarned[cursor, default: 0]
+        let accuracy = earned / duration
+        judged.insert(cursor)
+        snapshot.lastVerseWasSilent = earned == 0
         snapshot.lastVerseRating = accuracy >= 0.9 ? .perfect : accuracy >= 0.75 ? .great :
             accuracy >= 0.55 ? .good : .almost
         snapshot.judgedVerses += 1
         snapshot.streakCombo = accuracy >= 0.7 ? snapshot.streakCombo + 1 : 0
         snapshot.bestCombo = max(snapshot.bestCombo, snapshot.streakCombo)
         snapshot.multiplier = min(4, 1 + snapshot.streakCombo / 3)
-        verseElapsed = 0; verseEarned = 0
     }
 
     mutating func finish() {
         guard !snapshot.isFinished else { return }
-        judgeVerse()
+        for index in verseElapsed.keys.sorted() where !judged.contains(index) {
+            cursor = index; judgeVerse()
+        }
         snapshot.isFinished = true
         snapshot.vocalAccuracy = 0
     }

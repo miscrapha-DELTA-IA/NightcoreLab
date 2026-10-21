@@ -4,6 +4,47 @@ import XCTest
 
 @MainActor
 final class StemPreparationLifetimeTests: XCTestCase {
+    func testChangingSongsKeepsPreparationAliveAndAttachesOnlyToItsOriginalSong() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        func write(_ name: String, frames: AVAudioFrameCount) throws -> URL {
+            let url = folder.appendingPathComponent(name + ".wav")
+            try autoreleasepool {
+                let file = try AVAudioFile(forWriting: url, settings: format.settings)
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+                buffer.frameLength = frames
+                for channel in 0..<2 { buffer.floatChannelData![channel].update(repeating: 0.02, count: Int(frames)) }
+                try file.write(from: buffer)
+            }
+            return url
+        }
+        let first = try write("first", frames: 4_410), second = try write("second", frames: 8_820)
+        let urls = try Dictionary(uniqueKeysWithValues: StemKind.allCases.map { ($0, try write($0.rawValue, frames: 4_410)) })
+        let gate = StemLifetimeGate()
+        let started = expectation(description: "First song preparation started")
+        let audio = AudioEngineManager(restoresStemJobs: false, neuralPreparation: { source, _, _, _ in
+            XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+            started.fulfill(); await gate.wait()
+            try Task.checkCancellation()
+            return StemAsset(urls: urls, source: .demucs)
+        })
+        try XCTSkipUnless(audio.hasNeuralStemModel)
+        try audio.load(url: first); audio.prepareNeuralStems()
+        await fulfillment(of: [started], timeout: 12)
+        try audio.load(url: second)
+        XCTAssertTrue(audio.isPreparingStems)
+        XCTAssertFalse(audio.isCancellingStems)
+        await gate.open()
+        for _ in 0..<1_200 where audio.isPreparingStems { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNil(audio.stemPreparationError)
+        XCTAssertFalse(audio.stemsAvailable, "The first song's stems must not attach to the second song")
+        try audio.load(url: first)
+        XCTAssertTrue(audio.stemsAvailable)
+        XCTAssertEqual(audio.stemSource, .demucs)
+    }
+
     func testCompletedPreparationPreservesRoformerSourceAndEnablesMixer() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

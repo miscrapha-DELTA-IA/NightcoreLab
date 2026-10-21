@@ -602,16 +602,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
         .sheet(item: $karaokeSummary) { summary in
             KaraokeResultCard(summary: summary, theme: appTheme,
-                onShare: {
-                    let highlight = max(0, min(audio.duration - 8,
-                        lyricsStore.lines.last?.start ?? 0))
-                    karaokeSummary = nil
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(320))
-                        shareVideo(mode: .lyrics, includeAudio: true,
-                                   startAt: highlight, scoreStamp: summary.stamp)
-                    }
-                },
                 onReplay: {
                     karaokeSummary = nil
                     onReplayKaraoke()

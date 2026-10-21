@@ -5,11 +5,12 @@ import Foundation
 /// Render signs an admission; all audio and WAV transfers go directly to the
 /// configured ZeroGPU Space. Never sends a Hugging Face token or buys credits.
 enum CloudStemWorker {
+    typealias Transfer = @Sendable (URL, String) async throws -> URL
     enum Failure: LocalizedError {
         case message(String)
         var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
     }
-    struct Admission: Decodable {
+    struct Admission: Codable {
         let ticket: String
         let space_url: URL
         let model: String
@@ -23,6 +24,32 @@ enum CloudStemWorker {
         let frames: Int64
         let sample_rate: Int
         let sha256: [String: String]
+    }
+    struct Pending: Codable {
+        var admission: Admission?
+        var remotePath: String?
+        var submitting = false
+        var eventID: String?
+        var payload: Data?
+        func save(to url: URL) throws {
+            try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        }
+    }
+    enum ProviderFailure: LocalizedError {
+        case rejected
+        var errorDescription: String? { "A GPU encerrou este pedido sem concluir. Se a cota do provedor acabou, aguarde a renovação; a troca de música não cria outro pedido." }
+    }
+    static func streamPayload(_ data: Data) throws -> Data {
+        guard data.count <= 1_000_000, let text = String(data: data, encoding: .utf8) else {
+            throw Failure.message("Resposta da GPU excedeu o limite.")
+        }
+        var event = ""
+        for line in text.components(separatedBy: .newlines) {
+            if line.hasPrefix("event: ") { event = String(line.dropFirst(7)) }
+            if event == "error", line.hasPrefix("data: ") { throw ProviderFailure.rejected }
+            if event == "complete", line.hasPrefix("data: ") { return Data(line.dropFirst(6).utf8) }
+        }
+        throw Failure.message("A conexão foi interrompida. O pedido está salvo; retome sem enviar outra separação.")
     }
     static let names: [(StemKind, String)] = [(.vocal, "vocals"), (.instrumental, "other"),
                                               (.drums, "drums"), (.bass, "bass")]
@@ -124,8 +151,16 @@ enum CloudStemWorker {
     }
 
     static func prepare(source: URL, betaCode: String,
+                        cacheFolder: URL = NeuralStemWorker.cacheRoot,
+                        workFolder: URL = StemJobJournal.root,
+                        serverURL: URL? = nil, requestSession: URLSession? = nil,
+                        transfer: @escaping Transfer = { url, key in
+                            try await CloudStemTransfer.shared.download(url, key: key)
+                        },
                         progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
-        do { return try await run(source: source, betaCode: betaCode, progress: progress) }
+        do { return try await run(source: source, betaCode: betaCode, cacheFolder: cacheFolder,
+            workFolder: workFolder, serverURL: serverURL, requestSession: requestSession,
+            transfer: transfer, progress: progress) }
         catch {
             if Task.isCancelled { throw CancellationError() }
             throw error
@@ -133,6 +168,8 @@ enum CloudStemWorker {
     }
 
     private static func run(source: URL, betaCode: String,
+                            cacheFolder: URL, workFolder: URL, serverURL: URL?, requestSession: URLSession?,
+                            transfer: @escaping Transfer,
                             progress: @escaping @Sendable (Double, String) -> Void) async throws -> StemAsset {
         progress(0, "Conferindo música e stems salvos…")
         let input = try AVAudioFile(forReading: source)
@@ -142,7 +179,7 @@ enum CloudStemWorker {
             throw Failure.message("Na nuvem gratuita, use músicas com menos de 10 minutos e até 35 MB.")
         }
         let digest = try hash(source)
-        let root = NeuralStemWorker.cacheRoot
+        let root = cacheFolder
         func asset(_ directory: URL, model: String) -> StemAsset {
             StemAsset(urls: Dictionary(uniqueKeysWithValues: names.map {
                 ($0.0, directory.appendingPathComponent($0.1 + ".wav"))
@@ -160,27 +197,35 @@ enum CloudStemWorker {
             }
         }
         let server = await MainActor.run { AudioDownloadManager.apiBaseURL }
-        guard let base = URL(string: server), base.scheme == "https" else {
+        guard let base = serverURL ?? URL(string: server), base.scheme == "https" else {
             throw Failure.message("Configure um servidor HTTPS antes de usar a nuvem.")
         }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 180
         configuration.timeoutIntervalForResource = 900
         configuration.httpCookieStorage = nil
-        let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
+        let session = requestSession ?? URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+        defer { if requestSession == nil { session.invalidateAndCancel() } }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let required = Int64(seconds * 44_100 * 8 * 4) + Int64(size) + 100_000_000
         if let free = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             .volumeAvailableCapacityForImportantUsage, free < required {
             throw NeuralStemError.insufficientSpace
         }
-        var admissionRequest = try json(["sha256": digest, "bytes": size, "seconds": seconds],
-                                       url: base.appendingPathComponent("v1/stems/cloud/ticket"))
-        if !betaCode.isEmpty { admissionRequest.setValue("Bearer " + betaCode, forHTTPHeaderField: "Authorization") }
-        let (admissionData, admissionResponse) = try await session.data(for: admissionRequest)
-        try requireSuccess(admissionResponse, data: admissionData)
-        let admission = try JSONDecoder().decode(Admission.self, from: admissionData)
+        let stage = workFolder.appendingPathComponent("cloud-" + digest, isDirectory: true)
+        try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
+        let pendingURL = stage.appendingPathComponent("pending.json")
+        var pending = (try? Data(contentsOf: pendingURL)).flatMap { try? JSONDecoder().decode(Pending.self, from: $0) } ?? Pending()
+        if pending.admission == nil {
+            var admissionRequest = try json(["sha256": digest, "bytes": size, "seconds": seconds],
+                                           url: base.appendingPathComponent("v1/stems/cloud/ticket"))
+            if !betaCode.isEmpty { admissionRequest.setValue("Bearer " + betaCode, forHTTPHeaderField: "Authorization") }
+            let (admissionData, admissionResponse) = try await session.data(for: admissionRequest)
+            try requireSuccess(admissionResponse, data: admissionData)
+            pending.admission = try JSONDecoder().decode(Admission.self, from: admissionData)
+            try pending.save(to: pendingURL)
+        }
+        guard let admission = pending.admission else { throw Failure.message("Pedido salvo inválido.") }
         let community = admission.provider == "community_bs_roformer"
         let validProfile = community
             ? (admission.model == communityModel && admission.space_url == communityURL)
@@ -190,9 +235,7 @@ enum CloudStemWorker {
         }
         let space = admission.space_url
         let folder = root.appendingPathComponent("cloud-" + admission.model + "-v1-" + digest, isDirectory: true)
-        let stage = root.appendingPathComponent(".cloud-partial-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: stage) }
+        if pending.remotePath == nil {
         let multipart = stage.appendingPathComponent("upload.bin")
         let boundary = "Gnarly" + UUID().uuidString
         // Build on disk in chunks, never load a complete song into RAM.
@@ -218,10 +261,21 @@ enum CloudStemWorker {
         guard let remotePath = try JSONDecoder().decode([String].self, from: uploadData).first else {
             throw Failure.message("O envio do áudio não foi concluído.")
         }
+        pending.remotePath = remotePath
+        try pending.save(to: pendingURL)
+        }
         let callURL = space.appendingPathComponent("gradio_api/call/separate")
-        let fileData: [String: Any] = ["path": remotePath, "meta": ["_type": "gradio.FileData"]]
+        if pending.eventID == nil {
+        // A lost POST response cannot be retried safely: the provider has no
+        // idempotency key. Preserve that ambiguity rather than spend more quota.
+        guard !pending.submitting else {
+            throw Failure.message("O envio do pedido ficou sem confirmação. Não enviaremos outro automaticamente para preservar a cota. Aguarde antes de iniciar uma nova separação.")
+        }
+        let fileData: [String: Any] = ["path": pending.remotePath!, "meta": ["_type": "gradio.FileData"]]
         let arguments: [Any] = community ? [fileData, "Core instruments — 4 tracks"] : [fileData, admission.ticket]
         let call = try json(["data": arguments], url: callURL)
+        pending.submitting = true
+        try pending.save(to: pendingURL)
         let (callData, callResponse) = try await session.data(for: call)
         try requireSuccess(callResponse)
         guard let callObject = try JSONSerialization.jsonObject(with: callData) as? [String: String],
@@ -229,21 +283,30 @@ enum CloudStemWorker {
               eventID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else {
             throw Failure.message("A fila da GPU não aceitou o pedido.")
         }
-        progress(0.1, "Aguardando fila e separação na GPU gratuita…")
-        let (stream, streamResponse) = try await session.bytes(from: callURL.appendingPathComponent(eventID))
-        try requireSuccess(streamResponse)
-        var event = "", payload: Data?, count = 0
-        for try await line in stream.lines {
-            try Task.checkCancellation()
-            count += line.utf8.count
-            guard count <= 1_000_000 else { throw Failure.message("Resposta da GPU excedeu o limite.") }
-            if line.hasPrefix("event: ") { event = String(line.dropFirst(7)) }
-            if event == "error" { throw Failure.message("A GPU gratuita não concluiu o pedido. A cota pode ter acabado; tente mais tarde ou use o iPhone.") }
-            if event == "complete", line.hasPrefix("data: ") {
-                payload = Data(line.dropFirst(6).utf8); break
-            }
+        pending.eventID = eventID
+        try pending.save(to: pendingURL)
         }
-        guard let payload else { throw Failure.message("A conexão com a GPU foi interrompida.") }
+        guard let eventID = pending.eventID,
+              eventID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else {
+            throw Failure.message("Identificador do pedido salvo inválido.")
+        }
+        if pending.payload == nil {
+            progress(0.1, "Acompanhando o pedido salvo na GPU gratuita…")
+            let response = try await transfer(callURL.appendingPathComponent(eventID), digest + "-" + eventID)
+            let bytes = try response.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard bytes <= 1_000_000 else { throw Failure.message("Resposta da GPU excedeu o limite.") }
+            do { pending.payload = try streamPayload(Data(contentsOf: response)) }
+            catch is ProviderFailure {
+                // This is a confirmed terminal provider failure, not a seek,
+                // background event or network dropout. Never auto-resubmit it.
+                try? FileManager.default.removeItem(at: pendingURL)
+                CloudStemTransfer.shared.remove(digest + "-" + eventID)
+                throw ProviderFailure.rejected
+            }
+            try pending.save(to: pendingURL)
+            CloudStemTransfer.shared.remove(digest + "-" + eventID)
+        }
+        guard let payload = pending.payload else { throw Failure.message("O pedido está salvo e aguarda resultado.") }
         let urls: [URL]
         let expected: Manifest?
         if community {
@@ -255,9 +318,11 @@ enum CloudStemWorker {
         var hashes: [String: String] = [:]
         for (index, item) in names.enumerated() {
             progress(0.6 + Double(index) * 0.09, "Baixando stems \(index + 1)/4…")
-            let (temporary, response) = try await session.download(from: urls[index])
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            try requireSuccess(response)
+            let destination = stage.appendingPathComponent(item.1 + ".wav")
+            let key = digest + "-" + eventID + "-" + item.1
+            let temporary: URL
+            if FileManager.default.fileExists(atPath: destination.path) { temporary = destination }
+            else { temporary = try await transfer(urls[index], key) }
             let byteCount = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
             let checksum = try hash(temporary)
             let maximumFrames = expected?.frames ?? Int64((seconds * 44_100).rounded())
@@ -266,7 +331,8 @@ enum CloudStemWorker {
                 throw Failure.message("Um stem chegou incompleto. Tente novamente mais tarde.")
             }
             hashes[item.1] = checksum
-            try FileManager.default.moveItem(at: temporary, to: stage.appendingPathComponent(item.1 + ".wav"))
+            if temporary != destination { try FileManager.default.moveItem(at: temporary, to: destination) }
+            CloudStemTransfer.shared.remove(key)
         }
         let result = asset(stage, model: admission.model)
         let frames = try NeuralStemWorker.validate(result, expectedSeconds: seconds)
@@ -277,6 +343,7 @@ enum CloudStemWorker {
         try Task.checkCancellation()
         if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
         try FileManager.default.moveItem(at: stage, to: folder)
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent("pending.json"))
         progress(1, "Stems reais salvos para usar offline")
         return asset(folder, model: admission.model)
     }

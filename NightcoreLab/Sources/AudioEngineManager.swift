@@ -5,6 +5,7 @@ import MediaPlayer
 import Observation
 import UniformTypeIdentifiers
 import OSLog
+import UIKit
 
 // MARK: - Tipos de apoio
 
@@ -129,6 +130,11 @@ final class AudioEngineManager {
     @ObservationIgnored private var stemPreparationTask: Task<Void, Never>?
     @ObservationIgnored private var stemPreparationID = UUID()
     @ObservationIgnored private let neuralPreparation: NeuralPreparation
+    @ObservationIgnored private var preparedStemAssets: [URL: StemAsset] = [:]
+    @ObservationIgnored private var stemBackgroundLease: UIBackgroundTaskIdentifier = .invalid
+    private(set) var stemPreparationTitle = ""
+    private(set) var stemPreparationIsCloud = false
+    private(set) var canResumeStemPreparation = false
     private(set) var isPreparingStems = false
     private(set) var isCancellingStems = false
     private(set) var stemPreparationProgress = 0.0
@@ -253,7 +259,7 @@ final class AudioEngineManager {
         subsystem: "com.nightcorelab.app", category: "AudioTransport")
     var isAudioEngineRunning: Bool { engine.isRunning }
 
-    init(idleStopDelay: Duration = .seconds(10),
+    init(idleStopDelay: Duration = .seconds(10), restoresStemJobs: Bool = true,
          neuralPreparation: @escaping NeuralPreparation = { source, request, reclaim, progress in
              try await NeuralStemWorker.prepare(source: source, request: request, reclaimMemory: reclaim, progress: progress)
          }) {
@@ -264,6 +270,14 @@ final class AudioEngineManager {
         setupEngine()
         observeInterruptions()
         setupRemoteTransportControls()
+        if restoresStemJobs {
+            Task { @MainActor [weak self] in
+                let saved = await Task.detached(priority: .utility) { StemJobJournal.load() }.value
+                guard let self, !self.isPreparingStems, let saved else { return }
+                self.canResumeStemPreparation = true
+                if saved.automaticResume { self.resumeStemPreparation() }
+            }
+        }
     }
 
     /// Anexa a cadeia de masterização e aplica os valores iniciais dos controles.
@@ -292,7 +306,8 @@ final class AudioEngineManager {
     // MARK: Carregar arquivo
 
     func load(url: URL, preparedFile: AVAudioFile? = nil) throws {
-        cancelStemPreparation()
+        // The separation owns its source copy. A queue change only replaces
+        // playback; it must neither cancel the job nor attach the wrong stems.
         stemPreview = nil
         neuralStems.clear()
         stemMixEnabled = false
@@ -368,6 +383,9 @@ final class AudioEngineManager {
         scheduledStartTime = 0
         lastKnownTime = 0
         setupNowPlaying()
+        if let asset = preparedStemAssets[url], asset.preview == nil {
+            try installPreparedStems(asset)
+        }
         // Deferred to Stems tab: normal playback and karaoke do not run separation.
     }
 
@@ -1031,13 +1049,48 @@ final class AudioEngineManager {
 
     func prepareCloudStems(code: String) { prepareNeuralStems(cloudCode: code) }
 
+    func setStemAppBackgrounded(_ backgrounded: Bool) {
+        StemWorkLifecycle.shared.setBackgrounded(backgrounded)
+        if !backgrounded { endStemBackgroundLease() }
+        else if isPreparingStems {
+            if !stemPreparationIsCloud {
+                stemPreparationMessage = "Pausado em segundo plano · progresso salvo; retoma ao voltar"
+            }
+            beginStemBackgroundLease()
+        }
+    }
+
+    private func beginStemBackgroundLease() {
+        guard stemBackgroundLease == .invalid else { return }
+        stemBackgroundLease = UIApplication.shared.beginBackgroundTask(withName: "Salvar separação") { [weak self] in
+            Task { @MainActor in self?.endStemBackgroundLease() }
+        }
+    }
+    private func endStemBackgroundLease() {
+        guard stemBackgroundLease != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(stemBackgroundLease)
+        stemBackgroundLease = .invalid
+    }
+
+    func resumeStemPreparation() {
+        guard !isPreparingStems, !isExporting, let job = StemJobJournal.load() else { return }
+        startStemPreparation(source: job.originalSource, title: job.title,
+            kind: job.previewTime.map { .preview(at: $0) } ?? .full,
+            cloudCode: job.cloud ? CloudStemBetaCode.read() : nil, restoring: job)
+    }
+
     func prepareNeuralStems(request kind: NeuralStemRequest = .full, cloudCode: String? = nil) {
         guard let sourceURL, !isExporting, !isPreparingStems else { return }
+        startStemPreparation(source: sourceURL, title: fileName, kind: kind, cloudCode: cloudCode)
+    }
+
+    private func startStemPreparation(source: URL, title: String, kind: NeuralStemRequest,
+                                      cloudCode: String?, restoring saved: StemJobJournal? = nil) {
         guard cloudCode != nil || hasNeuralStemModel else {
             stemPreparationError = "A separação neural precisa de iOS 18 ou superior e do modelo incluído no app."
             return
         }
-        let request = UUID(), revision = playbackSourceRevision
+        let request = UUID()
         let prepare: NeuralPreparation
         if let cloudCode {
             prepare = { source, _, _, progress in
@@ -1045,18 +1098,18 @@ final class AudioEngineManager {
             }
         } else { prepare = neuralPreparation }
         stemPreparationID = request
-        isPreparingStems = true; isCancellingStems = false
+        isPreparingStems = true; isCancellingStems = false; canResumeStemPreparation = false
+        stemPreparationTitle = title; stemPreparationIsCloud = cloudCode != nil
         stemPreparationProgress = 0; stemPreparationError = nil
-        stemPreparationMessage = "Preparando separação…"
+        stemPreparationMessage = saved == nil ? "Salvando a música para separar…" : "Retomando separação salva…"
         removeVisualMeterTap()
-        let lease = UIApplication.shared.beginBackgroundTask(withName: "Finalizar separação") { [weak self] in
-            Task { @MainActor in self?.cancelStemPreparation() }
-        }
+        beginStemBackgroundLease()
         stemPreparationTask = Task { [weak self] in
             await MusicIntelligenceEngine.shared.suspendForNeuralWork()
+            var journal: StemJobJournal?
             defer {
-                if lease != .invalid { UIApplication.shared.endBackgroundTask(lease) }
                 if let self, self.stemPreparationID == request {
+                    self.endStemBackgroundLease()
                     self.isPreparingStems = false; self.isCancellingStems = false
                     self.stemPreparationTask = nil
                     if self.isPlaying { self.installVisualMeterTap() }
@@ -1064,54 +1117,74 @@ final class AudioEngineManager {
                 Task { await MusicIntelligenceEngine.shared.resumeAfterNeuralWork() }
             }
             do {
+                journal = try await Task.detached(priority: .utility) {
+                    if var saved {
+                        saved.automaticResume = true; try saved.save(); return saved
+                    }
+                    return try StemJobJournal.create(source: source, title: title,
+                        cloud: cloudCode != nil, preview: kind.previewTime)
+                }.value
+                guard let journal else { return }
                 await NowPlayingArtworkLoader.releaseDecodedCovers()
                 try Task.checkCancellation()
-                let asset = try await prepare(sourceURL, kind, {
+                let asset = try await prepare(journal.source, kind, {
                     Task { @MainActor in await NowPlayingArtworkLoader.releaseDecodedCovers() }
                 }) { [weak self] value, message in
                     Task { @MainActor in
                         guard let self, self.stemPreparationID == request,
-                              self.playbackSourceRevision == revision,
                               self.isPreparingStems, !self.isCancellingStems else { return }
-                        self.stemPreparationProgress = value; self.stemPreparationMessage = message
+                        if value >= 0 { self.stemPreparationProgress = max(self.stemPreparationProgress, value) }
+                        self.stemPreparationMessage = message
                     }
                 }
                 try Task.checkCancellation()
-                guard let self, self.stemPreparationID == request,
-                      self.playbackSourceRevision == revision, self.sourceURL == sourceURL,
-                      let file = self.audioFile else { return }
+                await Task.detached(priority: .utility) { journal.remove() }.value
+                guard let self, self.stemPreparationID == request else { return }
+                self.preparedStemAssets[source] = asset
+                self.stemPreparationProgress = 1
+                self.stemPreparationMessage = "Stems salvos · \(title) · \(asset.source.title)"
+                guard self.sourceURL == source else { return }
                 if kind.previewTime != nil {
                     guard asset.preview != nil else { throw NeuralStemError.invalidOutput }
                     self.stemPreview = asset
-                    self.stemPreparationProgress = 1
                     self.stemPreparationMessage = "Prévia pronta · compare o original, a voz e o acompanhamento"
-                    return
-                }
-                let position = self.currentTime, resume = self.isPlaying
-                try self.neuralStems.load(asset, seconds: self.duration)
-                self.scheduleGeneration += 1
-                self.player.stop(); self.centerCutPlayer.stop()
-                self.isPlaying = false
-                self.engine.stop()
-                self.neuralStems.connect(engine: self.engine, mixer: self.upmix)
-                self.engine.prepare()
-                self.lastKnownTime = position
-                self.schedule(file, startingAt: position)
-                if self.centerCutEnabled { self.scheduleCenterCut(startingAt: position) }
-                self.stemsAvailable = true; self.stemSource = asset.source
-                if asset.source == .roformer { self.stemPreview = nil }
-                self.sendStemParameters()
-                if resume { self.play() }
-                self.stemPreparationProgress = 1
-                self.stemPreparationMessage = "Stems reais prontos · \(asset.source.title)"
+                } else { try self.installPreparedStems(asset) }
             } catch {
+                if var journal {
+                    if error is CancellationError {
+                        await Task.detached(priority: .utility) { journal.remove() }.value
+                    } else {
+                        journal.automaticResume = false
+                        try? await Task.detached(priority: .utility) { try journal.save() }.value
+                    }
+                }
                 guard let self, self.stemPreparationID == request else { return }
+                self.canResumeStemPreparation = !(error is CancellationError) && journal != nil
                 if !(error is CancellationError) { self.stemPreparationError = error.localizedDescription }
                 else if self.stemPreparationMessage == "Cancelando separação…" {
                     self.stemPreparationMessage = "Separação cancelada."
                 }
             }
         }
+    }
+
+    private func installPreparedStems(_ asset: StemAsset) throws {
+        guard let file = audioFile else { return }
+        let position = currentTime, resume = isPlaying
+        try neuralStems.load(asset, seconds: duration)
+        scheduleGeneration += 1
+        player.stop(); centerCutPlayer.stop()
+        isPlaying = false
+        engine.stop()
+        neuralStems.connect(engine: engine, mixer: upmix)
+        engine.prepare()
+        lastKnownTime = position
+        schedule(file, startingAt: position)
+        if centerCutEnabled { scheduleCenterCut(startingAt: position) }
+        stemsAvailable = true; stemSource = asset.source
+        if asset.source == .roformer { stemPreview = nil }
+        sendStemParameters()
+        if resume { play() }
     }
 
     func applyStemPreset(_ preset: StemMixPreset) {
