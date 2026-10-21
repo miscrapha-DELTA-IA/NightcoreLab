@@ -1,5 +1,8 @@
 name: Playback Foundation Backend Regression
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [main, stage-16a-discovery-engine, stage-17-spotifast-playback-foundation, stage-17b-search-persistence-robustness, stage-17c-ios-remote-transport, stage-17d-karaoke-smoothness , stage-18a-performance-pad-engine, stage-18a2-source-clip-pad, stage-18a3-fingerdrum-latency-profiling, stage-18a4-latency-findings-minimal-fix, stage-18a5-device-latency-evidence, stage-18a6-pad-touch-delivery]
@@ -20,8 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
       - name: Install existing backend dependencies

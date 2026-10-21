@@ -23,8 +23,7 @@ Variáveis de ambiente opcionais:
                               verificação anti-bot do YouTube. No Render, use um Secret File:
                               /etc/secrets/<nome do Secret File>. O nome precisa bater
                               exatamente (em produção: /etc/secrets/COOKIES_FILE).
-                              Diagnóstico: o health check (GET /) mostra "cookies",
-                              "cookies_env" e "secret_files".
+                              Use GET /health para o monitoramento público seguro.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ import concurrent.futures
 from dataclasses import dataclass
 import gzip
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -223,8 +223,17 @@ app = FastAPI(
 @app.middleware("http")
 async def _limit_heavy_requests(request: Request, call_next):
     if request.url.path in {"/download", "/align-lyrics"}:
-        token = request.headers.get("X-Gnarly-Token") or request.query_params.get("access_token")
-        failure = _access_control.check(token, request.client.host if request.client else "unknown")
+        client_ip = request.client.host if request.client else "unknown"
+        ticket = request.query_params.get("ticket") if request.url.path == "/download" else None
+        if ticket:
+            try:
+                video_id = _youtube_video_id(request.query_params.get("url", ""))
+            except HTTPException as error:
+                return JSONResponse({"detail": error.detail}, status_code=error.status_code)
+            failure = _access_control.check_ticket(ticket, client_ip, video_id)
+        else:
+            token = request.headers.get("X-Gnarly-Token")
+            failure = _access_control.check(token, client_ip)
         if failure:
             status, message, retry = failure
             headers = {"Retry-After": str(retry)} if retry else {}
@@ -353,7 +362,7 @@ def _youtube_video_id(url: str) -> str:
     """Valida o destino e normaliza watch, youtu.be, shorts, live e embed."""
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    if parsed.scheme not in {"http", "https"} or host not in ALLOWED_HOSTS:
+    if parsed.scheme != "https" or host not in ALLOWED_HOSTS:
         raise HTTPException(status_code=400, detail="Apenas links do YouTube são aceitos.")
     if parsed.username or parsed.password or parsed.port not in {None, 80, 443}:
         raise HTTPException(status_code=400, detail="Link do YouTube inválido.")
@@ -397,6 +406,26 @@ def _related_entries(info: dict, seed_id: str) -> list[RelatedVideo]:
         if len(videos) == RELATED_LIMIT:
             break
     return videos
+
+
+class AccessTicketRequest(BaseModel):
+    url: HttpUrl
+
+
+@app.post("/access-ticket")
+def access_ticket(payload: AccessTicketRequest, request: Request):
+    """Token stays on the initial HTTPS POST; URLSession redirects get only the
+    single-use ticket, never the long-lived friend credential."""
+    video_id = _youtube_video_id(str(payload.url))
+    token = request.headers.get("X-Gnarly-Token")
+    client_ip = request.client.host if request.client else "unknown"
+    ticket, failure = _access_control.issue_ticket(token, client_ip, video_id)
+    if failure:
+        status, message, retry = failure
+        headers = {"Retry-After": str(retry)} if retry else {}
+        return JSONResponse({"detail": message}, status_code=status, headers=headers)
+    return JSONResponse({"ticket": ticket, "expires_in": 180},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/related", response_model=list[RelatedVideo])
@@ -520,11 +549,6 @@ def health():
         # Runtime de JavaScript + componente EJS: necessários para o YouTube.
         "deno": shutil.which("deno") is not None,
         "ejs": importlib.util.find_spec("yt_dlp_ejs") is not None,
-        "cookies": bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE),
-        # Diagnóstico (só nomes, nunca o conteúdo): ajuda a achar o que falta na configuração.
-        "cookies_env": COOKIES_FILE or None,
-        "cookies_summary": _cookies_summary(),
-        "secret_files": _secret_file_names(),
     }
 
 
@@ -580,16 +604,17 @@ def _rss_bytes() -> int:
 
 
 @app.get("/metrics")
-def metrics():
-    cookie = _cookies_summary()
-    cookie_status = ("missing" if not cookie.get("found") else
-                     "invalid" if not cookie.get("netscape_header") or not cookie.get("youtube_domain") else
-                     "logged_in" if cookie.get("logged_in") else "present")
+def metrics(request: Request):
+    # Operational details are not public API. Configure a separate admin token.
+    expected = os.getenv("GNARLY_METRICS_TOKEN", "")
+    supplied = request.headers.get("X-Gnarly-Metrics-Token", "")
+    if not expected or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=404, detail="Não encontrado.")
     return {"pid": os.getpid(), "queue_depth": len(in_flight_downloads),
             "active_jobs": sum(not item.task.done() for item in in_flight_downloads.values()),
             "rss_bytes": _rss_bytes(), "peak_rss_bytes": _peak_rss_bytes,
             "r2_enabled": r2_cache is not None,
-            "r2_uploading": len(_r2_uploading), "cookie_status": cookie_status,
+            "r2_uploading": len(_r2_uploading),
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
             **_counters}
 
@@ -773,8 +798,9 @@ def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | 
 @app.post("/download")
 async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
                    redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET"):
-    url = str(request.url)
-    video_id = _youtube_video_id(url)
+    video_id = _youtube_video_id(str(request.url))
+    # Never forward user-supplied query parameters to yt-dlp or its extractors.
+    url = f"https://www.youtube.com/watch?v={video_id}"
     if delivery not in {"audio", "url"}:
         raise HTTPException(status_code=400, detail="Modo de entrega inválido.")
     if redirect_cache:
@@ -984,7 +1010,7 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
                  summary.get("entries"), summary.get("youtube_domain"),
                  summary.get("logged_in"), ", ".join(summary.get("login_cookies", [])) or "nenhum")
     else:
-        log.info("sem cookies (COOKIES_FILE=%r)", COOKIES_FILE)
+        log.info("sem cookies configurados")
 
     strategies = [s for s in _STRATEGIES if has_cookies or not s[1]]
     ready = [s for s in strategies if _strategy_available(s[0])]

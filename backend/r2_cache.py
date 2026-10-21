@@ -25,7 +25,7 @@ import xml.etree.ElementTree as ET
 import httpx
 
 TTL_SECONDS = 7 * 24 * 3600
-SIGNED_URL_SECONDS = 3600
+SIGNED_URL_SECONDS = 900
 HOT_RECHECK_SECONDS = 300
 _EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 _NS = "http://s3.amazonaws.com/doc/2006-03-01/"
@@ -93,6 +93,10 @@ class R2Cache:
             await self.client.aclose()
 
     def _path(self, key: str = "") -> str:
+        # The only object key exposed by the audio cache is videoID/audio.m4a.
+        # Do not permit ../, percent-encoded separators or arbitrary S3 keys.
+        if key and not re.fullmatch(r"[A-Za-z0-9_-]{11}/audio\.m4a", key):
+            raise ValueError("Chave de cache R2 inválida")
         pieces = [self.config.bucket] + ([*key.split("/")] if key else [])
         return "/" + "/".join(_encode(piece) for piece in pieces)
 

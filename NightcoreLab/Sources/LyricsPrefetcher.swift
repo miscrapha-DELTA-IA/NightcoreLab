@@ -195,8 +195,16 @@ actor LyricsPrefetcher {
             url: "https://www.youtube.com/watch?v=\(videoID)", lyrics: lyrics)
         guard let body = try? JSONEncoder().encode(payload) else { return nil }
         request.httpBody = body
+        let token = ServerAccessTokenStore.load(for: baseURL)
+        if !token.isEmpty {
+            guard endpoint.scheme?.lowercased() == "https" else { return nil }
+            request.setValue(token, forHTTPHeaderField: "X-Gnarly-Token")
+        }
+        // Do not forward invitation headers if a server returns a redirect.
+        let session = token.isEmpty ? URLSession.shared : URLSession(
+            configuration: .ephemeral, delegate: AccessTicketRedirectBlocker(), delegateQueue: nil)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard !Task.isCancelled,
                   (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             let result = try JSONDecoder().decode(AlignmentResponse.self, from: data)

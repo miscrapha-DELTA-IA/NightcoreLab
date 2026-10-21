@@ -1,5 +1,8 @@
 name: Backend Smoke Test
 
+permissions:
+  contents: read
+
 # Testa o servidor de produção de ponta a ponta, num runner Linux
 # (custa 1 minuto da cota por minuto, contra 10 do macOS).
 on:
@@ -23,7 +26,6 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-      issues: write
 
     env:
       BASE_URL: https://nightcorelab.onrender.com
@@ -32,8 +34,10 @@ jobs:
       TEST_VIDEO: https://www.youtube.com/watch?v=jNQXAC9IVRw
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
       - name: Testar contratos offline de busca e sugestões
@@ -116,9 +120,16 @@ jobs:
             || { echo "::error::A resposta não é um contêiner MP4/M4A"; exit 1; }
 
           echo "✅ .m4a válido recebido do servidor"
-
+  
+  notificar:
+    name: Aviso isolado de falha
+    needs: smoke
+    if: ${{ always() && needs.smoke.result == 'failure' && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
       - name: Abrir issue quando o smoke diário falhar
-        if: failure() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

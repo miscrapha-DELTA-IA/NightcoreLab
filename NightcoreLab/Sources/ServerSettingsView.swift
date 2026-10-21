@@ -9,11 +9,13 @@ struct ServerSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = ""
+    @State private var tokenDraft = ""
+    @State private var originalToken = ""
     @State private var isTesting = false
     @State private var testResult: (ok: Bool, message: String)?
 
     private var normalizedDraft: String { AudioDownloadManager.normalizedServerURL(draft) }
-    private var hasChanges: Bool { normalizedDraft != AudioDownloadManager.normalizedServerURL(serverURL) }
+    private var hasChanges: Bool { normalizedDraft != AudioDownloadManager.normalizedServerURL(serverURL) || tokenDraft != originalToken }
 
     var body: some View {
         NavigationStack {
@@ -36,7 +38,29 @@ struct ServerSettingsView: View {
                         .padding(.vertical, 14)
                         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.07)))
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(accent.opacity(0.3), lineWidth: 1))
-                        .onChange(of: draft) { _, _ in testResult = nil }
+                        .onChange(of: draft) { _, _ in
+                            testResult = nil
+                            originalToken = ServerAccessTokenStore.load(for: normalizedDraft)
+                            tokenDraft = originalToken
+                        }
+
+                    Text("Convite privado para testes (opcional)")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.55))
+
+                    SecureField("Token de acesso", text: $tokenDraft)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(.white)
+                        .tint(accent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.07)))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(accent.opacity(0.3), lineWidth: 1))
+
+                    Text("O convite é salvo apenas no Keychain do iPhone. Nunca é publicado com o código.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.45))
 
                     HStack(spacing: 10) {
                         Button {
@@ -84,6 +108,10 @@ struct ServerSettingsView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Salvar") {
+                        guard ServerAccessTokenStore.save(tokenDraft, for: normalizedDraft) else {
+                            testResult = (ok: false, message: "Não foi possível salvar o convite no Keychain.")
+                            return
+                        }
                         serverURL = normalizedDraft
                         downloader.errorMessage = nil
                         downloader.warmUp()
@@ -96,7 +124,11 @@ struct ServerSettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { draft = serverURL }
+        .onAppear {
+            draft = serverURL
+            originalToken = ServerAccessTokenStore.load(for: serverURL)
+            tokenDraft = originalToken
+        }
     }
 
     private func test() async {

@@ -46,11 +46,20 @@ def test_presigned_get_is_short_lived_and_private():
     parsed = urlsplit(url)
     query = parse_qs(parsed.query)
     assert parsed.path == "/gnarly-cache/abcdefghijk/audio.m4a"
-    assert query["X-Amz-Expires"] == ["3600"]
+    assert query["X-Amz-Expires"] == ["900"]
     assert query["X-Amz-SignedHeaders"] == ["host"]
     assert len(query["X-Amz-Signature"][0]) == 64
     assert "secret" not in url
     assert cache.presigned_head("abcdefghijk/audio.m4a", datetime(2026, 10, 20, tzinfo=timezone.utc)) != url
+
+
+def test_r2_rejects_untrusted_object_keys():
+    cache = R2Cache(R2Config.from_env({**BASE, "R2_ACCOUNT_ID": ACCOUNT}),
+                    client=httpx.AsyncClient())
+    for key in ("../audio.m4a", "abcdefghijk/../../secret", "abcdefghijk/%2fsecret",
+                "abcdefghijk/other.m4a", "abcdefghijk//audio.m4a"):
+        with pytest.raises(ValueError):
+            cache.presigned_get(key)
 
 
 def test_head_ttl_and_hot_index():
@@ -159,7 +168,7 @@ def test_download_r2_redirect_and_local_fallback():
             assert head.headers["location"].endswith("/signed-head")
             result = client.get("/download?url=https://www.youtube.com/watch?v=abcdefghijk&delivery=url")
             assert result.status_code == 200
-            assert result.json()["expires_in"] == 3600
+            assert result.json()["expires_in"] == 900
 
     class FailedR2:
         async def find(self, _key):

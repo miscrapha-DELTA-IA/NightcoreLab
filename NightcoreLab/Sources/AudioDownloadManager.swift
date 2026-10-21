@@ -27,6 +27,11 @@ final class AudioDownloadManager: ObservableObject {
     var backgroundCompletionHandler: (() -> Void)?
 
     private let transfers: DownloadKit.DownloadManager
+    // A non-redirecting, cookie-free session only for exchanging friend tokens.
+    // The separate background transfer never receives the long-lived credential.
+    private let ticketSession = URLSession(configuration: .ephemeral,
+                                           delegate: AccessTicketRedirectBlocker(),
+                                           delegateQueue: nil)
     private var cache = TrackAudioCache()
     private var tracks: [UUID: Track] = [:]
     private var tasks: [UUID: URLSessionDownloadTask] = [:]
@@ -47,6 +52,8 @@ final class AudioDownloadManager: ObservableObject {
         configuration.timeoutIntervalForRequest = 180
         configuration.timeoutIntervalForResource = 900
         configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
         transfers = DownloadKit.DownloadManager(sessionConfiguration: configuration)
         transfers.setDelegate(self)
         // Foreground selection + one background prefetch at a time.
@@ -242,13 +249,45 @@ final class AudioDownloadManager: ObservableObject {
         }
     }
 
+    private func accessTicket(for track: Track, server: String) async throws -> String? {
+        let token = ServerAccessTokenStore.load(for: server)
+        guard !token.isEmpty else { return nil }
+        guard var components = URLComponents(string: server),
+              components.scheme?.lowercased() == "https",
+              components.host != nil else { throw URLError(.secureConnectionFailed) }
+        components.path += "/access-ticket"
+        guard let url = components.url else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url, timeoutInterval: 25)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(token, forHTTPHeaderField: "X-Gnarly-Token")
+        request.httpBody = try JSONEncoder().encode(AccessTicketRequest(url: track.url.absoluteString))
+        let (data, response) = try await ticketSession.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        return try JSONDecoder().decode(AccessTicketReply.self, from: data).ticket
+    }
+
     private func append(_ track: Track, priority: Float) async {
-        guard var endpoint = URLComponents(string: Self.apiBaseURL) else {
+        let server = Self.apiBaseURL
+        let ticket: String?
+        do {
+            ticket = try await accessTicket(for: track, server: server)
+        } catch {
+            fail(track, message: "Convite do servidor inválido ou expirado. Confira o token em Servidor.")
+            return
+        }
+        guard var endpoint = URLComponents(string: server) else {
             fail(track, message: "Endereço do servidor inválido.")
             return
         }
         endpoint.path += "/download"
         endpoint.queryItems = [URLQueryItem(name: "url", value: track.url.absoluteString)]
+        if let ticket {
+            endpoint.queryItems?.append(URLQueryItem(name: "ticket", value: ticket))
+        }
         guard let url = endpoint.url else {
             fail(track, message: "Endereço do servidor inválido.")
             return
@@ -382,6 +421,22 @@ final class AudioDownloadManager: ObservableObject {
     }
 
 
+    nonisolated static func isTrustedDeliveryURL(_ url: URL, serverURL: String) -> Bool {
+        guard let server = URLComponents(string: serverURL),
+              let destination = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let sourceHost = server.host?.lowercased(),
+              let host = destination.host?.lowercased(),
+              destination.user == nil, destination.password == nil else { return false }
+        if host == sourceHost {
+            return destination.scheme?.lowercased() == server.scheme?.lowercased()
+        }
+        // Only S3's account-scoped Cloudflare R2 HTTPS endpoint may receive a 302.
+        return destination.scheme?.lowercased() == "https"
+            && destination.port == nil
+            && host.range(of: "^[a-f0-9]{32}\\.r2\\.cloudflarestorage\\.com$",
+                          options: .regularExpression) != nil
+    }
+
     nonisolated static func looksLikeYouTube(_ link: String) -> Bool {
         youtubeVideoURL(from: link) != nil
     }
@@ -422,6 +477,26 @@ final class AudioDownloadManager: ObservableObject {
     }
 }
 
+private struct AccessTicketRequest: Encodable {
+    let url: String
+}
+
+private struct AccessTicketReply: Decodable {
+    let ticket: String
+}
+
+// Prevent a malicious/misconfigured backend from forwarding invitation headers
+// across a 301/302. This delegate is used ONLY for POST /access-ticket.
+final class AccessTicketRedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 private struct HealthResponse: Decodable {
     let status: String
     let ffmpeg: Bool?
@@ -454,6 +529,15 @@ extension AudioDownloadManager: DownloadManagerDelegate {
 
     func download(_ download: Download, didFinishDownloadingTo location: URL) async {
         guard var track = tracks[download.id] else { return }
+        let finalURL = tasks[download.id]?.response?.url ?? download.url
+        guard Self.isTrustedDeliveryURL(finalURL, serverURL: Self.apiBaseURL) else {
+            fail(track, message: "O servidor redirecionou para um destino não permitido.")
+            tracks[download.id] = nil
+            tasks[download.id] = nil
+            persistPending()
+            serialize { await self.transfers.remove(download) }
+            return
+        }
         if let response = tasks[download.id]?.response as? HTTPURLResponse {
             let title = response.suggestedFilename.map { ($0 as NSString).deletingPathExtension }
                 .flatMap { $0.lowercased() == "audio" ? nil : $0 }
