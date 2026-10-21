@@ -3,6 +3,32 @@ import XCTest
 @testable import NightcoreLab
 
 final class CloudStemRecoveryTests: XCTestCase {
+    func testTransferCommitsResponseAndReopenedCoordinatorReusesItWithoutNetwork() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        RecoveryRequests.reset()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RecoveryRequests.self]
+        let transfer = CloudStemTransfer(configuration: config, directory: directory)
+        let url = URL(string: "https://backend.invalid/v1/stems/cloud/ticket")!
+        let first = try await withThrowingTaskGroup(of: URL.self) { group in
+            group.addTask { try await transfer.download(url, key: "saved-response") }
+            group.addTask {
+                try await Task.sleep(for: .seconds(8))
+                throw URLError(.timedOut)
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
+        }
+        let data = try Data(contentsOf: first)
+        XCTAssertFalse(data.isEmpty)
+        XCTAssertEqual(RecoveryRequests.count(url.path), 1)
+        let reopened = CloudStemTransfer(configuration: config, directory: directory)
+        let restored = try await reopened.download(url, key: "saved-response")
+        XCTAssertEqual(try Data(contentsOf: restored), data)
+        XCTAssertEqual(RecoveryRequests.count(url.path), 1)
+    }
+
     func testNetworkDropAndPartialDownloadsResumeSameGPUJobWithoutAnotherAdmission() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
