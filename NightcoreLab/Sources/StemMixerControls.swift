@@ -24,8 +24,9 @@ struct StemMixerControls: View {
                     Text("\(Int(audio.stemPreparationProgress * 100))%")
                         .font(.caption.monospacedDigit())
                     Spacer()
-                    Button("Cancelar") { audio.cancelStemPreparation(message: "Separação cancelada.") }
+                    Button(audio.isCancellingStems ? "Cancelando…" : "Cancelar") { audio.cancelStemPreparation() }
                         .font(.caption.weight(.semibold))
+                        .disabled(audio.isCancellingStems)
                 }
                 Text("Mantenha o app aberto. O tempo varia conforme a música e o iPhone.")
                     .font(.caption2).foregroundStyle(.secondary)

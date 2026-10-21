@@ -25,6 +25,7 @@ enum AudioEngineError: LocalizedError {
     case renderFailed
     case unsupportedAudio
     case exportInProgress
+    case stemPreparationInProgress
 
     var errorDescription: String? {
         switch self {
@@ -33,6 +34,7 @@ enum AudioEngineError: LocalizedError {
         case .renderFailed:            return "Falha ao renderizar o áudio."
         case .unsupportedAudio:        return "Áudio inválido ou não suportado. Importe MP3, M4A, WAV ou AIFF."
         case .exportInProgress:        return "Aguarde a exportação atual terminar."
+        case .stemPreparationInProgress: return "Aguarde a separação terminar ou cancele antes de exportar."
         }
     }
 }
@@ -75,6 +77,10 @@ struct StoryAudioSource: Sendable {
 @MainActor
 @Observable
 final class AudioEngineManager {
+    typealias NeuralPreparation = @Sendable (
+        URL, @escaping @Sendable () -> Void,
+        @escaping @Sendable (Double, String) -> Void
+    ) async throws -> StemAsset
 
     // Faixas válidas (alinhadas aos limites da extensão de PC, para não estourar a mixagem)
     static let speedRange: ClosedRange<Float>  = 0.5...2.0
@@ -122,7 +128,9 @@ final class AudioEngineManager {
     @ObservationIgnored private let neuralStems = NeuralStemPlayback()
     @ObservationIgnored private var stemPreparationTask: Task<Void, Never>?
     @ObservationIgnored private var stemPreparationID = UUID()
+    @ObservationIgnored private let neuralPreparation: NeuralPreparation
     private(set) var isPreparingStems = false
+    private(set) var isCancellingStems = false
     private(set) var stemPreparationProgress = 0.0
     private(set) var stemPreparationMessage = ""
     private(set) var stemPreparationError: String?
@@ -244,8 +252,12 @@ final class AudioEngineManager {
         subsystem: "com.nightcorelab.app", category: "AudioTransport")
     var isAudioEngineRunning: Bool { engine.isRunning }
 
-    init(idleStopDelay: Duration = .seconds(10)) {
+    init(idleStopDelay: Duration = .seconds(10),
+         neuralPreparation: @escaping NeuralPreparation = { source, reclaim, progress in
+             try await NeuralStemWorker.prepare(source: source, reclaimMemory: reclaim, progress: progress)
+         }) {
         self.idleStopDelay = max(.zero, idleStopDelay)
+        self.neuralPreparation = neuralPreparation
         Task.detached(priority: .utility) { Self.clearTempAudioFiles() }
         configureSession()
         setupEngine()
@@ -1000,10 +1012,17 @@ final class AudioEngineManager {
     }
 
     func cancelStemPreparation(message: String = "") {
-        stemPreparationID = UUID()
-        stemPreparationTask?.cancel(); stemPreparationTask = nil
-        isPreparingStems = false; stemPreparationProgress = 0
-        stemPreparationMessage = message; stemPreparationError = nil
+        guard let task = stemPreparationTask else {
+            stemPreparationProgress = 0
+            stemPreparationMessage = message; stemPreparationError = nil
+            return
+        }
+        isCancellingStems = true
+        stemPreparationMessage = message.isEmpty ? "Cancelando separação…" : message
+        stemPreparationError = nil
+        task.cancel()
+        // Keep the resource lease until the utility worker acknowledges the
+        // cancellation and drains its models. A prediction cannot be preempted.
     }
 
     func prepareNeuralStems() {
@@ -1013,21 +1032,36 @@ final class AudioEngineManager {
             return
         }
         let request = UUID(), revision = playbackSourceRevision
+        let prepare = neuralPreparation
         stemPreparationID = request
-        isPreparingStems = true; stemPreparationProgress = 0; stemPreparationError = nil
+        isPreparingStems = true; isCancellingStems = false
+        stemPreparationProgress = 0; stemPreparationError = nil
         stemPreparationMessage = "Preparando separação…"
+        removeVisualMeterTap()
         let lease = UIApplication.shared.beginBackgroundTask(withName: "Finalizar separação") { [weak self] in
             Task { @MainActor in self?.cancelStemPreparation() }
         }
         stemPreparationTask = Task { [weak self] in
-            defer { if lease != .invalid { UIApplication.shared.endBackgroundTask(lease) } }
+            await MusicIntelligenceEngine.shared.suspendForNeuralWork()
+            defer {
+                if lease != .invalid { UIApplication.shared.endBackgroundTask(lease) }
+                if let self, self.stemPreparationID == request {
+                    self.isPreparingStems = false; self.isCancellingStems = false
+                    self.stemPreparationTask = nil
+                    if self.isPlaying { self.installVisualMeterTap() }
+                }
+                Task { await MusicIntelligenceEngine.shared.resumeAfterNeuralWork() }
+            }
             do {
                 await NowPlayingArtworkLoader.releaseDecodedCovers()
                 try Task.checkCancellation()
-                let asset = try await NeuralStemWorker.prepare(source: sourceURL) { [weak self] value, message in
+                let asset = try await prepare(sourceURL, {
+                    Task { @MainActor in await NowPlayingArtworkLoader.releaseDecodedCovers() }
+                }) { [weak self] value, message in
                     Task { @MainActor in
                         guard let self, self.stemPreparationID == request,
-                              self.playbackSourceRevision == revision else { return }
+                              self.playbackSourceRevision == revision,
+                              self.isPreparingStems, !self.isCancellingStems else { return }
                         self.stemPreparationProgress = value; self.stemPreparationMessage = message
                     }
                 }
@@ -1049,13 +1083,14 @@ final class AudioEngineManager {
                 self.stemsAvailable = true; self.stemSource = .demucs
                 self.sendStemParameters()
                 if resume { self.play() }
-                self.isPreparingStems = false; self.stemPreparationProgress = 1
+                self.stemPreparationProgress = 1
                 self.stemPreparationMessage = "Stems reais prontos · Demucs"
-                self.stemPreparationTask = nil
             } catch {
                 guard let self, self.stemPreparationID == request else { return }
-                self.isPreparingStems = false; self.stemPreparationTask = nil
                 if !(error is CancellationError) { self.stemPreparationError = error.localizedDescription }
+                else if self.stemPreparationMessage == "Cancelando separação…" {
+                    self.stemPreparationMessage = "Separação cancelada."
+                }
             }
         }
     }
@@ -1129,6 +1164,7 @@ final class AudioEngineManager {
     func exportAudio(format: ExportFormat = .m4a) async throws -> URL {
         guard let sourceURL else { throw AudioEngineError.noFileLoaded }
         guard !isExporting else { throw AudioEngineError.exportInProgress }
+        guard !isPreparingStems else { throw AudioEngineError.stemPreparationInProgress }
 
         isExporting = true
         exportProgress = 0
@@ -1155,6 +1191,7 @@ final class AudioEngineManager {
     /// The live engine remains untouched. No export is started by a pad tap.
     func exportPerformanceAudio(timeline: PerformanceTimeline,
                                 format: ExportFormat = .m4a) async throws -> URL {
+        guard !isPreparingStems else { throw AudioEngineError.stemPreparationInProgress }
         guard let sourceURL else { throw AudioEngineError.noFileLoaded }
         guard !isExporting, timeline.isValid,
               timeline.kitID == padRuntime.kit.id else {
@@ -1184,6 +1221,7 @@ final class AudioEngineManager {
     /// Capture the source and DSP values synchronously when the user taps Share.
     /// A later track change cannot alter the sound of an in-flight Story.
     func storyAudioSource() throws -> StoryAudioSource {
+        guard !isPreparingStems else { throw AudioEngineError.stemPreparationInProgress }
         guard let sourceURL else { throw AudioEngineError.noFileLoaded }
         let settings = RenderSettings(speed: speed, pitch: pitch, reverb: reverb, bass: bass,
                                       reverbPresetRaw: Self.defaultReverbPreset.rawValue)
@@ -1267,7 +1305,7 @@ final class AudioEngineManager {
     /// One output tap, shared by all background instances. Main actor controls
     /// installation; the CoreAudio callback never captures the engine or UI.
     private func installVisualMeterTap() {
-        guard !liveMeterTapInstalled else { return }
+        guard !liveMeterTapInstalled, !isPreparingStems else { return }
         let meter = liveVisualMeter
         engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) {
             buffer, _ in meter.consume(buffer)

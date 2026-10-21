@@ -26,6 +26,7 @@ final class StagedDemucsPipeline {
     }
     let manifest: Manifest
     private let root: URL
+    private(set) var modelLoadCount = 0
 
     init(root: URL) throws {
         self.root = root
@@ -56,6 +57,7 @@ final class StagedDemucsPipeline {
     func run(mix: MLMultiArray, spectrum: MLMultiArray, cpuOnly: Bool,
              check: () throws -> Void, admission: (Int) throws -> Void,
              progress: (Double, String) -> Void) throws -> [String: MLMultiArray] {
+        modelLoadCount = 0
         var state = ["mix": mix, "spec": spectrum]
         var remaining: [String: Int] = [:]
         for instruction in manifest.stages {
@@ -106,12 +108,23 @@ final class StagedDemucsPipeline {
 
     private func predict(name: String, input: [MLMultiArray], outputShapes: [[Int]],
                          cpuOnly: Bool, check: () throws -> Void) throws -> [MLMultiArray] {
+        let model = try loadModel(name: name, cpuOnly: cpuOnly)
+        return try predict(model: model, input: input, outputShapes: outputShapes, check: check)
+    }
+
+    private func loadModel(name: String, cpuOnly: Bool) throws -> MLModel {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = cpuOnly ? .cpuOnly : .cpuAndGPU
         let model = try MLModel(contentsOf: root.appendingPathComponent(name + ".mlmodelc"), configuration: configuration)
         let metadata = model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
         guard metadata["gnarly.model_id"] == DemucsCoreMLModel.identifier,
               metadata["gnarly.stage"] == name else { throw NeuralStemError.incompatibleModel }
+        modelLoadCount += 1
+        return model
+    }
+
+    private func predict(model: MLModel, input: [MLMultiArray], outputShapes: [[Int]],
+                         check: () throws -> Void) throws -> [MLMultiArray] {
         var feed: [String: MLMultiArray] = [:]
         for i in input.indices {
             let key = "input_\(i)"
@@ -130,6 +143,22 @@ final class StagedDemucsPipeline {
         }
     }
 
+    struct SpectralTile: Equatable {
+        let start: Int, end: Int, lower: Int, upper: Int
+        var variant: String { upper - lower == 34 ? "edge" : "inner" }
+    }
+
+    /// Edge tiles are independent of one another and of the interior tiles.
+    /// Grouping them permits ONE loaded model at a time, reused for all tiles
+    /// of that shape. The full-context outputs still go to their original rows.
+    static func spectralTiles(frequencies: Int) -> [SpectralTile] {
+        stride(from: 0, to: frequencies, by: 32).map { start in
+            let end = min(frequencies, start + 32)
+            return SpectralTile(start: start, end: end, lower: max(0, start - 2),
+                                upper: min(frequencies, end + 2))
+        }
+    }
+
     /// The large decoder rewrite is a 3x3 spectral convolution. Frequency
     /// tiles have TWO input halo rows: one for rewrite, one for the overlapping
     /// stride4/kernel8 transpose convolution. Full time context is preserved.
@@ -139,26 +168,32 @@ final class StagedDemucsPipeline {
         guard input.count == 3, stage.outputShapes.count == 1 else { throw NeuralStemError.incompatibleModel }
         let result = try MLMultiArray(shape: stage.outputShapes[0].map { NSNumber(value: $0) }, dataType: .float32)
         let frequencies = input[0].shape[input[0].shape.count - 2].intValue
-        for start in stride(from: 0, to: frequencies, by: 32) {
+        let tiles = Self.spectralTiles(frequencies: frequencies)
+        for variant in ["edge", "inner"] {
             try check()
             try admission(96 * 1_024 * 1_024)
             try autoreleasepool {
-                let end = min(frequencies, start + 32)
-                let lo = max(0, start - 2), hi = min(frequencies, end + 2)
-                let tile = try [0, 1].map { i -> MLMultiArray in
-                    var shape = input[i].shape
-                    shape[shape.count - 2] = NSNumber(value: hi - lo)
-                    let tensor = try MLMultiArray(shape: shape, dataType: .float32)
-                    try Self.copyFrequencies(input[i], start: lo, count: hi - lo, to: tensor, at: 0)
-                    return tensor
-                } + [input[2]]
-                var shape = stage.outputShapes[0]
-                shape[shape.count - 2] = (hi - lo) * 4
-                let variant = hi - lo == 34 ? "edge" : "inner"
-                let output = try predict(name: stage.name + "_" + variant, input: tile,
-                                         outputShapes: [shape], cpuOnly: cpuOnly, check: check)[0]
-                try Self.copyFrequencies(output, start: (start - lo) * 4, count: (end - start) * 4,
-                                         to: result, at: start * 4)
+                let model = try loadModel(name: stage.name + "_" + variant, cpuOnly: cpuOnly)
+                for tileRange in tiles where tileRange.variant == variant {
+                    try check()
+                    try admission(96 * 1_024 * 1_024)
+                    try autoreleasepool {
+                        let start = tileRange.start, end = tileRange.end
+                        let lo = tileRange.lower, hi = tileRange.upper
+                        let tile = try [0, 1].map { i -> MLMultiArray in
+                            var shape = input[i].shape
+                            shape[shape.count - 2] = NSNumber(value: hi - lo)
+                            let tensor = try MLMultiArray(shape: shape, dataType: .float32)
+                            try Self.copyFrequencies(input[i], start: lo, count: hi - lo, to: tensor, at: 0)
+                            return tensor
+                        } + [input[2]]
+                        var shape = stage.outputShapes[0]
+                        shape[shape.count - 2] = (hi - lo) * 4
+                        let output = try predict(model: model, input: tile, outputShapes: [shape], check: check)[0]
+                        try Self.copyFrequencies(output, start: (start - lo) * 4, count: (end - start) * 4,
+                                                 to: result, at: start * 4)
+                    }
+                }
             }
         }
         return result

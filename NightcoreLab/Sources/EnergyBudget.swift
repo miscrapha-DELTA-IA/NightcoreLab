@@ -17,19 +17,23 @@ struct EnergyBudget: Equatable, Sendable {
         guard appState == .active else { return 1 }
         if thermal == .critical { return 1 }
         if thermal == .serious { return 15 }
+        if neuralWorkActive { return 30 }
         return lowPower || constrainedDevice || thermal == .fair ? 30 : 60
     }
     /// Background-only cadence. Audio callbacks and karaoke remain on their
     /// own clocks; this policy never throttles their execution.
     var shaderFPS: Double { maxVisualFPS }
     var secondaryShaderQuality: Float {
-        if thermal.rawValue >= Thermal.serious.rawValue { return 0 }
+        if neuralWorkActive || thermal.rawValue >= Thermal.serious.rawValue { return 0 }
         if lowPower || constrainedDevice || thermal == .fair { return 0.25 }
         return 1
     }
     var pausesShader: Bool {
-        appState != .active || neuralWorkActive || reduceMotion || thermal == .critical
+        appState != .active || reduceMotion || thermal == .critical
     }
+    /// Keep the liquid moving while inference runs, at one quarter of the
+    /// pixel workload. Frozen/export frames always use their authored size.
+    var liveShaderScale: CGFloat { neuralWorkActive ? 0.5 : (constrainedDevice ? 0.75 : 1) }
     var allowsNewAnalysis: Bool {
         appState == .active && !neuralWorkActive && !lowPower && thermal.rawValue < Thermal.serious.rawValue
     }

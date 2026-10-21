@@ -234,6 +234,16 @@ struct TurbulentMarbleView: View {
     }
 
     private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
+        let scale = frozenTime == nil ? energyBudget.liveShaderScale : 1
+        return GeometryReader { geometry in
+            marbleSurface(time: time, resolved: resolved)
+                .frame(width: geometry.size.width * scale, height: geometry.size.height * scale)
+                .scaleEffect(1 / scale, anchor: .topLeading)
+        }
+        .clipped()
+    }
+
+    private func marbleSurface(time: Float, resolved: MaterialFrame) -> some View {
         let palette = theme.palette
         let uniforms = resolved.marbleUniforms
         let binding = MarbleSurfaceBinding.resolve(frame: resolved)
