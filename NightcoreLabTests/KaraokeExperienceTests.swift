@@ -29,6 +29,13 @@ final class KaraokeExperienceTests: XCTestCase {
             let writer = try AVAudioFile(forWriting: url, settings: format.settings)
             try writer.write(from: buffer)
         }
+        let invalidSpeech = AutoLyricsTranscriber.guide(recognizedWords: [
+            .init(text: "", start: 0, end: 0),
+            .init(text: " ", start: 0, end: 0.5),
+            .init(text: "invalid", start: 0, end: .infinity)
+        ], vocalURL: url, duration: 1, bars: [])
+        XCTAssertFalse(invalidSpeech.isEmpty)
+        XCTAssertTrue(invalidSpeech.allSatisfy { $0.provenance == .rhythmicCue })
         let started = expectation(description: "Local fallback starts")
         let generated = expectation(description: "Local fallback finishes without a speech service")
         let store = LyricsStore(fallbackGenerator: { url, duration, bars in

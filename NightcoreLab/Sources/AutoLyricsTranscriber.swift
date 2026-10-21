@@ -67,15 +67,23 @@ enum AutoLyricsTranscriber {
 
     static func generate(vocalURL: URL, duration: TimeInterval,
                          bars: [TimeInterval], allowSpeechRecognition: Bool = true) async -> [TimedLyricLine] {
+        var recognized: [TimedWord]?
         if allowSpeechRecognition, SFSpeechRecognizer.authorizationStatus() == .authorized,
            let recognizer = SFSpeechRecognizer(locale: .current),
-           recognizer.supportsOnDeviceRecognition,
-           let words = await recognizeFullTrack(vocalURL, recognizer: recognizer),
-           !words.isEmpty {
-            return group(words, bars: bars)
+           recognizer.supportsOnDeviceRecognition {
+            recognized = await recognizeFullTrack(vocalURL, recognizer: recognizer)
         }
-        return (try? rhythmicCues(vocalURL: vocalURL, duration: duration, bars: bars)) ??
-            fallbackBars(duration: duration, bars: bars)
+        return guide(recognizedWords: recognized, vocalURL: vocalURL, duration: duration, bars: bars)
+    }
+
+    static func guide(recognizedWords: [TimedWord]?, vocalURL: URL, duration: TimeInterval,
+                      bars: [TimeInterval]) -> [TimedLyricLine] {
+        if let recognizedWords {
+            let lines = group(recognizedWords, bars: bars)
+            if !lines.isEmpty { return lines }
+        }
+        let cues = (try? rhythmicCues(vocalURL: vocalURL, duration: duration, bars: bars)) ?? []
+        return cues.isEmpty ? fallbackBars(duration: duration, bars: bars) : cues
     }
 
     static func requestPermission() async -> Bool {
@@ -160,7 +168,10 @@ enum AutoLyricsTranscriber {
     }
 
     static func group(_ words: [TimedWord], bars: [TimeInterval]) -> [TimedLyricLine] {
-        let ordered = words.filter { !$0.text.isEmpty && $0.start.isFinite && $0.end > $0.start }
+        let ordered = words.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            $0.start.isFinite && $0.end.isFinite && $0.end > $0.start
+        }
             .sorted { $0.start < $1.start }
         guard !ordered.isEmpty else { return [] }
         var groups: [[TimedWord]] = [], current: [TimedWord] = []
