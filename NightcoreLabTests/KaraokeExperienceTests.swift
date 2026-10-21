@@ -48,12 +48,15 @@ final class KaraokeExperienceTests: XCTestCase {
         })
         let trackID = "missing-\(UUID().uuidString)"
         store.beginLoading(trackID: trackID)
-        store.loadFallback(trackID: trackID, plainText: nil,
-                           sourceURL: url, duration: 1)
+        let loading = try XCTUnwrap(store.loadFallback(trackID: trackID, plainText: nil,
+                                                       sourceURL: url, duration: 1))
         await fulfillment(of: [started, generated], timeout: 5)
-        for _ in 0..<100 where store.status != .ready {
-            try await Task.sleep(for: .milliseconds(100))
+        let persisted = expectation(description: "Local guide is installed and persisted")
+        Task {
+            await loading.value
+            persisted.fulfill()
         }
+        await fulfillment(of: [persisted], timeout: 10)
         XCTAssertEqual(store.trackID, trackID)
         XCTAssertEqual(store.status, .ready)
         XCTAssertFalse(store.lines.isEmpty)

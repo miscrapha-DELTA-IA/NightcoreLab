@@ -148,12 +148,14 @@ final class LyricsStore {
         needsReview = false
     }
 
-    /// Cache-first, then utility-priority stem preparation and local speech.
+    /// Cache-first, then utility-priority local speech/guide generation.
     /// A later catalog result or track replacement cancels this task.
+    /// The returned handle includes persistence, for callers that need it.
+    @discardableResult
     func loadFallback(trackID: String, plainText: String?, sourceURL: URL,
                       duration: TimeInterval, force: Bool = false,
-                      retryRecognition: Bool = false) {
-        guard self.trackID == trackID, force || status != .ready else { return }
+                      retryRecognition: Bool = false) -> Task<Void, Never>? {
+        guard self.trackID == trackID, force || status != .ready else { return nil }
         loadTask?.cancel()
         loadGeneration = UUID()
         let generation = loadGeneration
@@ -182,10 +184,13 @@ final class LyricsStore {
                 generated = await generateFallback(vocalURL, duration, bars)
             }
             guard !Task.isCancelled else { return }
+            // A generated guide is ready to display. Slow disk persistence
+            // must not keep the karaoke UI in its searching state.
+            await self?.installFallback(generated, trackID: trackID, generation: generation)
             await AutoLyricsCache.shared.save(generated, trackID: trackID,
                                               fingerprint: fingerprint)
-            await self?.installFallback(generated, trackID: trackID, generation: generation)
         }
+        return loadTask
     }
 
     private func installFallback(_ generated: [TimedLyricLine], trackID: String, generation: UUID) {
