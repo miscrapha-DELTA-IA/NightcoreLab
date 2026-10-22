@@ -15,6 +15,9 @@ final class SearchSession {
     }
     let omnibox: OmniboxEngine
     var hasRestoredQuery = false
+    /// Last explicitly selected drawer tab belongs to the playback session, not to
+    /// the conditional SwiftUI view. Closing or selecting a song must not reset it.
+    var hubTab: DrawerHubTab = .mix
     var searchResults: [Track] = []
     var isSearching = false
     var errorMessage: String?

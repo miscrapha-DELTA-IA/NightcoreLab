@@ -44,7 +44,6 @@ struct SearchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchExpansionOverride: Bool?
     @AppStorage(AudioDownloadManager.serverURLKey) private var savedServerURL = AudioDownloadManager.defaultServerURL
-    @State private var hubTab: DrawerHubTab = .mix
     @State private var collectionAnchor: Track?
     @State private var collectionMode: AlbumArtistMode = .both
     @State private var remoteCollection: AlbumArtistCollection?
@@ -88,7 +87,7 @@ struct SearchView: View {
     private func focusAlbumArtist(_ track: Track) {
         collectionAnchor = downloader.cachedTrack(track)
         collectionMode = .both
-        hubTab = .albumArtist
+        session.hubTab = .albumArtist
         isFocused = false
     }
     private var isDiscoverVisible: Bool {
@@ -278,7 +277,7 @@ struct SearchView: View {
                 }
             }
             .accessibilityIdentifier("searchDrawer.hubTabs")
-            switch hubTab {
+            switch session.hubTab {
             case .mix:
                 HStack {
                     Button("▶ Tocar Mix (15)") { onPlayMix(mixTracks) }
@@ -378,16 +377,16 @@ struct SearchView: View {
     }
 
     private func hubPill(_ tab: DrawerHubTab, _ title: String) -> some View {
-        Button { hubTab = tab } label: {
+        Button { session.hubTab = tab } label: {
             Text(title).font(.caption2.weight(.bold)).lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .fixedSize(horizontal: true, vertical: false)
-                .background(hubTab == tab ? theme.accent.opacity(0.23) : .white.opacity(0.07),
+                .background(session.hubTab == tab ? theme.accent.opacity(0.23) : .white.opacity(0.07),
                             in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(hubTab == tab ? .isSelected : [])
+        .accessibilityAddTraits(session.hubTab == tab ? .isSelected : [])
         .accessibilityIdentifier("searchDrawer.tab.\(tab.rawValue)")
     }
 
@@ -578,7 +577,7 @@ struct SearchView: View {
                     .accessibilityIdentifier("searchDrawer.searching")
             }
 
-            if showsQuickAccess || hubTab == .albumArtist {
+            if showsQuickAccess || session.hubTab == .albumArtist {
                 quickHub
             }
 
@@ -708,11 +707,8 @@ struct SearchView: View {
             if zen { isFocused = false }
         }
         .onChange(of: isPresented) { _, presented in
+            // Playback closes the drawer without changing its active section.
             if !presented { isFocused = false }
-            else if showsQuickAccess {
-                collectionAnchor = nil
-                hubTab = .mix
-            }
         }
         .onChange(of: isFocused) { _, focused in
             if focused { downloader.warmUp() }
@@ -720,8 +716,8 @@ struct SearchView: View {
         .onChange(of: activeTrack?.id) { _, _ in
             collectionAnchor = nil
         }
-        .task(id: "\(isPresented)-\(hubTab == .albumArtist)-\((collectionAnchor ?? activeTrack ?? recentTracks.first)?.id ?? "")") {
-            guard isPresented, hubTab == .albumArtist,
+        .task(id: "\(isPresented)-\(session.hubTab == .albumArtist)-\((collectionAnchor ?? activeTrack ?? recentTracks.first)?.id ?? "")") {
+            guard isPresented, session.hubTab == .albumArtist,
                   let anchor = collectionAnchor ?? activeTrack ?? recentTracks.first else { return }
             catalogLoading = true
             let result = await MusicCatalogService.shared.collection(anchor: anchor,

@@ -37,18 +37,24 @@ jobs:
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
-      - name: Verify unchanged qualified model and DSP inputs
+      - name: Verify model and DSP unchanged since qualified build 58
         id: baseline
         run: |
+          # Build 58 updated the DSP after the old (build 56) SHA manifest.
+          # Reuse only its freshly qualified model, and reject any additional
+          # changes to the exact model/DSP inputs; the full iOS workflow also
+          # independently runs PyTorch/Core ML parity for this hotfix.
+          git fetch --no-tags --depth=1 origin 2cf3c3f461a41a76434f27a2e1f06c05eda68c4d
           python3 - <<'PY'
-          import hashlib, json, os
+          import json, os, subprocess
           from pathlib import Path
           baseline = json.loads(Path('scripts/neural-stems/cloud-model-baseline.json').read_text())
-          for name, expected in baseline['files'].items():
-              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, 'Requalify model/DSP before reusing artifact: ' + name
+          subprocess.run(['git', 'diff', '--exit-code',
+                          '2cf3c3f461a41a76434f27a2e1f06c05eda68c4d', 'HEAD',
+                          '--', *baseline['files'].keys()], check=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-              stream.write(f"run_id={baseline['qualified_run']}\n")
-          print('Unchanged model/DSP bundle; worker lifecycle tested below. Model qualified by', baseline['qualified_source'])
+              stream.write('run_id=39720534180\n')
+          print('Model/DSP inputs match successful build 58, workflow run 39720534180')
           PY
       - name: Reuse the previously qualified complete model bundle
         uses: actions/download-artifact@v4
@@ -108,9 +114,9 @@ jobs:
           test -d CloudBuild/Release-iphoneos/NightcoreLab.app
           mkdir -p Payload
           mv CloudBuild/Release-iphoneos/NightcoreLab.app Payload/
-          zip -qry Gnarly-57-Continuity.ipa Payload
+          zip -qry Gnarly-58.1-SSE-Recovery.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: Gnarly-57-Continuity-Beta
-          path: Gnarly-57-Continuity.ipa
+          name: Gnarly-58.1-SSE-Recovery-Beta
+          path: Gnarly-58.1-SSE-Recovery.ipa
           retention-days: 7
