@@ -142,6 +142,28 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(OverlapAdd.defaultOverlap, 0.25)
     }
 
+    func testWindowWeightShiftIsBitIdenticalToTheWorkingBuild59() {
+        let sample = (0..<256).map { i in
+            i == 0 ? -Float.zero : Float(i) * 0.001 - 0.1
+        }
+        for advance in [0, 1, 3, 64, 192, 256] {
+            var reference = sample
+            reference.removeFirst(advance)
+            reference.append(contentsOf: repeatElement(Float.zero, count: advance))
+            var optimized = sample
+            NeuralStemWorker.advanceOverlapWeights(&optimized, by: advance)
+            XCTAssertEqual(optimized.map(\.bitPattern), reference.map(\.bitPattern))
+            XCTAssertEqual(optimized.count, sample.count)
+        }
+        var baseline = sample, optimized = sample
+        for advance in [31, 8, 17, 1, 12, 64] {
+            baseline.removeFirst(advance)
+            baseline.append(contentsOf: repeatElement(Float.zero, count: advance))
+            NeuralStemWorker.advanceOverlapWeights(&optimized, by: advance)
+        }
+        XCTAssertEqual(optimized.map(\.bitPattern), baseline.map(\.bitPattern))
+    }
+
     func testCPUSelectionProtectsXRAndFourGBDevices() {
         XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 3 * 1_024 * 1_024 * 1_024))
         XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 4 * 1_024 * 1_024 * 1_024))
@@ -324,12 +346,14 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(profile.sourceSeconds, 2, accuracy: 0.01)
         XCTAssertGreaterThan(profile.decodeSeconds, 0)
         XCTAssertGreaterThan(profile.separationSeconds, 0)
-        XCTAssertGreaterThan(profile.coreMLModelLoads, 0)
-        XCTAssertGreaterThan(profile.coreMLPredictions, 0)
-        XCTAssertGreaterThan(profile.coreMLLoadingSeconds, 0)
-        XCTAssertGreaterThan(profile.coreMLPredictionSeconds, 0)
-        XCTAssertTrue(profile.blockedAttentionSeconds.isFinite)
-        XCTAssertGreaterThanOrEqual(profile.blockedAttentionSeconds, 0)
+        XCTAssertGreaterThan(profile.neuralModelLoads, 0)
+        XCTAssertFalse(profile.stageSeconds.isEmpty)
+        XCTAssertEqual(Set(profile.stageSeconds.keys), Set(profile.stageCalls.keys))
+        XCTAssertTrue(profile.stageSeconds.values.allSatisfy { $0.isFinite && $0 >= 0 })
+        XCTAssertTrue(profile.stageCalls.values.allSatisfy { $0 > 0 })
+        XCTAssertLessThanOrEqual(profile.stageSeconds.values.reduce(0, +),
+                                 profile.separationSeconds + 1,
+                                 "Stage timing is a subset of the total wall-clock separation")
         var peak: Float = 0
         for url in asset.urls.values {
             let wave = try samples(url)
