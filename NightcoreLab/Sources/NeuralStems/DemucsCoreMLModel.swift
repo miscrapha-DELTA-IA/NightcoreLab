@@ -27,7 +27,6 @@ public final class DemucsCoreMLModel {
     private let pipeline: StagedDemucsPipeline
     private var usingCPU: Bool
     public var lastModelLoadCount: Int { pipeline.modelLoadCount }
-    var performanceCounters: StagedDemucsPipeline.PerformanceCounters { pipeline.performance }
 
     /// A12 / 3–4GB devices cannot afford GPU graph specialization plus the
     /// full-precision model. Keep the identical validated model on the CPU.
