@@ -249,7 +249,7 @@ struct StemMixerControls: View {
         }
         if let message = gpuStatusMessage {
             Text(message).font(.caption2)
-                .foregroundStyle(gpuStatus?.isReady == true ? .secondary : .orange)
+                .foregroundStyle(gpuStatus?.isReady == true ? Color.secondary : Color.orange)
                 .accessibilityIdentifier("stem.cloudStatus")
         }
         if !isCheckingGPU {
