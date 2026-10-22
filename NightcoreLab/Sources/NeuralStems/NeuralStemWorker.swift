@@ -53,6 +53,44 @@ enum NeuralStemWorker {
         let mean: Float
         let standardDeviation: Float
     }
+    /// Diagnostic only; each value comes from actual on-device monotonic time.
+    /// No source URLs, song titles, tokens or recorded audio are included.
+    struct PerformanceReport: Codable {
+        let version: Int
+        let sourceSeconds: Double
+        let decodeSeconds: Double
+        let separationSeconds: Double
+        let neuralModelLoads: Int
+        /// Measured stage durations combine model loading, prediction and
+        /// tensor handling; no invented per-operation split without profiling.
+        let stageSeconds: [String: Double]
+        let stageCalls: [String: Int]
+    }
+    private struct StageProfile {
+        var modelLoads = 0
+        var seconds: [String: Double] = [:]
+        var calls: [String: Int] = [:]
+        mutating func record(stage: String, duration: Double) {
+            guard !stage.isEmpty, stage.count < 100,
+                  duration.isFinite, duration >= 0 else { return }
+            seconds[stage, default: 0] += duration
+            calls[stage, default: 0] += 1
+        }
+    }
+    /// Bit-preserving fixed-length shift. Using removeFirst + append on every
+    /// segment would repeatedly reallocate the ~344k-float overlap weights.
+    static func advanceOverlapWeights(_ weights: inout [Float], by amount: Int) {
+        precondition(amount >= 0 && amount <= weights.count)
+        guard amount > 0 else { return }
+        weights.withUnsafeMutableBufferPointer { buffer in
+            let pointer = buffer.baseAddress!
+            let remaining = buffer.count - amount
+            if remaining > 0 {
+                memmove(pointer, pointer + amount, remaining * MemoryLayout<Float>.stride)
+            }
+            (pointer + remaining).update(repeating: 0, count: amount)
+        }
+    }
     static var cacheRoot: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("GnarlyNeuralStems", isDirectory: true)
@@ -217,9 +255,11 @@ enum NeuralStemWorker {
         }
         let decodedURL = stage.appendingPathComponent(previewStart == nil ? "source.caf" : "original.wav")
         progress(0.01, "Preparando áudio…")
+        let decodeStartedAt = ProcessInfo.processInfo.systemUptime
         let decoded = try autoreleasepool {
             try decode(source, to: decodedURL, previewStart: previewStart, check: check)
         }
+        let decodeSeconds = ProcessInfo.processInfo.systemUptime - decodeStartedAt
         try check()
         progress(0.04, "Preparando separação…")
         try check()
@@ -227,17 +267,30 @@ enum NeuralStemWorker {
         try check()
         let segments = stage.appendingPathComponent("segments", isDirectory: true)
         try FileManager.default.createDirectory(at: segments, withIntermediateDirectories: true)
-        try autoreleasepool {
+        let separationStartedAt = ProcessInfo.processInfo.systemUptime
+        let profile = try autoreleasepool {
             try separate(decodedURL, decoded: decoded, separator: separator,
                          destinations: urls(in: stage), segments: segments,
                          check: check, recover: recover, progress: progress)
         }
+        let separationSeconds = ProcessInfo.processInfo.systemUptime - separationStartedAt
         try check()
         if previewStart != nil {
             try autoreleasepool { try writeAccompaniment(in: stage, check: check) }
         }
         let staged = makeAsset(folder: stage, frames: Int64(decoded.frames), previewStart: previewStart)
         let frames = try validate(staged, expectedSeconds: previewStart == nil ? seconds : Double(decoded.frames) / sampleRate)
+        // One tiny profiling JSON per completed job, written outside the hot path.
+        // Existing manifest/cache keys, samples and completion semantics stay intact.
+        let report = PerformanceReport(version: 1, sourceSeconds: seconds,
+            decodeSeconds: decodeSeconds, separationSeconds: separationSeconds,
+            neuralModelLoads: profile.modelLoads,
+            stageSeconds: profile.seconds, stageCalls: profile.calls)
+        try? JSONEncoder().encode(report).write(
+            to: stage.appendingPathComponent("stem-performance.json"), options: .atomic)
+        let slowest = profile.seconds.max(by: { $0.value < $1.value })?.key ?? "not-measured"
+        Logger(subsystem: "com.nightcorelab", category: "neural-stems").notice(
+            "CPU stems: separation=\(separationSeconds, privacy: .public)s slowest=\(slowest, privacy: .public) stageCalls=\(profile.calls.values.reduce(0, +), privacy: .public)")
         let manifest = Manifest(model: DemucsCoreMLModel.identifier, sourceHash: hash, frames: frames, previewStart: previewStart)
         try JSONEncoder().encode(manifest).write(to: stage.appendingPathComponent("complete.json"), options: .atomic)
         completedResult = true
@@ -373,7 +426,7 @@ enum NeuralStemWorker {
     private static func separate(_ source: URL, decoded: Decoded, separator: DemucsCoreMLModel,
                                  destinations: [StemKind: URL], segments: URL, check: () throws -> Void,
                                  recover: () throws -> Void,
-                                 progress: @escaping (Double, String) -> Void) throws {
+                                 progress: @escaping (Double, String) -> Void) throws -> StageProfile {
         let file = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         let length = StemDSP.segmentSamples
         let advance = OverlapAdd.stride()
@@ -392,6 +445,7 @@ enum NeuralStemWorker {
         var start = 0
         var estimator = StemProgressEstimator()
         var remainingMessage = "Separando · medindo o tempo neste iPhone…"
+        var stageProfile = StageProfile()
         while start < decoded.frames {
             try check()
             let segmentStartedAt = ProcessInfo.processInfo.systemUptime
@@ -420,6 +474,7 @@ enum NeuralStemWorker {
                         vDSP_vsdiv(lane, 1, &deviation, lane, 1, vDSP_Length(valid))
                     }
                 }
+                var previousStageTick = ProcessInfo.processInfo.systemUptime
                 separated = try StemMemoryRecovery.perform(recover: { _ in
                     recoveredMemory = true
                     progress(0.05 + 0.94 * Double(start) / Double(decoded.frames),
@@ -434,7 +489,10 @@ enum NeuralStemWorker {
                                                                availableMiB: available / 1_048_576)
                         }
                         #endif
-                    }, progress: { fraction, _ in
+                    }, progress: { fraction, stageName in
+                        let now = ProcessInfo.processInfo.systemUptime
+                        stageProfile.record(stage: stageName, duration: now - previousStageTick)
+                        previousStageTick = now
                         // Report committed output, not the overlapping context;
                         // otherwise the bar moves backwards at every segment.
                         let completed = min(Double(decoded.frames), Double(start) + Double(count) * fraction)
@@ -443,6 +501,7 @@ enum NeuralStemWorker {
                     try check()
                     return result
                 } }
+                stageProfile.modelLoads += separator.lastModelLoadCount
                 try StemSegmentCheckpoint.save(separated, to: checkpoint)
             }
             OverlapAdd.accumulate(separated, weight: weight, accumulator: &accumulator, weights: &weights)
@@ -477,8 +536,9 @@ enum NeuralStemWorker {
                     (pointer + length - advance).update(repeating: 0, count: advance)
                 }
             }
-            weights.removeFirst(advance); weights.append(contentsOf: repeatElement(0, count: advance))
+            advanceOverlapWeights(&weights, by: advance)
             start += advance
         }
+        return stageProfile
     }
 }

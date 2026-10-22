@@ -142,6 +142,33 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertEqual(OverlapAdd.defaultOverlap, 0.25)
     }
 
+    func testWindowWeightShiftIsBitIdenticalToTheWorkingBuild59() {
+        let sample: [Float] = (0..<256).map { (index: Int) -> Float in
+            if index == 0 { return -Float.zero }
+            return Float(index) * Float(0.001) - Float(0.1)
+        }
+        for advance in [0, 1, 3, 64, 192, 256] {
+            var reference = sample
+            reference.removeFirst(advance)
+            reference.append(contentsOf: repeatElement(Float.zero, count: advance))
+            var optimized = sample
+            NeuralStemWorker.advanceOverlapWeights(&optimized, by: advance)
+            let optimizedBits: [UInt32] = optimized.map { $0.bitPattern }
+            let referenceBits: [UInt32] = reference.map { $0.bitPattern }
+            XCTAssertEqual(optimizedBits, referenceBits)
+            XCTAssertEqual(optimized.count, sample.count)
+        }
+        var baseline = sample, optimized = sample
+        for advance in [31, 8, 17, 1, 12, 64] {
+            baseline.removeFirst(advance)
+            baseline.append(contentsOf: repeatElement(Float.zero, count: advance))
+            NeuralStemWorker.advanceOverlapWeights(&optimized, by: advance)
+        }
+        let optimizedBits: [UInt32] = optimized.map { $0.bitPattern }
+        let baselineBits: [UInt32] = baseline.map { $0.bitPattern }
+        XCTAssertEqual(optimizedBits, baselineBits)
+    }
+
     func testCPUSelectionProtectsXRAndFourGBDevices() {
         XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 3 * 1_024 * 1_024 * 1_024))
         XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 4 * 1_024 * 1_024 * 1_024))
@@ -314,6 +341,24 @@ final class NeuralStemsRegressionTests: XCTestCase {
             modelURL: model, progress: { _, _ in })
         XCTAssertEqual(asset.source, .demucs)
         XCTAssertEqual(try NeuralStemWorker.validate(asset, expectedSeconds: 2), 88_200)
+        // One diagnostic per finished source: no extra model execution, no
+        // audio/title in telemetry, all timings measured on the actual runner.
+        let profileURL = try XCTUnwrap(asset.vocalURL).deletingLastPathComponent()
+            .appendingPathComponent("stem-performance.json")
+        let profile = try JSONDecoder().decode(NeuralStemWorker.PerformanceReport.self,
+                                              from: Data(contentsOf: profileURL))
+        XCTAssertEqual(profile.version, 1)
+        XCTAssertEqual(profile.sourceSeconds, 2, accuracy: 0.01)
+        XCTAssertGreaterThan(profile.decodeSeconds, 0)
+        XCTAssertGreaterThan(profile.separationSeconds, 0)
+        XCTAssertGreaterThan(profile.neuralModelLoads, 0)
+        XCTAssertFalse(profile.stageSeconds.isEmpty)
+        XCTAssertEqual(Set(profile.stageSeconds.keys), Set(profile.stageCalls.keys))
+        XCTAssertTrue(profile.stageSeconds.values.allSatisfy { $0.isFinite && $0 >= 0 })
+        XCTAssertTrue(profile.stageCalls.values.allSatisfy { $0 > 0 })
+        XCTAssertLessThanOrEqual(profile.stageSeconds.values.reduce(0, +),
+                                 profile.separationSeconds + 1,
+                                 "Stage timing is a subset of the total wall-clock separation")
         var peak: Float = 0
         for url in asset.urls.values {
             let wave = try samples(url)
