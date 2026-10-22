@@ -133,6 +133,15 @@ final class NeuralStemsRegressionTests: XCTestCase {
         XCTAssertLessThan(level(440), 0.0001, "Seeking a stem mix must not replay its beginning")
     }
 
+    func testManualLocalInferenceRunsAtForegroundPriorityWithoutParallelEngines() {
+        // A user-initiated 10+ minute stem request must not be throttled like
+        // background cache maintenance. The model still uses the original
+        // single serial queue, Core ML model and 3/4 GB CPU safety rule.
+        XCTAssertEqual(NeuralStemWorker.processingQoS.qosClass, .userInitiated)
+        XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 3 * 1_024 * 1_024 * 1_024))
+        XCTAssertEqual(OverlapAdd.defaultOverlap, 0.25)
+    }
+
     func testCPUSelectionProtectsXRAndFourGBDevices() {
         XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 3 * 1_024 * 1_024 * 1_024))
         XCTAssertTrue(DemucsCoreMLModel.prefersCPU(physicalMemory: 4 * 1_024 * 1_024 * 1_024))
