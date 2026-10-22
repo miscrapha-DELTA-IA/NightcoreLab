@@ -61,26 +61,33 @@ public enum StemDSP {
         var frameRe = [Float](repeating: 0, count: nFFT / 2)
         var frameIm = [Float](repeating: 0, count: nFFT / 2)
         var windowed = [Float](repeating: 0, count: nFFT)
+        var scale = forwardScale
 
-        for f in 0..<frames {
-            let start = f * hop
-            padded.withUnsafeBufferPointer { p in
-                vDSP_vmul(p.baseAddress! + start, 1, window, 1, &windowed, 1, vDSP_Length(nFFT))
-            }
-            frameRe.withUnsafeMutableBufferPointer { rp in
-                frameIm.withUnsafeMutableBufferPointer { ip in
-                    var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
-                    windowed.withUnsafeBytes { wb in
-                        vDSP_ctoz(wb.baseAddress!.assumingMemoryBound(to: DSPComplex.self),
-                                  2, &split, 1, vDSP_Length(nFFT / 2))
+        re.withUnsafeMutableBufferPointer { real in
+            im.withUnsafeMutableBufferPointer { imaginary in
+                for f in 0..<frames {
+                    let start = f * hop
+                    padded.withUnsafeBufferPointer { p in
+                        vDSP_vmul(p.baseAddress! + start, 1, window, 1, &windowed, 1, vDSP_Length(nFFT))
                     }
-                    vDSP_fft_zrip(fftSetup, &split, 1, 12, FFTDirection(FFT_FORWARD))
-                    // Packed format: realp[0] = DC, imagp[0] = Nyquist (which htdemucs drops).
-                    re[f] = rp[0] * forwardScale          // bin 0, frame f → [0*frames + f]
-                    im[f] = 0
-                    for b in 1..<bins {
-                        re[b * frames + f] = rp[b] * forwardScale
-                        im[b * frames + f] = ip[b] * forwardScale
+                    frameRe.withUnsafeMutableBufferPointer { rp in
+                        frameIm.withUnsafeMutableBufferPointer { ip in
+                            var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                            windowed.withUnsafeBytes { wb in
+                                vDSP_ctoz(wb.baseAddress!.assumingMemoryBound(to: DSPComplex.self),
+                                          2, &split, 1, vDSP_Length(nFFT / 2))
+                            }
+                            vDSP_fft_zrip(fftSetup, &split, 1, 12, FFTDirection(FFT_FORWARD))
+                            // Packed format: realp[0] = DC, imagp[0] = Nyquist (which htdemucs drops).
+                            real[f] = rp[0] * forwardScale
+                            imaginary[f] = 0
+                            // Write directly to [bin,frame] with an output stride;
+                            // no full-size transposed scratch and no scalar bin loop.
+                            vDSP_vsmul(rp.baseAddress! + 1, 1, &scale,
+                                       real.baseAddress! + frames + f, vDSP_Stride(frames), vDSP_Length(bins - 1))
+                            vDSP_vsmul(ip.baseAddress! + 1, 1, &scale,
+                                       imaginary.baseAddress! + frames + f, vDSP_Stride(frames), vDSP_Length(bins - 1))
+                        }
                     }
                 }
             }
@@ -100,28 +107,32 @@ public enum StemDSP {
         var specIm = [Float](repeating: 0, count: nFFT / 2)
         var frame = [Float](repeating: 0, count: nFFT)
 
-        for f in 0..<frames {
-            for b in 0..<bins {
-                specRe[b] = re[b * frames + f]
-                specIm[b] = im[b * frames + f]
-            }
-            specIm[0] = 0                                 // packed Nyquist = 0
-            specRe.withUnsafeMutableBufferPointer { rp in
-                specIm.withUnsafeMutableBufferPointer { ip in
-                    var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
-                    vDSP_fft_zrip(fftSetup, &split, 1, 12, FFTDirection(FFT_INVERSE))
-                    frame.withUnsafeMutableBytes { fb in
-                        vDSP_ztoc(&split, 1,
-                                  fb.baseAddress!.assumingMemoryBound(to: DSPComplex.self),
-                                  2, vDSP_Length(nFFT / 2))
+        re.withUnsafeBufferPointer { real in
+            im.withUnsafeBufferPointer { imaginary in
+                for f in 0..<frames {
+                    specRe.withUnsafeMutableBufferPointer { rp in
+                        specIm.withUnsafeMutableBufferPointer { ip in
+                            // Exact strided gather into the two small FFT workspaces.
+                            // cblas_scopy performs no arithmetic or quality reduction.
+                            cblas_scopy(Int32(bins), real.baseAddress! + f, Int32(frames), rp.baseAddress!, 1)
+                            cblas_scopy(Int32(bins), imaginary.baseAddress! + f, Int32(frames), ip.baseAddress!, 1)
+                            ip[0] = 0                             // packed Nyquist = 0
+                            var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                            vDSP_fft_zrip(fftSetup, &split, 1, 12, FFTDirection(FFT_INVERSE))
+                            frame.withUnsafeMutableBytes { fb in
+                                vDSP_ztoc(&split, 1,
+                                          fb.baseAddress!.assumingMemoryBound(to: DSPComplex.self),
+                                          2, vDSP_Length(nFFT / 2))
+                            }
+                        }
+                    }
+                    vDSP_vmul(frame, 1, window, 1, &frame, 1, vDSP_Length(nFFT))
+                    let offset = (f + 2) * hop                    // two empty frames on the left
+                    ola.withUnsafeMutableBufferPointer { op in
+                        vDSP_vadd(op.baseAddress! + offset, 1, frame, 1,
+                                  op.baseAddress! + offset, 1, vDSP_Length(nFFT))
                     }
                 }
-            }
-            vDSP_vmul(frame, 1, window, 1, &frame, 1, vDSP_Length(nFFT))
-            let offset = (f + 2) * hop                    // two empty frames on the left
-            ola.withUnsafeMutableBufferPointer { op in
-                vDSP_vadd(op.baseAddress! + offset, 1, frame, 1,
-                          op.baseAddress! + offset, 1, vDSP_Length(nFFT))
             }
         }
 

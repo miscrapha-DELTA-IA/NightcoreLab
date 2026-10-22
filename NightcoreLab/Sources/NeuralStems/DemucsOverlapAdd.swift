@@ -1,4 +1,5 @@
 // Adapted from demucs-coreml-ios, MIT, Copyright (c) 2026 Nikolai Tsyrenov.
+import Accelerate
 import Foundation
 
 /// Chunking helpers for running the fixed-size htdemucs core over a whole song.
@@ -7,6 +8,45 @@ import Foundation
 /// each chunk is separated independently, and the results are cross-faded back together with
 /// triangular weights — the same scheme as `demucs.apply.apply_model`.
 public enum OverlapAdd {
+
+    /// The same dense triangular overlap as Demucs, with no extra song-sized
+    /// scratch. Accelerate processes contiguous lanes instead of visiting
+    /// every source inside a scalar per-sample Swift loop.
+    static func accumulate(_ separated: [Float], weight: [Float],
+                           accumulator: inout [Float], weights: inout [Float]) {
+        let length = weight.count
+        precondition(length > 0 && separated.count.isMultiple(of: length))
+        precondition(accumulator.count == separated.count && weights.count == length)
+        separated.withUnsafeBufferPointer { source in
+            weight.withUnsafeBufferPointer { window in
+                accumulator.withUnsafeMutableBufferPointer { target in
+                    for lane in 0..<(separated.count / length) {
+                        let offset = lane * length
+                        vDSP_vma(source.baseAddress! + offset, 1, window.baseAddress!, 1,
+                                 target.baseAddress! + offset, 1, target.baseAddress! + offset, 1,
+                                 vDSP_Length(length))
+                    }
+                }
+                weights.withUnsafeMutableBufferPointer { total in
+                    vDSP_vadd(total.baseAddress!, 1, window.baseAddress!, 1,
+                              total.baseAddress!, 1, vDSP_Length(length))
+                }
+            }
+        }
+    }
+
+    /// Every emitted frame is covered by a strictly positive triangular
+    /// window. Restore its original whole-mix normalisation independently in
+    /// each source, retaining float32 output and the original DC split.
+    static func restoreLane(_ accumulated: UnsafePointer<Float>, weights: UnsafePointer<Float>,
+                            count: Int, standardDeviation: Float, mean: Float,
+                            to output: UnsafeMutablePointer<Float>) {
+        guard count > 0 else { return }
+        var scale = standardDeviation, bias = mean / 4
+        vDSP_vdiv(weights, 1, accumulated, 1, output, 1, vDSP_Length(count))
+        vDSP_vsmul(output, 1, &scale, output, 1, vDSP_Length(count))
+        vDSP_vsadd(output, 1, &bias, output, 1, vDSP_Length(count))
+    }
 
     /// Default overlap between neighbouring chunks (demucs uses 0.25; 0.5 costs 2× time for a
     /// small quality gain — see docs/GOTCHAS.md).
