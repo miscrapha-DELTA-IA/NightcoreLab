@@ -640,7 +640,11 @@ def _extract_with(url: str, work_dir: str, label: str,
         "no_warnings": False,
         "logger": _YtdlpLog(label),
         "noprogress": True,
-        "cachedir": False,           # nada persistido fora da pasta temporária
+        # yt-dlp caches non-secret player signatures and client IDs. Keeping
+        # this bounded to the existing ephemeral cache filesystem avoids
+        # repeating YouTube player initialization on every uncached song.
+        # This path contains no cookie file, token or full audio track.
+        "cachedir": str(CACHE_DIR / "yt_dlp_player_cache"),
         "socket_timeout": 30,
         "retries": 3,
         "fragment_retries": 3,

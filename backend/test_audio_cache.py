@@ -41,6 +41,49 @@ class AudioCacheTests(unittest.TestCase):
             self.assertFalse((main.CACHE_DIR / "bbbbbbbbbbb.m4a").exists())
             main._release_cached_reader("aaaaaaaaaaa")
 
+    def test_player_signature_cache_is_reused_without_changing_audio_format(self):
+        """Different songs keep a common non-secret yt-dlp player cache."""
+        class FakeYDL:
+            cache_paths = []
+            options = []
+            def __init__(self, opts):
+                self.opts = opts
+                self.__class__.options.append(opts)
+                self.__class__.cache_paths.append(opts["cachedir"])
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def extract_info(self, url, download=False):
+                self.outer_url = url
+                return {"id": url[-11:], "title": "Audio", "duration": 120,
+                        "thumbnail": None, "is_live": False}
+            def process_ie_result(self, info, download=True):
+                folder = Path(self.opts["outtmpl"]).parent
+                (folder / (info["id"] + ".m4a")).write_bytes(b"synthetic-m4a-fixture")
+
+        with patch.object(main.yt_dlp, "YoutubeDL", FakeYDL), \
+             patch.object(main.shutil, "which", return_value=None):
+            a = Path(self.folder.name) / "one"
+            b = Path(self.folder.name) / "two"
+            a.mkdir(); b.mkdir()
+            first = main._extract_with(
+                "https://www.youtube.com/watch?v=abcdefghijk", str(a),
+                "test", False, None)
+            second = main._extract_with(
+                "https://www.youtube.com/watch?v=mnopqrstuv", str(b),
+                "test", False, None)
+        self.assertEqual(first[0].suffix, ".m4a")
+        self.assertEqual(second[0].suffix, ".m4a")
+        self.assertEqual(first[1], "Audio")
+        self.assertEqual(second[1], "Audio")
+        self.assertEqual(FakeYDL.cache_paths, [
+            str(main.CACHE_DIR / "yt_dlp_player_cache")] * 2)
+        self.assertNotEqual(FakeYDL.cache_paths[0], "False")
+        self.assertTrue(all("bestaudio[ext=m4a]" in opts["format"]
+                            for opts in FakeYDL.options))
+        self.assertTrue(all(opts["match_filter"] is not None for opts in FakeYDL.options))
+
     def test_missing_metadata_is_not_cache_hit(self):
         main.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         (main.CACHE_DIR / "ccccccccccc.m4a").write_bytes(b"abc")

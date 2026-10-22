@@ -9,7 +9,13 @@ import UIKit
 /// Serial, bounded-memory processing. Only this queue owns the model, files,
 /// and overlap-add buffers; nothing runs in an audio callback or on MainActor.
 enum NeuralStemWorker {
-    private static let queue = DispatchQueue(label: "gnarly.neural-stems", qos: .utility,
+    /// Manual separation is foreground, explicitly user-requested work. Keep
+    /// Core ML on its own serial queue (never MainActor / CoreAudio), but do
+    /// not give a 10+ minute CPU-bound operation background Utility priority.
+    /// Serial execution and the existing memory-pressure/checkpoint gates
+    /// remain unchanged on 3 GB devices such as iPhone XR.
+    static let processingQoS: DispatchQoS = .userInitiated
+    private static let queue = DispatchQueue(label: "gnarly.neural-stems", qos: processingQoS,
                                              autoreleaseFrequency: .workItem)
     static let sampleRate = 44_100.0
     static var bundledModel: URL? {
