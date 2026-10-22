@@ -1,0 +1,176 @@
+name: Gnarly Invite IPA — Linux zsign (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      unsigned_run_id:
+        description: 'Successful Build Unsigned IPA run ID (NightcoreLab-App)'
+        required: true
+        type: string
+      publish_to_r2:
+        description: 'Publish signed IPA and OTA manifest to configured PUBLIC Cloudflare R2'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: gnarly-invite-sign-${{ inputs.unsigned_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  sign-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: invite-signing
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest and packaging helpers (stdlib tests)
+        run: python3 -m unittest discover -s tests -p 'test_gnarly_invite_ipa.py' -v
+
+      - name: Require a successful official unsigned IPA run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.unsigned_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]] || { echo 'Run ID must be numeric'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" | python3 -c '
+          import json, os, sys
+          d = json.load(sys.stdin)
+          if not (d.get("name") == "Build Unsigned IPA (Free Route)" and
+                  d.get("conclusion") == "success" and
+                  (d.get("head_repository") or {}).get("full_name") == os.environ["GITHUB_REPOSITORY"]):
+              sys.exit("Source must be a successful official unsigned-IPA run from this repo")
+          print("Validated successful IPA run:", d["id"])
+          '
+
+      - name: Download previously generated unsigned IPA — no Xcode
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.unsigned_run_id }}
+          name: NightcoreLab-App
+          github-token: ${{ github.token }}
+          path: unsigned
+
+      - name: Add descriptive seven-day invite metadata to unpacked app
+        run: |
+          set -euo pipefail
+          python3 scripts/gnarly_invite_ipa.py prepare \
+            --ipa unsigned/NightcoreLab_Unsigned.ipa --workdir "$RUNNER_TEMP/gnarly-unpacked"
+
+      - name: Validate Apple Ad Hoc certificate and registered-device profile
+        env:
+          CERT_B64: ${{ secrets.GNARLY_SIGN_P12_BASE64 }}
+          PROVISION_B64: ${{ secrets.GNARLY_ADHOC_PROFILE_BASE64 }}
+          GNARLY_P12_PASSWORD: ${{ secrets.GNARLY_SIGN_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/gnarly-credentials"
+          python3 - <<'PY'
+          import os, base64
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'gnarly-credentials'
+          for source, name in [('CERT_B64','distribution.p12'),('PROVISION_B64','adhoc.mobileprovision')]:
+              value = os.getenv(source,'')
+              if not value: raise SystemExit('Missing signing secret: '+source)
+              (root/name).write_bytes(base64.b64decode(value,validate=True))
+          if not os.getenv('GNARLY_P12_PASSWORD'): raise SystemExit('Missing P12 password')
+          PY
+          python3 scripts/gnarly_invite_ipa.py verify-profile \
+            --profile "$RUNNER_TEMP/gnarly-credentials/adhoc.mobileprovision" \
+            --p12 "$RUNNER_TEMP/gnarly-credentials/distribution.p12" \
+            --app "$RUNNER_TEMP/gnarly-unpacked/Payload/NightcoreLab.app" \
+            --workdir "$RUNNER_TEMP/gnarly-credentials"
+
+      - name: Compile pinned zsign on Linux
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends g++ make pkg-config libssl-dev
+          git clone -q https://github.com/zhlynn/zsign.git "$RUNNER_TEMP/zsign-src"
+          git -C "$RUNNER_TEMP/zsign-src" checkout -q 9299685bab7ef99827e06e5dfda93af747386590
+          make -s -C "$RUNNER_TEMP/zsign-src/build/linux" -j2
+          "$RUNNER_TEMP/zsign-src/bin/zsign" -v
+
+      - name: Produce signed registered-device IPA
+        env:
+          GNARLY_P12_PASSWORD: ${{ secrets.GNARLY_SIGN_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p signed
+          "$RUNNER_TEMP/zsign-src/bin/zsign" \
+            -k "$RUNNER_TEMP/gnarly-credentials/distribution.p12" \
+            -p "$GNARLY_P12_PASSWORD" \
+            -m "$RUNNER_TEMP/gnarly-credentials/adhoc.mobileprovision" \
+            -o signed/Gnarly-Signed.ipa -z 6 \
+            "$RUNNER_TEMP/gnarly-unpacked/Payload/NightcoreLab.app"
+          test -s signed/Gnarly-Signed.ipa
+          python3 - <<'PY'
+          import sys,zipfile
+          from pathlib import Path
+          sys.path.insert(0,'scripts')
+          from gnarly_invite_ipa import read_info
+          ipa=Path('signed/Gnarly-Signed.ipa')
+          meta=read_info(ipa)
+          with zipfile.ZipFile(ipa) as z:
+              assert any(x.endswith('.app/embedded.mobileprovision') for x in z.namelist()), 'No provisioned app'
+          print('Signed IPA structure:',meta['CFBundleIdentifier'],meta['CFBundleVersion'])
+          PY
+          sha256sum signed/Gnarly-Signed.ipa > signed/SHA256SUMS.txt
+          echo '### Signed Gnarly IPA (Linux)' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Ad Hoc devices only. The injected seven-day JSON is **not a runtime license lock**.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Optionally upload signed IPA and OTA manifest to public R2
+        if: ${{ inputs.publish_to_r2 }}
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.GNARLY_R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.GNARLY_R2_INVITE_BUCKET }}
+          PUBLIC_BASE_URL: ${{ vars.GNARLY_R2_PUBLIC_BASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.GNARLY_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GNARLY_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          SOURCE_RUN: ${{ inputs.unsigned_run_id }}
+        run: |
+          set -euo pipefail
+          for v in R2_ACCOUNT_ID R2_BUCKET PUBLIC_BASE_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            test -n "${!v}" || { echo "Missing R2 setting: $v"; exit 1; }
+          done
+          command -v aws >/dev/null || { echo 'AWS CLI not installed on runner'; exit 1; }
+          PREFIX="invites/run-$SOURCE_RUN/"
+          IPA_URL="${PUBLIC_BASE_URL%/}/${PREFIX}Gnarly-Signed.ipa"
+          MANIFEST_URL="${PUBLIC_BASE_URL%/}/${PREFIX}manifest.plist"
+          python3 scripts/gnarly_invite_ipa.py manifest \
+            --ipa signed/Gnarly-Signed.ipa --ipa-url "$IPA_URL" \
+            --title 'Gnarly (Convite)' --output signed/manifest.plist
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws --endpoint-url "$ENDPOINT" s3 cp signed/Gnarly-Signed.ipa \
+            "s3://${R2_BUCKET}/${PREFIX}Gnarly-Signed.ipa" --content-type application/octet-stream
+          aws --endpoint-url "$ENDPOINT" s3 cp signed/manifest.plist \
+            "s3://${R2_BUCKET}/${PREFIX}manifest.plist" --content-type application/xml
+          OTA_URI="$(MANIFEST_URL="$MANIFEST_URL" python3 -c 'import os,urllib.parse; print("itms-services://?action=download-manifest&url="+urllib.parse.quote(os.environ["MANIFEST_URL"],safe=""))')"
+          echo '### Public R2 OTA link (only registered iPhones)' >> "$GITHUB_STEP_SUMMARY"
+          echo "$OTA_URI" >> "$GITHUB_STEP_SUMMARY"
+          echo 'This link does NOT enforce seven-day usage expiry.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload signed IPA artifact (never secrets)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gnarly-AdHoc-Signed-Linux-${{ inputs.unsigned_run_id }}
+          path: signed/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Erase signing credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gnarly-credentials" "$RUNNER_TEMP/gnarly-unpacked" "$RUNNER_TEMP/zsign-src"
