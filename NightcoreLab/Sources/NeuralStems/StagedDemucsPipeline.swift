@@ -27,6 +27,16 @@ final class StagedDemucsPipeline {
     let manifest: Manifest
     private let root: URL
     private(set) var modelLoadCount = 0
+    /// Cumulative across the complete local job, including all 7.8-second
+    /// segments; no audio samples, filenames or personal identifiers recorded.
+    struct PerformanceCounters {
+        var modelLoads = 0
+        var predictions = 0
+        var modelLoadSeconds = 0.0
+        var predictionSeconds = 0.0
+        var attentionSeconds = 0.0
+    }
+    private(set) var performance = PerformanceCounters()
 
     init(root: URL) throws {
         self.root = root
@@ -74,7 +84,8 @@ final class StagedDemucsPipeline {
                 }
                 if instruction.kind == "attention" {
                     guard input.count == 6 else { throw NeuralStemError.incompatibleModel }
-                    return try [0, 3].map { offset in
+                    let started = ProcessInfo.processInfo.systemUptime
+                    let outputs = try [0, 3].map { offset in
                         let shape = input[offset].shape.map(\.intValue)
                         guard shape.count == 4, shape[0] == 1 else { throw NeuralStemError.incompatibleModel }
                         let values = try BlockedAttention.evaluate(
@@ -87,6 +98,8 @@ final class StagedDemucsPipeline {
                         try DemucsCoreMLModel.writeStrided(values, to: tensor)
                         return tensor
                     }
+                    performance.attentionSeconds += ProcessInfo.processInfo.systemUptime - started
+                    return outputs
                 }
                 if instruction.kind == "spectral_decode" {
                     return [try tiledSpectral(instruction, input: input, cpuOnly: cpuOnly,
@@ -115,11 +128,14 @@ final class StagedDemucsPipeline {
     private func loadModel(name: String, cpuOnly: Bool) throws -> MLModel {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = cpuOnly ? .cpuOnly : .cpuAndGPU
+        let started = ProcessInfo.processInfo.systemUptime
         let model = try MLModel(contentsOf: root.appendingPathComponent(name + ".mlmodelc"), configuration: configuration)
         let metadata = model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
         guard metadata["gnarly.model_id"] == DemucsCoreMLModel.identifier,
               metadata["gnarly.stage"] == name else { throw NeuralStemError.incompatibleModel }
         modelLoadCount += 1
+        performance.modelLoads += 1
+        performance.modelLoadSeconds += ProcessInfo.processInfo.systemUptime - started
         return model
     }
 
@@ -134,7 +150,10 @@ final class StagedDemucsPipeline {
             }
         }
         guard feed.count == model.modelDescription.inputDescriptionsByName.count else { throw NeuralStemError.incompatibleModel }
+        let started = ProcessInfo.processInfo.systemUptime
         let prediction = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
+        performance.predictions += 1
+        performance.predictionSeconds += ProcessInfo.processInfo.systemUptime - started
         try check()
         return try outputShapes.indices.map { i in
             guard let tensor = prediction.featureValue(for: "output_\(i)")?.multiArrayValue,
