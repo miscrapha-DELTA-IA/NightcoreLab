@@ -36,8 +36,14 @@ enum HuggingFaceAccess {
         let name: String
     }
     static func freeProfile(_ data: Data) throws -> Profile {
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let name = object["name"] as? String, !name.isEmpty,
+        // A 200 response can still be HTML or an incompatible JSON shape.
+        // Do not leak a generic NSCocoaErrorDomain "incorrect format" to the
+        // UI; this is HF account parsing, not failed stem separation.
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw CloudStemWorker.Failure.message(
+                "Hugging Face: perfil da conta em formato inesperado. Verifique o token Read ou remova-o para usar a GPU anônima.")
+        }
+        guard let name = object["name"] as? String, !name.isEmpty,
               let pro = object["isPro"] as? Bool, !pro,
               let auth = object["auth"] as? [String: Any],
               let access = auth["accessToken"] as? [String: Any],

@@ -15,6 +15,19 @@ final class HuggingFaceAccessTests: XCTestCase {
         XCTAssertThrowsError(try HuggingFaceAccess.freeProfile(profile(role: "write")))
         XCTAssertThrowsError(try HuggingFaceAccess.freeProfile(profile(role: "fineGrained")))
     }
+    func testMalformedWhoAmIResponseNeverLeaksGenericCocoaFormatError() throws {
+        for bytes in [Data("<html>temporarily unavailable</html>".utf8),
+                      Data("null".utf8),
+                      Data("[1,2,3]".utf8),
+                      Data("not-json".utf8)] {
+            XCTAssertThrowsError(try HuggingFaceAccess.freeProfile(bytes)) { error in
+                XCTAssertTrue(error is CloudStemWorker.Failure)
+                XCTAssertTrue(error.localizedDescription.contains("Hugging Face")
+                              || error.localizedDescription.contains("token Read"))
+            }
+        }
+    }
+
     func testPersonalTokenCannotLeakToRenderOrResponseSelectedHost() throws {
         let token = "hf_this_is_a_synthetic_read_token"
         let allowed = URLRequest(url: CloudStemWorker.communityURL.appendingPathComponent("gradio_api/call/separate"))
