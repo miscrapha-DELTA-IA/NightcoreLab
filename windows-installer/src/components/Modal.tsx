@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import "./Modal.css";
 
 export const Modal = ({
@@ -36,7 +37,7 @@ export const Modal = ({
 
   return (
     <>
-      {isOpen && (
+      {isOpen && createPortal(
         <div
           className={`modal-container`}
           style={
@@ -60,7 +61,7 @@ export const Modal = ({
             )}
             <div className="modal-content">{children}</div>
           </div>
-        </div>
+        </div>, document.body
       )}
     </>
   );

@@ -84,7 +84,7 @@ pub async fn install_gnarly_operation(handle: AppHandle, window: Window,
     })();
     op.fail_if_err("install", ready)?;
     let actual_email = crate::account::logged_in_as(sideloader_state.clone());
-    op.fail_if_err("install", if actual_email.as_deref() == Some(&expected_email) { Ok(()) }
+    op.fail_if_err("install", if actual_email.as_deref() == Some(expected_email.as_str()) { Ok(()) }
         else { Err(AppError::Misc("A conta Apple mudou. Confirme a conta e tente novamente.".into())) })?;
     op.fail_if_err("install", sideload(device_state, sideloader_state, path).await)?;
     op.complete("install")?;

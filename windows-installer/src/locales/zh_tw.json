@@ -80,7 +80,7 @@
     "hide_certificate_list": "隱藏憑證列表",
     "choose_what_to_revoke": "選擇要撤銷的內容",
     "continue": "繼續",
-    "no_keyring_available": "無法在此裝置上儲存憑證。"    
+    "no_keyring_available": "無法在此裝置上儲存憑證。"
   },
   "device": {
     "title": "iDevice",
@@ -254,7 +254,7 @@
         "請確保您可以在瀏覽器中存取 ((link:{{anisetteServerUrl}}))。"
       ],
       "keyring": [
-		"請嘗試在設定中啟用 「不使用鑰匙圈 」以繞過此問題。請注意，這樣做較不安全。"	  
+		"請嘗試在設定中啟用 「不使用鑰匙圈 」以繞過此問題。請注意，這樣做較不安全。"
       ],
       "misc": [
 		"請再試一次。重新啟動應用程式、您的電腦和/或您的手機也可能有幫助。"

@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   windows:
+    permissions:
+      contents: write
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -65,3 +67,32 @@ jobs:
           path: |
             windows-installer/delivery/*
             windows-installer/Gnarly-Installer-Windows-x64.zip
+      - name: Publish isolated Windows beta
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const {owner, repo} = context.repo;
+            const tag = 'gnarly-windows-installer-v0.1.0-beta';
+            const root = 'windows-installer/';
+            const setup = fs.readFileSync(root + 'delivery/Gnarly-Installer-Windows-x64-Setup.exe');
+            const checksum = crypto.createHash('sha256').update(setup).digest('hex');
+            if (!fs.readFileSync(root + 'delivery/SHA256SUMS.txt', 'utf8').includes(checksum)) throw new Error('Setup checksum mismatch');
+            let existing;
+            try { existing = (await github.rest.repos.getReleaseByTag({owner, repo, tag})).data; }
+            catch (e) { if (e.status !== 404) throw e; }
+            if (existing) throw new Error('Beta tag already exists. Use a new installer version for a new publication.');
+            const body = 'Primeira beta do instalador Windows x64 para o Gnarly build 57.\n\nConecte o iPhone por USB, entre na conta Apple do dono do aparelho, confirme a seleção e clique em Instalar / renovar Gnarly. O IPA é baixado, verificado por SHA-256 e reutilizado. A assinatura gratuita continua exigindo renovação em até 7 dias.\n\nInterface e compilação nativa verificadas no Windows em CI; instalação por USB ainda precisa de validação física. O instalador Windows não tem certificado comercial de assinatura. Derivado independente do iloader (MIT), sem afiliação ao autor original.\n\nFonte: ' + context.sha + '\nCI: https://github.com/' + owner + '/' + repo + '/actions/runs/' + context.runId;
+            const release = (await github.rest.repos.createRelease({owner, repo, tag_name: tag,
+              target_commitish: context.sha, name: 'Gnarly Installer · Windows x64 · beta 0.1',
+              body, draft: true, prerelease: true, make_latest: 'false'})).data;
+            for (const [name, path] of [
+              ['Gnarly-Installer-Windows-x64-Setup.exe', 'delivery/Gnarly-Installer-Windows-x64-Setup.exe'],
+              ['Gnarly-Installer-Windows-x64.zip', 'Gnarly-Installer-Windows-x64.zip'],
+              ['LEIA-ME.md', 'delivery/LEIA-ME.md'],
+              ['SHA256SUMS.txt', 'delivery/SHA256SUMS.txt']]) {
+              await github.rest.repos.uploadReleaseAsset({owner, repo, release_id: release.id, name, data: fs.readFileSync(root + path)});
+            }
+            await github.rest.repos.updateRelease({owner, repo, release_id: release.id, tag_name: tag, draft: false, prerelease: true, make_latest: 'false'});
+            core.info('Published: https://github.com/' + owner + '/' + repo + '/releases/tag/' + tag);

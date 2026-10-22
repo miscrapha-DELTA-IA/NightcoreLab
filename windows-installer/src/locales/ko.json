@@ -197,7 +197,7 @@
     "stored_rppairing_deleted_success": "성공적으로 저장된 페어링을 삭제했어요!",
     "failed_delete_stored_rppairing": "저장된 페어링을 삭제 실패",
     "dont_use_keyring": "키링 사용하지 않기",
-    "dont_use_keyring_message": "이로 인해 페어링 파일, Anisette 상태 및 인증서가 디스크에 저장되어 iloader의 보안이 저하됩니다. 기본 키링 저장 기능이 작동하지 않고 관련 위험을 충분히 이해한 경우에만 이 기능을 활성화하세요."    
+    "dont_use_keyring_message": "이로 인해 페어링 파일, Anisette 상태 및 인증서가 디스크에 저장되어 iloader의 보안이 저하됩니다. 기본 키링 저장 기능이 작동하지 않고 관련 위험을 충분히 이해한 경우에만 이 기능을 활성화하세요."
   },
   "dialog": {
     "confirm": "확인",
@@ -274,7 +274,7 @@
         "이 앱을 설치할 공간을 확보하려면 다른 사이드로드 앱을 삭제하세요.",
         "만료된 앱도 3개 앱 제한에 포함됩니다."
       ]
-    },    
+    },
     "support_message": "문제가 계속된다면 지원을 받기 위해 \"클립보드로 복사\"를 눌러 <discord>디스코드</discord>나 <github>GitHub 이슈</github>에 올려주세요."
   },
   "update": {

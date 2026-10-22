@@ -38,3 +38,5 @@ bun tauri build --bundles nsis -- --locked
 ```
 
 Origem iOS: `gnarly-build57-livecontainer-beta`. IPA: SHA-256 `a12387c7bd3d361c8dd3eeb78ad090559e0e0c24111f15ef0c03e3a8f6440dc9`, 112107110 bytes. Não acompanha automaticamente a branch main nem muda para builds não qualificadas.
+
+Teste de interface com comandos nativos simulados: `node tests/ui-smoke.cjs` (Playwright e Chromium; informe CHROMIUM_PATH quando necessário, com o servidor Vite aberto). Cobre seleção de conta/aparelho, desconexão, iOS incompatível e diálogo de certificados durante a assinatura. Não substitui o teste físico por USB.

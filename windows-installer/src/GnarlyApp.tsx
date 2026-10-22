@@ -28,7 +28,7 @@ export default function GnarlyApp() {
   const active = useRef(false);
 
   useEffect(() => { void invoke<boolean>("keyring_available").then(setSecure).catch(() => setSecure(false)); }, []);
-  useEffect(() => { setConfirmed(false); }, [email, selected?.udid]);
+  useEffect(() => { setConfirmed(false); setStatus(""); setError(""); }, [email, selected?.udid]);
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;

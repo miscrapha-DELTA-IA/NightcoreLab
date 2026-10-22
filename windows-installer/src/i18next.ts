@@ -1,4 +1,6 @@
 import i18n from "i18next";
+import english from "./locales/en.json";
+import portuguese from "./locales/pt_br.json";
 import { initReactI18next } from "react-i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 
@@ -37,23 +39,10 @@ export const sortedLanguages = [...languages].sort((a, b) =>
   a[0].localeCompare(b[0]),
 );
 
-type TranslationResource = Record<string, unknown>;
-
-const localeModules = import.meta.glob<{ default: TranslationResource }>(
-  "./locales/*.json",
-  {
-    eager: true,
-  },
-);
-
-const resources = Object.fromEntries(
-  Object.entries(localeModules).flatMap(([path, module]) => {
-    const lang = path.match(/\/([\w-]+)\.json$/)?.[1];
-    if (!lang) return [];
-
-    return [[lang, { translation: module.default }]];
-  }),
-);
+const resources = {
+  en: { translation: english },
+  pt_br: { translation: portuguese },
+};
 
 i18n
   .use(LanguageDetector)
