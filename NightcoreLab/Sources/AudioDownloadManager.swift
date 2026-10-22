@@ -32,7 +32,7 @@ final class AudioDownloadManager: ObservableObject {
 
     private let transfers: DownloadKit.DownloadManager
     private var cache = TrackAudioCache(loadIndex: false)
-    private let cacheIO = AudioCacheIO()
+    private let cacheIO: AudioCacheIO
     private var lastProgressUpdate: [UUID: Date] = [:]
     private var memoryWarningObserver: NSObjectProtocol?
     private var tracks: [UUID: Track] = [:]
@@ -53,6 +53,9 @@ final class AudioDownloadManager: ObservableObject {
     private var preparationPriorities: [String: Float] = [:]
     private var preparationGenerations: [String: UUID] = [:]
     private var artworkTasks: [String: Task<URL?, Never>] = [:]
+    /// Only the immediate Up Next song is speculative. Explicit offline saves
+    /// and foreground selection retain independent ownership of shared work.
+    private var prefetchTrack: Track?
 
     func canRemoveOfflineAudio(_ track: Track) -> Bool {
         track.id != selectedID && track.id != playingID
@@ -81,7 +84,11 @@ final class AudioDownloadManager: ObservableObject {
         }
     }
 
-    init(configuration customConfiguration: URLSessionConfiguration? = nil) {
+    init(configuration customConfiguration: URLSessionConfiguration? = nil,
+         cacheFolder: URL? = nil) {
+        let folder = cacheFolder ?? TrackAudioCache.stemCacheFolder
+        cache = TrackAudioCache(loadIndex: false, folder: folder)
+        cacheIO = AudioCacheIO(folder: folder)
         let configuration = customConfiguration ?? URLSessionConfiguration.background(withIdentifier: Self.backgroundIdentifier)
         configuration.isDiscretionary = false
         if customConfiguration == nil { configuration.sessionSendsLaunchEvents = true }
@@ -164,7 +171,18 @@ final class AudioDownloadManager: ObservableObject {
                     self.completeOfflineAudio(track.id, result: .success(local))
                     return
                 }
-                guard !self.tracks.values.contains(where: { $0.id == track.id }) else { return }
+                if let existing = self.transfers.downloads.first(where: { self.tracks[$0.id]?.id == track.id }) {
+                    existing.userInfo["priority"] = max(URLSessionTask.defaultPriority,
+                        existing.userInfo["priority"] as? Float ?? URLSessionTask.lowPriority)
+                    self.tasks[existing.id]?.priority = max(URLSessionTask.defaultPriority,
+                        self.tasks[existing.id]?.priority ?? URLSessionTask.lowPriority)
+                    return
+                }
+                if self.preparations[track.id] != nil {
+                    self.preparationPriorities[track.id] = max(URLSessionTask.defaultPriority,
+                        self.preparationPriorities[track.id] ?? URLSessionTask.lowPriority)
+                    return
+                }
                 guard !self.offlineQueue.contains(where: { $0.id == track.id }) else { return }
                 self.offlineQueue.append(track)
                 self.refreshTrackStatuses()
@@ -174,10 +192,15 @@ final class AudioDownloadManager: ObservableObject {
     }
 
     private func completeOfflineAudio(_ id: String, result: Result<URL, Error>) {
-        if case .success = result { updateCache { $0.pin(id) } }
+        // Every playback/prefetch completion reaches this method too. Only a
+        // user-requested offline save may turn disposable audio into a pin.
+        let waiters = offlineWaiters.removeValue(forKey: id) ?? []
+        if !waiters.isEmpty, case .success = result, !cache.pinnedIDs.contains(id) {
+            updateCache { $0.pin(id) }
+        }
         offlineDownloadProgress[id] = nil
         offlineRetries[id] = nil
-        for waiter in offlineWaiters.removeValue(forKey: id) ?? [] {
+        for waiter in waiters {
             waiter.resume(with: result)
         }
     }
@@ -256,6 +279,7 @@ final class AudioDownloadManager: ObservableObject {
         selectionGeneration = UUID()
         let generation = selectionGeneration
         selectedID = track.id
+        prefetchTrack = nil
         self.onReady = onReady
         self.onFailure = onFailure
         errorMessage = nil
@@ -266,6 +290,15 @@ final class AudioDownloadManager: ObservableObject {
         attempts[track.id] = 0
         refreshTrackStatuses()
         let cached = cachedTrack(track)
+        // A rapid queue change must give the newly requested audio the network
+        // budget. Previously selected audio and explicit saves keep running.
+        for transfer in transfers.downloads where tracks[transfer.id]?.id != track.id {
+            let id = tracks[transfer.id]?.id
+            let priority = id.flatMap { offlineWaiters[$0] } == nil
+                ? URLSessionTask.lowPriority : URLSessionTask.defaultPriority
+            transfer.userInfo["priority"] = priority
+            tasks[transfer.id]?.priority = priority
+        }
         if let cachedLocal {
             Task { _ = await ensureArtwork(for: cached) }
             // Local playback is immediate and does not invalidate in-flight Up Next work.
@@ -300,7 +333,11 @@ final class AudioDownloadManager: ObservableObject {
     func prefetch(_ upcoming: [Track], playing id: String) {
         guard selectedID == id else { return }
         playingID = id
-        // Stage 42: no speculative network downloads. Explicit play/offline only.
+        // Warm exactly the immediate queue successor after playback has really
+        // started. A cached successor needs no network work. Queue reshuffles
+        // never fan out downloads for the rest of the mix.
+        prefetchTrack = upcoming.first(where: { $0.id != id })
+        startNextOffline()
     }
 
     nonisolated static func nextTracks(_ tracks: [Track], excluding id: String) -> [Track] {
@@ -319,13 +356,15 @@ final class AudioDownloadManager: ObservableObject {
             isRateLimited = false
             startNextOffline()
         }
-        // Explicit offline transfers retain their waiters; no speculative tasks exist.
+        // Explicit offline transfers retain their waiters. Automatic Up Next
+        // work remains bounded and waits until the breaker clears.
     }
 
     func cancelPlaybackSelection() {
         selectionGeneration = UUID()
         retryTask?.cancel()
         selectedID = nil; playingID = nil
+        prefetchTrack = nil
         onReady = nil; onFailure = nil
         isDownloading = false; isRetrying = false; downloadProgress = 0
         refreshTrackStatuses()
@@ -342,6 +381,7 @@ final class AudioDownloadManager: ObservableObject {
         offlineRetries.removeAll()
         for id in Array(offlineWaiters.keys) { completeOfflineAudio(id, result: .failure(URLError(.cancelled))) }
         selectedID = nil
+        prefetchTrack = nil
         onReady = nil
         onFailure = nil
         isDownloading = false
@@ -372,9 +412,13 @@ final class AudioDownloadManager: ObservableObject {
 
     private func startNextOffline() {
         guard !isDownloading, !isRateLimited, preparations.isEmpty,
-              tracks.isEmpty, !offlineQueue.isEmpty else { return }
-        let track = offlineQueue.removeFirst()
-        prepareDownload(track, priority: URLSessionTask.defaultPriority)
+              tracks.isEmpty else { return }
+        if !offlineQueue.isEmpty {
+            let track = offlineQueue.removeFirst()
+            prepareDownload(track, priority: URLSessionTask.defaultPriority)
+        } else if let track = prefetchTrack, !cachedIDs.contains(track.id) {
+            prepareDownload(track, priority: URLSessionTask.lowPriority)
+        }
     }
 
     /// Resolve catalog metadata outside the serial transfer-mutation queue.
@@ -395,7 +439,8 @@ final class AudioDownloadManager: ObservableObject {
                 serialize {
                     guard self.preparationGenerations[track.id] == generation else { return }
                     self.preparationGenerations[track.id] = nil
-                    guard self.selectedID == track.id || self.offlineWaiters[track.id] != nil else {
+                    guard self.selectedID == track.id || self.offlineWaiters[track.id] != nil ||
+                            self.prefetchTrack?.id == track.id else {
                         self.startNextOffline()
                         return
                     }
@@ -414,6 +459,7 @@ final class AudioDownloadManager: ObservableObject {
                 preparationGenerations[sourceTrack.id] = nil
                 preparations[sourceTrack.id] = nil
                 preparationPriorities[sourceTrack.id] = nil
+                if prefetchTrack?.id == sourceTrack.id { prefetchTrack = nil }
                 completeOfflineAudio(sourceTrack.id, result: .failure(error))
                 fail(sourceTrack, message: DownloadFailureMessage.describe(error))
                 startNextOffline()
@@ -685,6 +731,7 @@ extension AudioDownloadManager: DownloadManagerDelegate {
             _ = await ensureArtwork(for: track)
             completeOfflineAudio(track.id, result: .success(local))
         } catch {
+            if prefetchTrack?.id == track.id { prefetchTrack = nil }
             completeOfflineAudio(track.id, result: .failure(error))
             fail(track, message: DownloadFailureMessage.describe(error))
         }
@@ -709,6 +756,9 @@ extension AudioDownloadManager: DownloadManagerDelegate {
         tracks[download.id] = nil
         tasks[download.id] = nil
         lastProgressUpdate[download.id] = nil
+        // A failed speculative successor is retried only after explicit user
+        // intent or a later queue refresh, never in a tight background loop.
+        if prefetchTrack?.id == track.id { prefetchTrack = nil }
         serialize { await self.transfers.remove(download); self.persistPending(); self.startNextOffline() }
         if rateLimited { activateRateLimit(retryAfter: retryAfter) }
         // Speculative failures stay silent and can be retried on explicit selection.
