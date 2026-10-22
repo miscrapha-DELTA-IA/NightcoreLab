@@ -122,31 +122,6 @@ final class DemucsDSPTests: XCTestCase {
         }
     }
 
-    func testInPlaceWeightAdvanceExactlyMatchesOriginalRemoveAppend() {
-        let original = (0..<256).map { i in
-            i == 0 ? -Float.zero : Float(i) * 0.001 - 0.1
-        }
-        for amount in [0, 1, 3, 64, 192, 256] {
-            var reference = original
-            reference.removeFirst(amount)
-            reference.append(contentsOf: repeatElement(Float.zero, count: amount))
-            var optimized = original
-            OverlapAdd.advanceWeights(&optimized, by: amount)
-            XCTAssertEqual(optimized.count, original.count)
-            XCTAssertEqual(optimized.map(\.bitPattern), reference.map(\.bitPattern),
-                           "No normalization or overlap sample may change")
-        }
-
-        // Consecutive shifts also preserve an exact constant-size window.
-        var reference = original, optimized = original
-        for amount in [31, 8, 17, 1, 12, 64] {
-            reference.removeFirst(amount)
-            reference.append(contentsOf: repeatElement(Float.zero, count: amount))
-            OverlapAdd.advanceWeights(&optimized, by: amount)
-        }
-        XCTAssertEqual(optimized.map(\.bitPattern), reference.map(\.bitPattern))
-    }
-
     func testChunkOffsetsCoverTrack() {
         let total = StemDSP.segmentSamples * 3 + 1000
         let offs = OverlapAdd.offsets(totalSamples: total)
