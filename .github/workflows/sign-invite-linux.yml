@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate manifest and packaging helpers (stdlib tests)
+        run: python3 -m unittest discover -s tests -p 'test_gnarly_invite_ipa.py' -v
+
       - name: Require a successful official unsigned IPA run
         env:
           GH_TOKEN: ${{ github.token }}
