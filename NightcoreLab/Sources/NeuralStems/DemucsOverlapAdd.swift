@@ -48,23 +48,6 @@ public enum OverlapAdd {
         vDSP_vsadd(output, 1, &bias, output, 1, vDSP_Length(count))
     }
 
-    /// Shift an overlap window in-place, preserving its exact float32 values.
-    /// Array.removeFirst + append can allocate and repeatedly rebuild the
-    /// 344k-float weight buffer for every segment of a long track.
-    /// This mirrors the fixed-size 8-lane PCM accumulator's existing shift.
-    static func advanceWeights(_ weights: inout [Float], by amount: Int) {
-        precondition(amount >= 0 && amount <= weights.count)
-        guard amount > 0 else { return }
-        weights.withUnsafeMutableBufferPointer { buffer in
-            let pointer = buffer.baseAddress!
-            let remaining = buffer.count - amount
-            if remaining > 0 {
-                memmove(pointer, pointer + amount, remaining * MemoryLayout<Float>.stride)
-            }
-            (pointer + remaining).update(repeating: 0, count: amount)
-        }
-    }
-
     /// Default overlap between neighbouring chunks (demucs uses 0.25; 0.5 costs 2× time for a
     /// small quality gain — see docs/GOTCHAS.md).
     public static let defaultOverlap = 0.25
