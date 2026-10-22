@@ -244,11 +244,13 @@ struct TrackAudioCache {
 final class AudioCacheIO: @unchecked Sendable {
     private let queue = DispatchQueue(label: "nightcore.audio.cache", qos: .utility)
     private var cache: TrackAudioCache?
+    private let folder: URL
+    init(folder: URL = TrackAudioCache.stemCacheFolder) { self.folder = folder }
     func perform<T>(_ operation: @escaping (inout TrackAudioCache) throws -> T) async throws -> (T, TrackAudioCache) {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do {
-                    var value = self.cache ?? TrackAudioCache()
+                    var value = self.cache ?? TrackAudioCache(folder: self.folder)
                     let result = try operation(&value)
                     self.cache = value
                     continuation.resume(returning: (result, value))

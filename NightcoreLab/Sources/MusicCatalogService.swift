@@ -6,8 +6,54 @@ actor MusicCatalogService {
     static let shared = MusicCatalogService()
     private let session: URLSession
     private var collections: [String: (Date, Track, [Track])] = [:]
-    private var streams: [String: Track] = [:]
-    init(session: URLSession = .shared) { self.session = session }
+    private struct StoredStream: Codable, Sendable {
+        let videoID: String
+        let expiresAt: Date
+    }
+    private static let streamTTL: TimeInterval = 7 * 24 * 60 * 60
+    private let streamCacheURL: URL?
+    private let initialStreams: Task<[String: StoredStream], Never>
+    private var streamsLoaded = false
+    private var streams: [String: StoredStream] = [:]
+    private var streamWrite: Task<Void, Never>?
+    init(session: URLSession = .shared, streamCacheURL: URL? = nil) {
+        self.session = session
+        let url = streamCacheURL ?? (session === URLSession.shared
+            ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("Gnarly/catalog-streams-v1.json") : nil)
+        self.streamCacheURL = url
+        initialStreams = Task.detached(priority: .utility) {
+            guard let url,
+                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size <= 256 * 1024, let data = try? Data(contentsOf: url),
+                  let stored = try? JSONDecoder().decode([String: StoredStream].self, from: data) else { return [:] }
+            let now = Date()
+            let valid = stored.filter { key, value in
+                key.count <= 512 && Self.validVideoID(value.videoID) && value.expiresAt > now &&
+                    value.expiresAt.timeIntervalSince(now) <= Self.streamTTL
+            }.sorted { $0.value.expiresAt > $1.value.expiresAt }.prefix(200)
+            return Dictionary(uniqueKeysWithValues: valid.map { ($0.key, $0.value) })
+        }
+    }
+
+    private static func validVideoID(_ value: String) -> Bool {
+        value.range(of: "^[A-Za-z0-9_-]{11}$", options: .regularExpression) != nil
+    }
+    private static func streamKey(_ track: Track) -> String {
+        [track.id, MetadataCleaner.key(cleanedTitle(track)),
+         MetadataCleaner.key(AlbumArtistCollectionResolver.artistName(for: track) ?? "")].joined(separator: "|")
+    }
+    private func persistStreams() {
+        guard let url = streamCacheURL else { return }
+        let previous = streamWrite, snapshot = streams
+        streamWrite = Task.detached(priority: .utility) {
+            await previous?.value
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+    func flushStreamCache() async { await streamWrite?.value }
 
     struct AppleSong: Decodable {
         var trackId: Int64?
@@ -152,22 +198,53 @@ actor MusicCatalogService {
     /// Catalog IDs never reach /download as YouTube IDs. Resolve only on explicit demand.
     func playable(_ track: Track, baseURL: String) async throws -> Track {
         guard track.id.hasPrefix("itunes-") || track.id.hasPrefix("deezer-") else { return track }
-        if let cached = streams[track.id] { return cached }
+        if let id = track.streamVideoID, Self.validVideoID(id) { return track }
+        if !streamsLoaded {
+            let restored = await initialStreams.value
+            if !streamsLoaded { streams = restored; streamsLoaded = true }
+        }
+        try Task.checkCancellation()
+        let key = Self.streamKey(track)
+        if let cached = streams[key], cached.expiresAt > Date(), Self.validVideoID(cached.videoID) {
+            var playable = track; playable.streamVideoID = cached.videoID
+            return playable
+        }
         let query = Self.query(for: track) + " audio"
-        var results: [Track] = []
-        do {
-            let bytes = try await data(request(baseURL + "/v1/search", ["q": query]))
-            results = try JSONDecoder().decode([TrackHit].self, from: bytes).map(\.asTrack)
-        } catch { try Task.checkCancellation() }
-        if results.isEmpty { results = try await youtubeSearch(query) }
-        guard let match = Self.bestMatch(results, for: track),
-              AudioDownloadManager.youtubeVideoURL(from: match.url.absoluteString) != nil else {
+        let backendRequest = try request(baseURL + "/v1/search", ["q": query])
+        // A sleeping free Render service must not hold device-direct catalog
+        // resolution behind its timeout. The first strict title/artist match
+        // wins; cancellation tears down the slower metadata request.
+        let match = await withTaskGroup(of: Track?.self, returning: Track?.self) { group in
+            group.addTask {
+                do {
+                    let bytes = try await self.data(backendRequest)
+                    let results = try JSONDecoder().decode([TrackHit].self, from: bytes).map(\.asTrack)
+                    return Self.bestMatch(results, for: track)
+                } catch { return nil }
+            }
+            group.addTask {
+                do { return Self.bestMatch(try await self.youtubeSearch(query), for: track) }
+                catch { return nil }
+            }
+            for await candidate in group {
+                if let candidate, Self.validVideoID(candidate.id) {
+                    group.cancelAll(); return candidate
+                }
+            }
+            return nil
+        }
+        try Task.checkCancellation()
+        guard let match else {
             throw URLError(.resourceUnavailable)
         }
         var playable = track
         playable.streamVideoID = match.id
-        if streams.count >= 200 { streams.removeAll() }
-        streams[track.id] = playable
+        streams = streams.filter { $0.value.expiresAt > Date() }
+        if streams.count >= 200, let oldest = streams.min(by: { $0.value.expiresAt < $1.value.expiresAt })?.key {
+            streams[oldest] = nil
+        }
+        streams[key] = StoredStream(videoID: match.id, expiresAt: Date().addingTimeInterval(Self.streamTTL))
+        persistStreams()
         return playable
     }
 

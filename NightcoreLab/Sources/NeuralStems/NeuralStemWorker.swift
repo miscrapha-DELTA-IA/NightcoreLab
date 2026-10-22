@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 import CryptoKit
 import Foundation
 import Darwin
@@ -288,7 +289,8 @@ enum NeuralStemWorker {
                 try file.read(into: buffer, frameCount: count)
                 guard buffer.frameLength == count else { throw NeuralStemError.invalidOutput }
                 for channel in 0..<2 {
-                    for frame in 0..<Int(count) { output.floatChannelData![channel][frame] += buffer.floatChannelData![channel][frame] }
+                    vDSP_vadd(output.floatChannelData![channel], 1, buffer.floatChannelData![channel], 1,
+                              output.floatChannelData![channel], 1, vDSP_Length(count))
                 }
             }
             try writer.write(from: output)
@@ -388,56 +390,66 @@ enum NeuralStemWorker {
             try check()
             let segmentStartedAt = ProcessInfo.processInfo.systemUptime
             var recoveredMemory = false
-            StemMemoryRecovery.releaseUnusedPages()
             let valid = min(length, decoded.frames - start)
             let count = start + length >= decoded.frames ? valid : advance
-            file.framePosition = AVAudioFramePosition(start)
-            try file.read(into: input, frameCount: AVAudioFrameCount(valid))
-            guard Int(input.frameLength) == valid, let channels = input.floatChannelData else { throw NeuralStemError.noAudio }
-            var segment = [Float](repeating: 0, count: length * 2)
-            for channel in 0..<2 {
-                for i in 0..<valid { segment[channel * length + i] = (channels[channel][i] - decoded.mean) / decoded.standardDeviation }
-            }
             let checkpoint = segments.appendingPathComponent("\(start).pcm")
             let cached = StemSegmentCheckpoint.load(checkpoint, count: 8 * length)
             let separated: [Float]
-            if let cached { separated = cached }
-            else {
-            separated = try StemMemoryRecovery.perform(recover: { _ in
-                recoveredMemory = true
-                progress(0.05 + 0.94 * Double(start) / Double(decoded.frames),
-                         "Liberando memória para continuar…")
-                try recover()
-            }) { try autoreleasepool {
-                let result = try separator.separate(segment, check: check, admission: { required in
-                    #if !targetEnvironment(simulator)
-                    let available = os_proc_available_memory()
-                    guard available >= required else {
-                        throw NeuralStemError.memoryBudget(requiredMiB: required / 1_048_576,
-                                                           availableMiB: available / 1_048_576)
+            if let cached {
+                // Completed segments already contain the exact model output.
+                // Resume only replays their overlap; no source read, input
+                // normalisation or model scratch allocation is necessary.
+                separated = cached
+            } else {
+                StemMemoryRecovery.releaseUnusedPages()
+                file.framePosition = AVAudioFramePosition(start)
+                try file.read(into: input, frameCount: AVAudioFrameCount(valid))
+                guard Int(input.frameLength) == valid, let channels = input.floatChannelData else { throw NeuralStemError.noAudio }
+                var segment = [Float](repeating: 0, count: length * 2)
+                segment.withUnsafeMutableBufferPointer { target in
+                    var negativeMean = -decoded.mean, deviation = decoded.standardDeviation
+                    for channel in 0..<2 {
+                        let lane = target.baseAddress! + channel * length
+                        vDSP_vsadd(channels[channel], 1, &negativeMean, lane, 1, vDSP_Length(valid))
+                        vDSP_vsdiv(lane, 1, &deviation, lane, 1, vDSP_Length(valid))
                     }
-                    #endif
-                }, progress: { fraction, _ in
-                    // Report committed output, not the overlapping context;
-                    // otherwise the bar moves backwards at every segment.
-                    let completed = min(Double(decoded.frames), Double(start) + Double(count) * fraction)
-                    progress(0.05 + 0.94 * completed / Double(decoded.frames), remainingMessage)
-                })
-                try check()
-                return result
-            } }
-            try StemSegmentCheckpoint.save(separated, to: checkpoint)
+                }
+                separated = try StemMemoryRecovery.perform(recover: { _ in
+                    recoveredMemory = true
+                    progress(0.05 + 0.94 * Double(start) / Double(decoded.frames),
+                             "Liberando memória para continuar…")
+                    try recover()
+                }) { try autoreleasepool {
+                    let result = try separator.separate(segment, check: check, admission: { required in
+                        #if !targetEnvironment(simulator)
+                        let available = os_proc_available_memory()
+                        guard available >= required else {
+                            throw NeuralStemError.memoryBudget(requiredMiB: required / 1_048_576,
+                                                               availableMiB: available / 1_048_576)
+                        }
+                        #endif
+                    }, progress: { fraction, _ in
+                        // Report committed output, not the overlapping context;
+                        // otherwise the bar moves backwards at every segment.
+                        let completed = min(Double(decoded.frames), Double(start) + Double(count) * fraction)
+                        progress(0.05 + 0.94 * completed / Double(decoded.frames), remainingMessage)
+                    })
+                    try check()
+                    return result
+                } }
+                try StemSegmentCheckpoint.save(separated, to: checkpoint)
             }
-            for i in 0..<length {
-                weights[i] += weight[i]
-                for lane in 0..<8 { accumulator[lane * length + i] += separated[lane * length + i] * weight[i] }
-            }
+            OverlapAdd.accumulate(separated, weight: weight, accumulator: &accumulator, weights: &weights)
             output.frameLength = AVAudioFrameCount(count)
             for source in 0..<4 {
-                for channel in 0..<2 {
-                    let offset = (source * 2 + channel) * length
-                    for i in 0..<count {
-                        output.floatChannelData![channel][i] = accumulator[offset + i] / max(weights[i], 1e-12) * decoded.standardDeviation + decoded.mean / 4
+                accumulator.withUnsafeBufferPointer { accumulated in
+                    weights.withUnsafeBufferPointer { total in
+                        for channel in 0..<2 {
+                            let offset = (source * 2 + channel) * length
+                            OverlapAdd.restoreLane(accumulated.baseAddress! + offset, weights: total.baseAddress!,
+                                count: count, standardDeviation: decoded.standardDeviation, mean: decoded.mean,
+                                to: output.floatChannelData![channel])
+                        }
                     }
                 }
                 try writers[source].write(from: output)

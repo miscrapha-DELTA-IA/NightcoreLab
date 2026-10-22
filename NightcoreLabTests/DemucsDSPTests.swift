@@ -74,6 +74,54 @@ final class DemucsDSPTests: XCTestCase {
         XCTAssertEqual(w[0], w[w.count - 1], accuracy: 1e-6)
     }
 
+    func testVectorOverlapKeepsAllSourcesAndExistingContext() {
+        let length = 64, lanes = 8
+        let window = OverlapAdd.triangleWeights(length)
+        let separated = (0..<(length * lanes)).map { Float(sin(Double($0) * 0.17)) }
+        var accumulated = (0..<(length * lanes)).map { Float($0 % 19) * 0.02 - 0.1 }
+        var weights = window.reversed().map { $0 * 0.4 }
+        var reference = accumulated, referenceWeights = weights
+        for frame in 0..<length {
+            referenceWeights[frame] += window[frame]
+            for lane in 0..<lanes {
+                reference[lane * length + frame] += separated[lane * length + frame] * window[frame]
+            }
+        }
+        OverlapAdd.accumulate(separated, weight: window, accumulator: &accumulated, weights: &weights)
+        for i in accumulated.indices { XCTAssertEqual(accumulated[i], reference[i], accuracy: 0.000001) }
+        XCTAssertEqual(weights, referenceWeights)
+
+        // A tail segment emits only its valid prefix, without touching output
+        // outside that range or mixing source/channel lanes together.
+        let count = 23
+        for lane in 0..<lanes {
+            var output = [Float](repeating: -999, count: length)
+            accumulated.withUnsafeBufferPointer { input in
+                weights.withUnsafeBufferPointer { total in
+                    output.withUnsafeMutableBufferPointer { target in
+                        OverlapAdd.restoreLane(input.baseAddress! + lane * length, weights: total.baseAddress!,
+                            count: count, standardDeviation: 0.21, mean: 0.43, to: target.baseAddress!)
+                    }
+                }
+            }
+            for i in 0..<count {
+                let expected = reference[lane * length + i] / referenceWeights[i] * 0.21 + 0.43 / 4
+                XCTAssertEqual(output[i], expected, accuracy: 0.000001)
+            }
+            XCTAssertTrue(output[count...].allSatisfy { $0 == -999 })
+        }
+    }
+
+    func testStridedFFTLayoutKeepsDCSeparateFromDroppedNyquist() {
+        let spectrum = StemDSP.stft([Float](repeating: 0.5, count: StemDSP.segmentSamples))
+        for frame in 0..<StemDSP.frames {
+            XCTAssertEqual(spectrum.re[frame], 16, accuracy: 0.0001)
+            XCTAssertEqual(spectrum.im[frame], 0)
+            XCTAssertEqual(spectrum.re[1 * StemDSP.frames + frame], -8, accuracy: 0.0001)
+            XCTAssertEqual(spectrum.re[200 * StemDSP.frames + frame], 0, accuracy: 0.0001)
+        }
+    }
+
     func testChunkOffsetsCoverTrack() {
         let total = StemDSP.segmentSamples * 3 + 1000
         let offs = OverlapAdd.offsets(totalSamples: total)

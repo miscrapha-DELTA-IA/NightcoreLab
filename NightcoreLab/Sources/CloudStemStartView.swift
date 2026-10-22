@@ -29,6 +29,9 @@ struct CloudStemStartView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var code = ""
     @State private var error: String?
+    @State private var hfToken = ""
+    @State private var accountStatus: String?
+    @State private var checkingAccount = false
     var body: some View {
         NavigationStack {
             Form {
@@ -41,6 +44,38 @@ struct CloudStemStartView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 } header: { Text("GPU gratuita · separação real por IA") }
                 Section {
+                    Text("A conta conectada no navegador ou no Render não é usada automaticamente aqui. Conecte sua conta gratuita para usar a cota pessoal do Hugging Face.")
+                        .font(.footnote)
+                    DisclosureGroup("Conectar minha conta gratuita") {
+                        Link("Criar token pessoal Read no Hugging Face", destination: URL(string: "https://huggingface.co/settings/tokens")!)
+                        SecureField("Token Read · hf_…", text: $hfToken)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Button(checkingAccount ? "Verificando…" : "Verificar e salvar conta") {
+                            checkingAccount = true; error = nil
+                            let value = hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Task { @MainActor in
+                                defer { checkingAccount = false }
+                                do {
+                                    let profile = try await HuggingFaceAccess.verify(value)
+                                    guard HuggingFaceAccess.save(value) else {
+                                        error = "Não foi possível salvar a conexão com segurança."; return
+                                    }
+                                    accountStatus = "Conta gratuita conectada: " + profile.name
+                                } catch { self.error = error.localizedDescription }
+                            }
+                        }.disabled(checkingAccount || hfToken.isEmpty)
+                        if !hfToken.isEmpty {
+                            Button("Desconectar e usar acesso anônimo", role: .destructive) {
+                                if HuggingFaceAccess.save("") { hfToken = ""; accountStatus = nil }
+                                else { error = "Não foi possível remover a conexão." }
+                            }.disabled(checkingAccount)
+                        }
+                    }
+                    if let accountStatus { Text(accountStatus).foregroundStyle(.secondary).font(.footnote) }
+                } footer: {
+                    Text("O token fica no cofre deste iPhone e é enviado somente ao Hugging Face. Use uma conta gratuita e token Read; PRO e escrita são bloqueados. A fila e a cota real do provedor continuam valendo. Não há troca automática para GPU paga.")
+                }
+                Section {
                     DisclosureGroup("Código de acesso, se solicitado") {
                         SecureField("Código do beta (opcional)", text: $code)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -51,15 +86,22 @@ struct CloudStemStartView: View {
                         guard value.isEmpty || CloudStemBetaCode.save(value) else {
                             error = "Não foi possível salvar o código com segurança."; return
                         }
+                        let token = hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard HuggingFaceAccess.save(token) else {
+                            error = "Não foi possível salvar a conexão com o Hugging Face."; return
+                        }
                         start(value); dismiss()
                     }
-                    .disabled(!code.isEmpty && code.trimmingCharacters(in: .whitespacesAndNewlines).count < 16)
-                } footer: { Text("A opção comunitária não exige login ou código. Se seu servidor usar acesso restrito, informe o código do beta. Não informe senha ou token do Hugging Face.") }
+                    .disabled(checkingAccount || (!code.isEmpty && code.trimmingCharacters(in: .whitespacesAndNewlines).count < 16))
+                } footer: { Text("O código do beta é diferente do token do Hugging Face. O acesso anônimo continua disponível com a cota compartilhada. Não informe sua senha.") }
             }
             .navigationTitle("Separar na nuvem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Fechar") { dismiss() } } }
         }
-        .onAppear { code = CloudStemBetaCode.read() }
+        .onAppear {
+            code = CloudStemBetaCode.read(); hfToken = HuggingFaceAccess.read()
+            if !hfToken.isEmpty { accountStatus = "Token pessoal salvo neste iPhone" }
+        }
     }
 }

@@ -40,6 +40,9 @@ final class CloudStemTransfer: NSObject, URLSessionDownloadDelegate, @unchecked 
     private func file(_ key: String) -> URL { root.appendingPathComponent(key + ".response") }
 
     func download(_ url: URL, key: String) async throws -> URL {
+        try await download(URLRequest(url: url), key: key)
+    }
+    func download(_ request: URLRequest, key: String) async throws -> URL {
         try Task.checkCancellation()
         if FileManager.default.fileExists(atPath: file(key).path) { return file(key) }
         return try await withTaskCancellationHandler {
@@ -56,7 +59,7 @@ final class CloudStemTransfer: NSObject, URLSessionDownloadDelegate, @unchecked 
                         self.lock.unlock(); waiting?.resume(returning: self.file(key)); return
                     }
                     if tasks.contains(where: { $0.taskDescription == key }) { self.lock.unlock(); return }
-                    let task = self.session.downloadTask(with: url)
+                    let task = self.session.downloadTask(with: request)
                     task.taskDescription = key
                     task.resume()
                     self.lock.unlock()
