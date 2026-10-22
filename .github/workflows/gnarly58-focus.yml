@@ -1,0 +1,58 @@
+name: Gnarly 58 focused latency and stem tests
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  focused:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      TEST_RUNNER_GNARLY_REQUIRE_NEURAL_MODEL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      # Reuse only the unchanged compiled model resources for early feedback.
+      # DSP changes still require ios.yml's independent PyTorch/CoreML parity
+      # gate and the unfiltered full test suite before an IPA is published.
+      - uses: actions/download-artifact@v4
+        with:
+          name: Gnarly-Neural-Model
+          path: NightcoreLab/Resources/NeuralStems
+          run-id: 39674158334
+          github-token: ${{ github.token }}
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Test changed contracts and native model runtime
+        run: |
+          set -o pipefail
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for devices in d["devices"].values() for v in devices if v["name"].startswith("iPhone")))')
+          xcodebuild test -project NightcoreLab.xcodeproj -scheme NightcoreLab \
+            -destination "platform=iOS Simulator,id=$device_id" \
+            -derivedDataPath FocusDerivedData -parallel-testing-enabled NO \
+            -resultBundlePath Gnarly58-Focus.xcresult \
+            -only-testing:NightcoreLabTests/HuggingFaceAccessTests \
+            -only-testing:NightcoreLabTests/CloudStemWorkerTests \
+            -only-testing:NightcoreLabTests/CloudStemRecoveryTests \
+            -only-testing:NightcoreLabTests/DownloadIndependenceTests \
+            -only-testing:NightcoreLabTests/Stage42CatalogAndDownloadTests \
+            -only-testing:NightcoreLabTests/DemucsDSPTests \
+            -only-testing:NightcoreLabTests/NeuralStemsRegressionTests \
+            -only-testing:NightcoreLabTests/StemMemoryRecoveryTests \
+            -only-testing:NightcoreLabTests/StemContinuityTests \
+            -only-testing:NightcoreLabTests/KaraokeContinuityTests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee gnarly58-focus.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Gnarly58-Focused-Validation
+          path: |
+            gnarly58-focus.log
+            Gnarly58-Focus.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

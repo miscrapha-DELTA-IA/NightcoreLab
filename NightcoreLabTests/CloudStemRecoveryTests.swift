@@ -55,7 +55,7 @@ final class CloudStemRecoveryTests: XCTestCase {
         try ("event: heartbeat\ndata: null\n\nevent: complete\ndata: " + String(decoding: payload, as: UTF8.self) + "\n\n")
             .write(to: sse, atomically: true, encoding: .utf8)
         let plan = RecoveryDownloads(directory: directory, sse: sse, fixtures: fixtures)
-        RecoveryRequests.reset()
+        RecoveryRequests.reset(dropAdmissionResponse: true)
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [RecoveryRequests.self]
         let session = URLSession(configuration: config)
@@ -64,19 +64,23 @@ final class CloudStemRecoveryTests: XCTestCase {
             try await CloudStemWorker.prepare(source: source, betaCode: "",
                 cacheFolder: directory.appendingPathComponent("cache"),
                 workFolder: directory.appendingPathComponent("work"),
-                serverURL: URL(string: "https://backend.invalid"), requestSession: session,
+                serverURL: URL(string: "https://backend.invalid"), requestSession: session, hfToken: "",
                 transfer: { url, key in try await plan.fetch(url, key: key) }, progress: { _, _ in })
         }
-        for _ in 0..<2 {
-            do { _ = try await prepare(); XCTFail("Fixture interrupts the first two attempts") }
+        for _ in 0..<3 {
+            do { _ = try await prepare(); XCTFail("Fixture interrupts admission, SSE and one stem") }
             catch is URLError { }
         }
         let result = try await prepare()
         XCTAssertEqual(result.source, .roformer)
         XCTAssertEqual(try NeuralStemWorker.validate(result), 4_410)
-        XCTAssertEqual(RecoveryRequests.count("/v1/stems/cloud/ticket"), 1)
+        XCTAssertEqual(RecoveryRequests.count("/v1/stems/cloud/ticket"), 2)
+        XCTAssertEqual(Set(RecoveryRequests.admissionKeys).count, 1, "A lost POST reply must reuse the same admission key")
+        XCTAssertNotNil(RecoveryRequests.admissionKeys.first.flatMap(UUID.init(uuidString:)))
         XCTAssertEqual(RecoveryRequests.count("/gradio_api/upload"), 1)
         XCTAssertEqual(RecoveryRequests.count("/gradio_api/call/separate"), 1)
+        let peak = await plan.maximumActiveFiles
+        XCTAssertEqual(peak, 4, "Four bounded file transfers must overlap; a failure preserves siblings")
         let counts = await plan.counts
         XCTAssertEqual(counts["events"], 2)
         XCTAssertEqual(counts["01_vocals.wav"], 1)
@@ -113,13 +117,21 @@ private actor RecoveryDownloads {
     let sse: URL
     let fixtures: [String: URL]
     var counts: [String: Int] = [:]
+    private var activeFiles = 0
+    var maximumActiveFiles = 0
     init(directory: URL, sse: URL, fixtures: [String: URL]) {
         self.directory = directory; self.sse = sse; self.fixtures = fixtures
     }
-    func fetch(_ url: URL, key: String) throws -> URL {
+    func fetch(_ url: URL, key: String) async throws -> URL {
         let event = url.path.contains("/call/")
         let name = event ? "events" : url.lastPathComponent
         counts[name, default: 0] += 1
+        if !event {
+            activeFiles += 1; maximumActiveFiles = max(maximumActiveFiles, activeFiles)
+            do { try await Task.sleep(for: .milliseconds(20)) }
+            catch { activeFiles -= 1; throw error }
+            activeFiles -= 1
+        }
         if (event || name == "03_bass.wav") && counts[name] == 1 { throw URLError(.networkConnectionLost) }
         let copy = directory.appendingPathComponent(UUID().uuidString)
         guard let source = event ? sse : fixtures[name] else { throw URLError(.fileDoesNotExist) }
@@ -131,13 +143,22 @@ private actor RecoveryDownloads {
 private final class RecoveryRequests: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     private static var counts: [String: Int] = [:]
-    static func reset() { lock.lock(); counts = [:]; lock.unlock() }
+    private static var keys: [String] = []
+    private static var dropAdmissionResponse = false
+    static var admissionKeys: [String] { lock.lock(); defer { lock.unlock() }; return keys }
+    static func reset(dropAdmissionResponse: Bool = false) { lock.lock(); counts = [:]; keys = []; Self.dropAdmissionResponse = dropAdmissionResponse; lock.unlock() }
     static func count(_ path: String) -> Int { lock.lock(); defer { lock.unlock() }; return counts[path, default: 0] }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let url = request.url!
         Self.lock.lock(); Self.counts[url.path, default: 0] += 1; Self.lock.unlock()
+        if url.path == "/v1/stems/cloud/ticket", let key = request.value(forHTTPHeaderField: "Idempotency-Key") {
+            Self.lock.lock(); Self.keys.append(key)
+            let drop = Self.dropAdmissionResponse; Self.dropAdmissionResponse = false
+            Self.lock.unlock()
+            if drop { client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost)); return }
+        }
         let object: Any
         switch url.path {
         case "/v1/stems/cloud/ticket": object = ["ticket": "public", "space_url": CloudStemWorker.communityURL.absoluteString,
