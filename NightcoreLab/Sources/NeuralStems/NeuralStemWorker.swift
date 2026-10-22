@@ -53,6 +53,19 @@ enum NeuralStemWorker {
         let mean: Float
         let standardDeviation: Float
     }
+    /// Diagnostic only; each value comes from actual on-device monotonic time.
+    /// No source URLs, song titles, tokens or recorded audio are included.
+    struct PerformanceReport: Codable {
+        let version: Int
+        let sourceSeconds: Double
+        let decodeSeconds: Double
+        let separationSeconds: Double
+        let coreMLModelLoads: Int
+        let coreMLPredictions: Int
+        let coreMLLoadingSeconds: Double
+        let coreMLPredictionSeconds: Double
+        let blockedAttentionSeconds: Double
+    }
     static var cacheRoot: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("GnarlyNeuralStems", isDirectory: true)
@@ -217,9 +230,11 @@ enum NeuralStemWorker {
         }
         let decodedURL = stage.appendingPathComponent(previewStart == nil ? "source.caf" : "original.wav")
         progress(0.01, "Preparando áudio…")
+        let decodeStartedAt = ProcessInfo.processInfo.systemUptime
         let decoded = try autoreleasepool {
             try decode(source, to: decodedURL, previewStart: previewStart, check: check)
         }
+        let decodeSeconds = ProcessInfo.processInfo.systemUptime - decodeStartedAt
         try check()
         progress(0.04, "Preparando separação…")
         try check()
@@ -227,17 +242,32 @@ enum NeuralStemWorker {
         try check()
         let segments = stage.appendingPathComponent("segments", isDirectory: true)
         try FileManager.default.createDirectory(at: segments, withIntermediateDirectories: true)
+        let separationStartedAt = ProcessInfo.processInfo.systemUptime
         try autoreleasepool {
             try separate(decodedURL, decoded: decoded, separator: separator,
                          destinations: urls(in: stage), segments: segments,
                          check: check, recover: recover, progress: progress)
         }
+        let separationSeconds = ProcessInfo.processInfo.systemUptime - separationStartedAt
         try check()
         if previewStart != nil {
             try autoreleasepool { try writeAccompaniment(in: stage, check: check) }
         }
         let staged = makeAsset(folder: stage, frames: Int64(decoded.frames), previewStart: previewStart)
         let frames = try validate(staged, expectedSeconds: previewStart == nil ? seconds : Double(decoded.frames) / sampleRate)
+        // One tiny profiling JSON per completed job, written outside the hot path.
+        // Existing manifest/cache keys, samples and completion semantics stay intact.
+        let perf = separator.performanceCounters
+        let report = PerformanceReport(version: 1, sourceSeconds: seconds,
+            decodeSeconds: decodeSeconds, separationSeconds: separationSeconds,
+            coreMLModelLoads: perf.modelLoads, coreMLPredictions: perf.predictions,
+            coreMLLoadingSeconds: perf.modelLoadSeconds,
+            coreMLPredictionSeconds: perf.predictionSeconds,
+            blockedAttentionSeconds: perf.attentionSeconds)
+        try? JSONEncoder().encode(report).write(
+            to: stage.appendingPathComponent("stem-performance.json"), options: .atomic)
+        Logger(subsystem: "com.nightcorelab", category: "neural-stems").notice(
+            "CPU stems: separation=\(separationSeconds, privacy: .public)s modelLoad=\(perf.modelLoadSeconds, privacy: .public)s prediction=\(perf.predictionSeconds, privacy: .public)s attention=\(perf.attentionSeconds, privacy: .public)s models=\(perf.modelLoads, privacy: .public)")
         let manifest = Manifest(model: DemucsCoreMLModel.identifier, sourceHash: hash, frames: frames, previewStart: previewStart)
         try JSONEncoder().encode(manifest).write(to: stage.appendingPathComponent("complete.json"), options: .atomic)
         completedResult = true
@@ -477,7 +507,7 @@ enum NeuralStemWorker {
                     (pointer + length - advance).update(repeating: 0, count: advance)
                 }
             }
-            weights.removeFirst(advance); weights.append(contentsOf: repeatElement(0, count: advance))
+            OverlapAdd.advanceWeights(&weights, by: advance)
             start += advance
         }
     }
