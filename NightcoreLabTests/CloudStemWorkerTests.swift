@@ -95,4 +95,75 @@ final class CloudStemWorkerTests: XCTestCase {
         files[0] = files[1]
         XCTAssertThrowsError(try CloudStemWorker.communityCompletion(response(), space: community))
     }
+    func testGPUPreflightDistinguishesExactHTDemucsFromCommunityRoformer() throws {
+        func status(_ provider: String, _ model: String, ready: Bool? = true,
+                    freeOnly: Bool = true, enabled: Bool = true) throws -> CloudStemWorker.Status {
+            var dictionary: [String: Any] = [
+                "enabled": enabled, "free_only": freeOnly, "provider": provider,
+                "model": model, "requires_beta_code": false
+            ]
+            if let ready { dictionary["provider_available"] = ready }
+            return try JSONDecoder().decode(CloudStemWorker.Status.self,
+                                            from: JSONSerialization.data(withJSONObject: dictionary))
+        }
+        let localEquivalent = try status("owned_htdemucs", "htdemucs", ready: nil)
+        XCTAssertTrue(localEquivalent.isReady)
+        XCTAssertFalse(localEquivalent.usesDifferentModel)
+        XCTAssertEqual(localEquivalent.modelTitle, "HTDemucs (GPU)")
+        let community = try status("community_bs_roformer", CloudStemWorker.communityModel)
+        XCTAssertTrue(community.isReady)
+        XCTAssertTrue(community.usesDifferentModel)
+        XCTAssertTrue(community.modelTitle.contains("BS-Roformer"))
+        XCTAssertFalse(try status("community_bs_roformer", "htdemucs").isReady)
+        XCTAssertFalse(try status("owned_htdemucs", CloudStemWorker.communityModel).isReady)
+        XCTAssertFalse(try status("community_bs_roformer", CloudStemWorker.communityModel, ready: false).isReady)
+        XCTAssertFalse(try status("community_bs_roformer", CloudStemWorker.communityModel, freeOnly: false).isReady)
+        XCTAssertFalse(try status("community_bs_roformer", CloudStemWorker.communityModel, enabled: false).isReady)
+    }
+
+    func testStatusPreflightUsesOnlyReadOnlyGETAndNoHuggingFaceUpload() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CloudStatusOnlyProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let status = try await CloudStemWorker.checkStatus(
+            serverURL: URL(string: "https://nightcorelab.onrender.com")!,
+            requestSession: session)
+        XCTAssertTrue(status.isReady)
+        XCTAssertTrue(status.usesDifferentModel)
+        XCTAssertEqual(CloudStatusOnlyProtocol.receivedMethod, "GET")
+        XCTAssertEqual(CloudStatusOnlyProtocol.receivedPath, "/v1/stems/cloud")
+    }
+
+}
+
+private final class CloudStatusOnlyProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    private static var lastMethod = ""
+    private static var lastPath = ""
+    static var receivedMethod: String {
+        lock.lock(); defer { lock.unlock() }; return lastMethod
+    }
+    static var receivedPath: String {
+        lock.lock(); defer { lock.unlock() }; return lastPath
+    }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock()
+        Self.lastMethod = request.httpMethod ?? ""
+        Self.lastPath = request.url?.path ?? ""
+        Self.lock.unlock()
+        let data = Data("""
+            {"enabled":true,"free_only":true,"provider_available":true,
+             "provider":"community_bs_roformer","model":"bs-roformer-musdb18hq",
+             "requires_beta_code":false}
+            """.utf8)
+        let reply = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                    headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: reply, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
