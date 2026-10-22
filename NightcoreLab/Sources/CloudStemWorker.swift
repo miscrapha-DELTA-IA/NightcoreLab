@@ -17,6 +17,65 @@ enum CloudStemWorker {
         let model: String
         let provider: String?
     }
+    /// Read-only Render health check for the integrated Stems picker.
+    /// GET /v1/stems/cloud never creates a ticket, starts GPU work or uploads audio.
+    struct Status: Decodable {
+        let enabled: Bool
+        let free_only: Bool
+        let provider_available: Bool?
+        let provider: String?
+        let requires_beta_code: Bool
+        let model: String?
+
+        var isReady: Bool {
+            guard enabled, free_only, provider_available != false else { return false }
+            switch (provider, model) {
+            case ("community_bs_roformer", "bs-roformer-musdb18hq"),
+                 ("owned_htdemucs", "htdemucs"): return true
+            default: return false
+            }
+        }
+        var modelTitle: String {
+            if provider == "owned_htdemucs", model == "htdemucs" { return "HTDemucs (GPU)" }
+            if provider == "community_bs_roformer", model == "bs-roformer-musdb18hq" {
+                return "BS-Roformer (GPU comunitária)"
+            }
+            return "GPU indisponível"
+        }
+        var usesDifferentModel: Bool { provider == "community_bs_roformer" }
+        var statusMessage: String {
+            if !enabled { return "O servidor não ativou a GPU gratuita; use o iPhone." }
+            if !free_only { return "O servidor não confirmou processamento exclusivamente gratuito." }
+            if provider_available == false { return "A GPU comunitária está indisponível ou foi atualizada. Use o iPhone." }
+            if !isReady { return "O modelo de GPU não corresponde a um provedor autorizado. Use o iPhone." }
+            return "GPU pronta para solicitar autorização; fila e cota podem limitar o uso."
+        }
+    }
+
+    static func checkStatus(serverURL: URL? = nil, requestSession: URLSession? = nil) async throws -> Status {
+        let configured = await MainActor.run { AudioDownloadManager.apiBaseURL }
+        guard let base = serverURL ?? URL(string: configured), base.scheme == "https",
+              base.user == nil, base.password == nil, base.fragment == nil,
+              let expectedHost = base.host else {
+            throw Failure.message("Configure um servidor HTTPS válido para consultar a GPU gratuita.")
+        }
+        var request = URLRequest(url: base.appendingPathComponent("v1/stems/cloud"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        let session = requestSession ?? URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
+        defer { if requestSession == nil { session.invalidateAndCancel() } }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              http.url?.scheme == "https", http.url?.host == expectedHost,
+              data.count > 0, data.count <= 32_768,
+              let status = try? JSONDecoder().decode(Status.self, from: data) else {
+            throw Failure.message("Não foi possível consultar a disponibilidade da GPU. Nenhum pedido foi enviado.")
+        }
+        return status
+    }
+
     static let communityURL = URL(string: "https://d-r-e-audio-separator.hf.space")!
     static let communityModel = "bs-roformer-musdb18hq"
     private static let clientID: String = {
