@@ -5,6 +5,50 @@ final class CloudStemWorkerTests: XCTestCase {
     let space = URL(string: "https://raphael-deltaia-gnarly-free-stems.hf.space")!
     let sourceHash = String(repeating: "a", count: 64)
 
+    func testGradioUploadAcceptsOnlySafeAudioFilePaths() throws {
+        let path = "/tmp/gradio/sha256/source.m4a"
+        let legacy = try JSONSerialization.data(withJSONObject: [path])
+        let dictionary = try JSONSerialization.data(withJSONObject: [
+            ["path": path, "orig_name": "source.m4a", "meta": ["_type": "gradio.FileData"]]
+        ])
+        XCTAssertEqual(try CloudStemWorker.uploadedAudioPath(legacy), path)
+        XCTAssertEqual(try CloudStemWorker.uploadedAudioPath(dictionary), path)
+        for response in [
+            Data("<html>temporary error</html>".utf8),
+            Data("{\"detail\":\"unavailable\"}".utf8),
+            Data("[]".utf8),
+            try JSONSerialization.data(withJSONObject: ["https://external.invalid/source.m4a"]),
+            try JSONSerialization.data(withJSONObject: ["/tmp/../secrets/source.m4a"]),
+            try JSONSerialization.data(withJSONObject: ["/tmp/gradio/source.wav"]),
+        ] {
+            XCTAssertThrowsError(try CloudStemWorker.uploadedAudioPath(response)) { error in
+                XCTAssertTrue(error is CloudStemWorker.Failure,
+                              "Must return a user-facing provider error instead of NSCocoaErrorDomain")
+            }
+        }
+    }
+
+    func testGradioCompletionAcceptsArrayAndWrappedQueueEnvelopes() throws {
+        let community = CloudStemWorker.communityURL
+        let files = ["01_vocals.wav", "02_drums.wav", "03_bass.wav", "04_other.wav"].map {
+            ["orig_name": $0, "url": community.absoluteString + "/gradio_api/file=/tmp/" + $0]
+        }
+        let values: [Any] = ["Ready", files, NSNull(), "unused HTML"]
+        let raw = try JSONSerialization.data(withJSONObject: values)
+        let wrapped = try JSONSerialization.data(withJSONObject: ["data": values])
+        let nested = try JSONSerialization.data(withJSONObject: ["output": ["data": values]])
+        for input in [raw, wrapped, nested] {
+            XCTAssertEqual(try CloudStemWorker.communityCompletion(input, space: community), 
+                           try CloudStemWorker.communityCompletion(raw, space: community))
+        }
+        for invalid in [Data("null".utf8), Data("<html>Queue blocked</html>".utf8),
+                        Data("{\"output\":{}}".utf8)] {
+            XCTAssertThrowsError(try CloudStemWorker.normalizedResult(invalid)) { error in
+                XCTAssertTrue(error is CloudStemWorker.Failure)
+            }
+        }
+    }
+
     func testOnlyExactHTTPSFileOriginIsAccepted() {
         XCTAssertTrue(CloudStemWorker.permittedSpace(space))
         XCTAssertTrue(CloudStemWorker.permittedDownload(space.appendingPathComponent("gradio_api/file=/tmp/test.wav"), space: space))
