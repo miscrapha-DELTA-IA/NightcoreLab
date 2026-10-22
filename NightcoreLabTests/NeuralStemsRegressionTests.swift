@@ -314,6 +314,22 @@ final class NeuralStemsRegressionTests: XCTestCase {
             modelURL: model, progress: { _, _ in })
         XCTAssertEqual(asset.source, .demucs)
         XCTAssertEqual(try NeuralStemWorker.validate(asset, expectedSeconds: 2), 88_200)
+        // One diagnostic per finished source: no extra model execution, no
+        // audio/title in telemetry, all timings measured on the actual runner.
+        let profileURL = try XCTUnwrap(asset.vocalURL).deletingLastPathComponent()
+            .appendingPathComponent("stem-performance.json")
+        let profile = try JSONDecoder().decode(NeuralStemWorker.PerformanceReport.self,
+                                              from: Data(contentsOf: profileURL))
+        XCTAssertEqual(profile.version, 1)
+        XCTAssertEqual(profile.sourceSeconds, 2, accuracy: 0.01)
+        XCTAssertGreaterThan(profile.decodeSeconds, 0)
+        XCTAssertGreaterThan(profile.separationSeconds, 0)
+        XCTAssertGreaterThan(profile.coreMLModelLoads, 0)
+        XCTAssertGreaterThan(profile.coreMLPredictions, 0)
+        XCTAssertGreaterThan(profile.coreMLLoadingSeconds, 0)
+        XCTAssertGreaterThan(profile.coreMLPredictionSeconds, 0)
+        XCTAssertTrue(profile.blockedAttentionSeconds.isFinite)
+        XCTAssertGreaterThanOrEqual(profile.blockedAttentionSeconds, 0)
         var peak: Float = 0
         for url in asset.urls.values {
             let wave = try samples(url)
