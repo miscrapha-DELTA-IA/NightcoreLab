@@ -1,0 +1,67 @@
+name: Gnarly Windows Installer
+on:
+  push:
+    branches: [distribution/gnarly-windows-installer]
+    paths: [windows-installer/**, .github/workflows/gnarly-windows-installer.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gnarly-windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: windows-installer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows-installer/src-tauri -> target
+      - name: Prepare Windows native build dependencies
+        run: choco install strawberryperl make --no-progress -y
+      - name: Install pinned frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck and build interface
+        run: bun run build
+      - name: Generate Gnarly desktop icons
+        run: bun tauri icon public/gnarly.svg
+      - name: Verify real published IPA for native integrity tests
+        shell: pwsh
+        run: |
+          $ipa = Join-Path $env:RUNNER_TEMP 'Gnarly-57-Continuity.ipa'
+          Invoke-WebRequest 'https://github.com/miscrapha-DELTA-IA/NightcoreLab/releases/download/gnarly-build57-livecontainer-beta/Gnarly-57-Continuity.ipa' -OutFile $ipa
+          if ((Get-Item $ipa).Length -ne 112107110) { throw 'Wrong IPA size' }
+          if ((Get-FileHash $ipa -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'a12387c7bd3d361c8dd3eeb78ad090559e0e0c24111f15ef0c03e3a8f6440dc9') { throw 'Wrong IPA digest' }
+          "GNARLY_IPA_TEST=$ipa" | Out-File $env:GITHUB_ENV -Append
+      - name: Test verified and truncated IPA handling
+        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --lib gnarly::tests
+      - name: Build Windows installer
+        run: bun tauri build --bundles nsis -- --locked
+      - name: Assemble delivery
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force delivery | Out-Null
+          $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if ($setup.Count -ne 1) { throw 'Expected exactly one Windows installer' }
+          Copy-Item $setup[0].FullName delivery/Gnarly-Installer-Windows-x64-Setup.exe
+          Copy-Item README.md delivery/LEIA-ME.md
+          Copy-Item LICENSE,LICENSE-BRANDING,UPSTREAM.md delivery/
+          $hash = (Get-FileHash delivery/Gnarly-Installer-Windows-x64-Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Gnarly-Installer-Windows-x64-Setup.exe" | Set-Content delivery/SHA256SUMS.txt
+          Compress-Archive -Path delivery/* -DestinationPath Gnarly-Installer-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gnarly-Installer-Windows-x64
+          if-no-files-found: error
+          path: |
+            windows-installer/delivery/*
+            windows-installer/Gnarly-Installer-Windows-x64.zip
