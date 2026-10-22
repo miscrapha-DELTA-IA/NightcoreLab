@@ -215,8 +215,10 @@ enum CloudStemWorker {
               JSONSerialization.isValidJSONObject(metadata) else {
             throw Failure.message("Resposta inválida da GPU gratuita.")
         }
-        let manifest = try JSONDecoder().decode(Manifest.self,
-                            from: JSONSerialization.data(withJSONObject: metadata))
+        guard let manifestData = try? JSONSerialization.data(withJSONObject: metadata),
+              let manifest = try? JSONDecoder().decode(Manifest.self, from: manifestData) else {
+            throw Failure.message("O manifesto de stems da GPU é incompatível. A resposta foi preservada; não haverá nova inferência automática.")
+        }
         guard manifest.model == "htdemucs", manifest.source_hash == sourceHash,
               manifest.sample_rate == 44_100, manifest.frames > 0, manifest.frames < 600 * 44_100,
               names.allSatisfy({ manifest.sha256[$0.1]?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil }) else {
@@ -241,7 +243,7 @@ enum CloudStemWorker {
               let first = values.first else {
             throw Failure.message("A GPU respondeu ao envio com um JSON inválido. Nenhum processamento novo foi solicitado; confira a conexão do Space.")
         }
-        let raw = (first as? String) ?? (first as? [String: Any])?["path"] as? String
+        let raw = (first as? String) ?? ((first as? [String: Any])?["path"] as? String)
         guard let path = raw, path.hasPrefix("/"), path.count <= 8_192,
               path.lowercased().hasSuffix(".m4a"),
               !path.split(separator: "/").contains(".."),
@@ -278,9 +280,11 @@ enum CloudStemWorker {
     /// This provider does not attest the original source hash or file SHA-256;
     /// local checksums are recorded after HTTPS download and audio validation.
     static func communityCompletion(_ data: Data, space: URL) throws -> [URL] {
-        guard space == communityURL,
-              let normalized = try? normalizedResult(data),
-              let values = try? JSONSerialization.jsonObject(with: normalized) as? [Any], values.count == 4,
+        guard space == communityURL else {
+            throw Failure.message("O endereço do Space não corresponde ao provedor comunitário autorizado.")
+        }
+        let normalized = try normalizedResult(data)
+        guard let values = try? JSONSerialization.jsonObject(with: normalized) as? [Any], values.count == 4,
               let files = values[1] as? [[String: Any]], files.count == 4 else {
             throw Failure.message("O serviço comunitário retornou um formato incompatível.")
         }
@@ -547,7 +551,11 @@ enum CloudStemWorker {
                         try Task.checkCancellation()
                         let byteCount = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                         let checksum = try hash(temporary)
-                        let audio = try AVAudioFile(forReading: temporary)
+                        let audio: AVAudioFile
+                        do { audio = try AVAudioFile(forReading: temporary) }
+                        catch {
+                            throw Failure.message("O Space enviou um arquivo que não é um WAV válido. Os demais stems e o pedido foram preservados para recuperação.")
+                        }
                         let maximumFrames = expected?.frames ?? Int64((seconds * 44_100).rounded())
                         guard byteCount > 0, byteCount <= maximumFrames * 8 + 1_000_000,
                               audio.processingFormat.sampleRate == 44_100,
