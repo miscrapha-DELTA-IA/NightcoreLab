@@ -209,13 +209,16 @@ enum CloudStemWorker {
     }
 
     static func completion(_ data: Data, space: URL, sourceHash: String) throws -> ([URL], Manifest) {
-        guard let values = try JSONSerialization.jsonObject(with: data) as? [Any], values.count == 5,
+        let normalized = try normalizedResult(data)
+        guard let values = try? JSONSerialization.jsonObject(with: normalized) as? [Any], values.count == 5,
               let metadata = values.last,
               JSONSerialization.isValidJSONObject(metadata) else {
             throw Failure.message("Resposta inválida da GPU gratuita.")
         }
-        let manifest = try JSONDecoder().decode(Manifest.self,
-                            from: JSONSerialization.data(withJSONObject: metadata))
+        guard let manifestData = try? JSONSerialization.data(withJSONObject: metadata),
+              let manifest = try? JSONDecoder().decode(Manifest.self, from: manifestData) else {
+            throw Failure.message("O manifesto de stems da GPU é incompatível. A resposta foi preservada; não haverá nova inferência automática.")
+        }
         guard manifest.model == "htdemucs", manifest.source_hash == sourceHash,
               manifest.sample_rate == 44_100, manifest.frames > 0, manifest.frames < 600 * 44_100,
               names.allSatisfy({ manifest.sha256[$0.1]?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil }) else {
@@ -231,13 +234,57 @@ enum CloudStemWorker {
         return (urls, manifest)
     }
 
+    /// Parse the transport shapes Gradio exposes without allowing a provider
+    /// response to surface as an opaque NSCocoaErrorDomain/JSON decoding error.
+    /// Neither helper sends a network request or changes a saved event_id.
+    static func uploadedAudioPath(_ data: Data) throws -> String {
+        guard data.count > 0, data.count <= 64_000,
+              let values = (try? JSONSerialization.jsonObject(with: data)) as? [Any],
+              let first = values.first else {
+            throw Failure.message("A GPU respondeu ao envio com um JSON inválido. Nenhum processamento novo foi solicitado; confira a conexão do Space.")
+        }
+        let raw = (first as? String) ?? ((first as? [String: Any])?["path"] as? String)
+        guard let path = raw, path.hasPrefix("/"), path.count <= 8_192,
+              path.lowercased().hasSuffix(".m4a"),
+              !path.split(separator: "/").contains(".."),
+              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw Failure.message("O Space não confirmou um caminho de áudio M4A válido. A música continua salva; nenhuma separação será reenviada.")
+        }
+        return path
+    }
+
+    static func normalizedResult(_ payload: Data) throws -> Data {
+        guard payload.count > 0, payload.count <= 1_000_000,
+              let decoded = try? JSONSerialization.jsonObject(with: payload) else {
+            throw Failure.message("A GPU concluiu, mas enviou dados que não são JSON. O identificador do pedido foi preservado.")
+        }
+        // Gradio queue events normally contain a plain array, but some versions
+        // wrap the outputs under data or output.data. Never accept arbitrary
+        // objects or attempt a second POST to repair a mismatched response.
+        if decoded is [Any] { return payload }
+        if let object = decoded as? [String: Any] {
+            if let error = object["error"] as? String, !error.isEmpty {
+                throw Failure.message("A GPU retornou um erro: " + String(error.prefix(200)))
+            }
+            let wrapped = (object["data"] as? [Any])
+                ?? ((object["output"] as? [String: Any])?["data"] as? [Any])
+            if let wrapped, JSONSerialization.isValidJSONObject(wrapped) {
+                return try JSONSerialization.data(withJSONObject: wrapped)
+            }
+        }
+        throw Failure.message("A GPU devolveu um formato de resultados incompatível. O pedido continua salvo; não enviaremos outro automaticamente.")
+    }
+
     /// Public Space contract: status, four named files, ZIP, HTML. Only the
     /// individually validated WAVs are used; HTML is never rendered or executed.
     /// This provider does not attest the original source hash or file SHA-256;
     /// local checksums are recorded after HTTPS download and audio validation.
     static func communityCompletion(_ data: Data, space: URL) throws -> [URL] {
-        guard space == communityURL,
-              let values = try JSONSerialization.jsonObject(with: data) as? [Any], values.count == 4,
+        guard space == communityURL else {
+            throw Failure.message("O endereço do Space não corresponde ao provedor comunitário autorizado.")
+        }
+        let normalized = try normalizedResult(data)
+        guard let values = try? JSONSerialization.jsonObject(with: normalized) as? [Any], values.count == 4,
               let files = values[1] as? [[String: Any]], files.count == 4 else {
             throw Failure.message("O serviço comunitário retornou um formato incompatível.")
         }
@@ -355,7 +402,11 @@ enum CloudStemWorker {
             if !betaCode.isEmpty { admissionRequest.setValue("Bearer " + betaCode, forHTTPHeaderField: "Authorization") }
             let (admissionData, admissionResponse) = try await session.data(for: admissionRequest)
             try requireSuccess(admissionResponse, data: admissionData)
-            pending.admission = try JSONDecoder().decode(Admission.self, from: admissionData)
+            guard admissionData.count <= 64_000,
+                  let accepted = try? JSONDecoder().decode(Admission.self, from: admissionData) else {
+                throw Failure.message("O Render enviou um ticket de GPU em formato inesperado. O pedido foi preservado, sem consumir uma nova admissão.")
+            }
+            pending.admission = accepted
             try pending.save(to: pendingURL)
         }
         guard let admission = pending.admission else { throw Failure.message("Pedido salvo inválido.") }
@@ -401,9 +452,7 @@ enum CloudStemWorker {
         let (uploadData, uploadResponse) = try await session.upload(for: upload, fromFile: multipart)
         try requireSuccess(uploadResponse)
         try FileManager.default.removeItem(at: multipart)
-        guard let remotePath = try JSONDecoder().decode([String].self, from: uploadData).first else {
-            throw Failure.message("O envio do áudio não foi concluído.")
-        }
+        let remotePath = try uploadedAudioPath(uploadData)
         pending.remotePath = remotePath
         try pending.save(to: pendingURL)
         }
@@ -425,10 +474,11 @@ enum CloudStemWorker {
             try pending.save(to: pendingURL)
         }
         try requireSuccess(callResponse)
-        guard let callObject = try JSONSerialization.jsonObject(with: callData) as? [String: String],
-              let eventID = callObject["event_id"],
+        guard callData.count <= 64_000,
+              let callObject = try? JSONSerialization.jsonObject(with: callData) as? [String: Any],
+              let eventID = callObject["event_id"] as? String,
               eventID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else {
-            throw Failure.message("A fila da GPU não aceitou o pedido.")
+            throw Failure.message("A GPU não confirmou um identificador de pedido válido. O envio não será repetido automaticamente para proteger sua cota.")
         }
         pending.eventID = eventID
         try pending.save(to: pendingURL)
@@ -501,7 +551,11 @@ enum CloudStemWorker {
                         try Task.checkCancellation()
                         let byteCount = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                         let checksum = try hash(temporary)
-                        let audio = try AVAudioFile(forReading: temporary)
+                        let audio: AVAudioFile
+                        do { audio = try AVAudioFile(forReading: temporary) }
+                        catch {
+                            throw Failure.message("O Space enviou um arquivo que não é um WAV válido. Os demais stems e o pedido foram preservados para recuperação.")
+                        }
                         let maximumFrames = expected?.frames ?? Int64((seconds * 44_100).rounded())
                         guard byteCount > 0, byteCount <= maximumFrames * 8 + 1_000_000,
                               audio.processingFormat.sampleRate == 44_100,
