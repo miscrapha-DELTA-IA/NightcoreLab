@@ -89,6 +89,114 @@ final class Stage42CatalogAndDownloadTests: XCTestCase {
         XCTAssertFalse(try source("AudioDownloadManager.swift").contains("transcodeAAC"))
         XCTAssertTrue(try source("AudioDownloadManager.swift").contains("setMaxConcurrentDownloads(2)"))
     }
+
+    func testValidResolvedCatalogIDNeedsNoMetadataRequest() async throws {
+        let token = CatalogResolutionProbe.shared.configure(rejectAll: true)
+        let service = catalogService(token: token)
+        let song = Track(id: "itunes-58", title: "Song", thumbnailURL: nil,
+                         cleanArtist: "Artist", streamVideoID: "12345678901")
+        let result = try await service.playable(song, baseURL: "https://fixture.test")
+        XCTAssertEqual(result, song)
+        XCTAssertEqual(CatalogResolutionProbe.shared.count(token), 0)
+    }
+
+    func testDirectStrictMatchDoesNotWaitForSleepingRender() async throws {
+        let token = CatalogResolutionProbe.shared.configure()
+        let service = catalogService(token: token)
+        let done = expectation(description: "Device-direct match wins before the held Render response")
+        let task = Task {
+            do {
+                let result = try await service.playable(
+                    Track(id: "itunes-58", title: "Song", thumbnailURL: nil, cleanArtist: "Artist"),
+                    baseURL: "https://fixture.test")
+                XCTAssertEqual(result.streamVideoID, "12345678901")
+            } catch { XCTFail("Direct catalog resolution failed: \(error)") }
+            done.fulfill()
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [done], timeout: 5)
+    }
+
+    func testResolvedCatalogMappingSurvivesRestartAndRejectsChangedMetadataAndExpiry() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("streams.json")
+        let first = catalogService(token: CatalogResolutionProbe.shared.configure(), cache: file)
+        let song = Track(id: "itunes-58", title: "Song", thumbnailURL: nil, cleanArtist: "Artist")
+        _ = try await first.playable(song, baseURL: "https://fixture.test")
+        await first.flushStreamCache()
+        let rejectToken = CatalogResolutionProbe.shared.configure(rejectAll: true)
+        let restored = catalogService(token: rejectToken, cache: file)
+        let cached = try await restored.playable(song, baseURL: "https://fixture.test")
+        XCTAssertEqual(cached.streamVideoID, "12345678901")
+        XCTAssertEqual(CatalogResolutionProbe.shared.count(rejectToken), 0)
+        do {
+            _ = try await restored.playable(Track(id: song.id, title: "Another Song", thumbnailURL: nil,
+                                                 cleanArtist: "Artist"), baseURL: "https://fixture.test")
+            XCTFail("A mapping for changed metadata must not be reused")
+        } catch {}
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: [String: Any]])
+        for key in payload.keys { payload[key]?["expiresAt"] = Date.distantPast.timeIntervalSinceReferenceDate }
+        try JSONSerialization.data(withJSONObject: payload).write(to: file)
+        let expired = catalogService(token: CatalogResolutionProbe.shared.configure(rejectAll: true), cache: file)
+        do {
+            _ = try await expired.playable(song, baseURL: "https://fixture.test")
+            XCTFail("An expired mapping must not be reused")
+        } catch {}
+    }
+
+    private func catalogService(token: String, cache: URL? = nil) -> MusicCatalogService {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpAdditionalHeaders = ["X-Gnarly-Test": token]
+        config.protocolClasses = [CatalogResolutionProtocol.self]
+        return MusicCatalogService(session: URLSession(configuration: config), streamCacheURL: cache)
+    }
+}
+
+private final class CatalogResolutionProbe: @unchecked Sendable {
+    static let shared = CatalogResolutionProbe()
+    private let lock = NSLock()
+    private var reject = Set<String>()
+    private var counts: [String: Int] = [:]
+    func configure(rejectAll: Bool = false) -> String {
+        let token = UUID().uuidString
+        lock.lock(); defer { lock.unlock() }
+        if rejectAll { reject.insert(token) }
+        return token
+    }
+    func record(_ token: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        counts[token, default: 0] += 1
+        return reject.contains(token)
+    }
+    func count(_ token: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return counts[token, default: 0]
+    }
+}
+
+private final class CatalogResolutionProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let token = request.value(forHTTPHeaderField: "X-Gnarly-Test") ?? ""
+        if CatalogResolutionProbe.shared.record(token) {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return
+        }
+        guard request.url!.host != "fixture.test" else { return } // sleeping Render
+        let payload: [String: Any] = ["musicResponsiveListItemRenderer": [
+            "playlistItemData": ["videoId": "12345678901"],
+            "flexColumns": [["musicResponsiveListItemFlexColumnRenderer": ["text": ["runs": [
+                ["text": "Song"], ["text": "Artist", "navigationEndpoint": ["browseEndpoint": ["browseId": "UCartist"]]]
+            ]]]]]
+        ]]
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200,
+            httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
 
 private final class Stage42OfflineProtocol: URLProtocol {
