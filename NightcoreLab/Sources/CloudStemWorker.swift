@@ -70,6 +70,112 @@ enum CloudStemWorker {
         }
         throw Failure.message("A conexão foi interrompida. O pedido está salvo; retome sem enviar outra separação.")
     }
+
+    /// Gradio uses an open SSE connection, often with heartbeats; a background
+    /// download waits for EOF and can leave the UI at 10% indefinitely.
+    /// Parse individual events and return immediately on the complete event.
+    enum SSEUpdate {
+        case heartbeat
+        case queued
+        case running
+        case complete(Data)
+    }
+    struct SSEEvents {
+        private var eventName = ""
+        private var fields: [String] = []
+        private var bytes = 0
+
+        mutating func feed(_ line: String) throws -> SSEUpdate? {
+            if line.isEmpty {
+                let name = eventName
+                let body = fields.joined(separator: "\n")
+                eventName = ""
+                fields.removeAll(keepingCapacity: true)
+                bytes = 0
+                switch name {
+                case "complete":
+                    guard !body.isEmpty else {
+                        throw Failure.message("A GPU terminou sem entregar stems. O pedido foi preservado.")
+                    }
+                    return .complete(Data(body.utf8))
+                case "error":
+                    throw ProviderFailure.rejected
+                case "generating", "processing":
+                    return .running
+                case "pending", "queue", "queued":
+                    return .queued
+                case "heartbeat":
+                    return .heartbeat
+                default:
+                    return nil
+                }
+            }
+            if line.hasPrefix("event:") {
+                eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+                let value = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                bytes += value.utf8.count + 1
+                guard bytes <= 1_000_000 else { throw Failure.message("Resposta da GPU excedeu o limite.") }
+                fields.append(value)
+            }
+            return nil
+        }
+    }
+
+    /// GET is read-only and references the exact saved Gradio event_id:
+    /// reconnecting never submits another inference or spends another admission.
+    static func awaitSavedResult(url: URL, token: String, session: URLSession,
+                                 progress: @escaping @Sendable (Double, String) -> Void) async throws -> Data {
+        let request = try HuggingFaceAccess.authorize(URLRequest(url: url), token: token)
+        return try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                let (lines, response) = try await session.bytes(for: request)
+                guard let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      http.url?.scheme == url.scheme, http.url?.host == url.host,
+                      http.url?.port == url.port else {
+                    if (response as? HTTPURLResponse)?.statusCode == 429 {
+                        throw Failure.message("A GPU limitou o acesso (429). O pedido está salvo; retome após a cota renovar.")
+                    }
+                    throw Failure.message("Não foi possível consultar o pedido na GPU. Ele permanece salvo para retomar.")
+                }
+                guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased()
+                    .contains("text/event-stream") == true else {
+                    throw Failure.message("A GPU retornou um formato inesperado. Pedido preservado; não será reenviado.")
+                }
+                var events = SSEEvents()
+                let started = ProcessInfo.processInfo.systemUptime
+                for try await line in lines.lines {
+                    try Task.checkCancellation()
+                    guard let update = try events.feed(line) else { continue }
+                    switch update {
+                    case .heartbeat:
+                        let seconds = Int(ProcessInfo.processInfo.systemUptime - started)
+                        progress(0.1, "GPU conectada · esperando resposta há \(seconds / 60) min \(seconds % 60) s")
+                    case .queued:
+                        progress(0.1, "Na fila da GPU gratuita · pedido salvo, sem reenvio")
+                    case .running:
+                        progress(0.1, "GPU processando os stems · a música continua disponível")
+                    case .complete(let payload):
+                        progress(0.6, "Separação concluída · recebendo os quatro stems…")
+                        return payload
+                    }
+                }
+                if case .complete(let payload)? = try events.feed("") { return payload }
+                throw Failure.message("A conexão com a GPU foi interrompida. Retome o pedido salvo sem gerar outro.")
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(720))
+                throw Failure.message("A GPU não concluiu em 12 minutos. O pedido continua salvo; retome para consultar a mesma tarefa.")
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw Failure.message("A conexão da GPU não respondeu. O pedido segue salvo.")
+            }
+            return result
+        }
+    }
+
     static let names: [(StemKind, String)] = [(.vocal, "vocals"), (.instrumental, "other"),
                                               (.drums, "drums"), (.bass, "bass")]
     private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -333,20 +439,32 @@ enum CloudStemWorker {
         }
         if pending.payload == nil {
             progress(0.1, "Acompanhando o pedido salvo na GPU gratuita…")
-            let response = try await transfer(callURL.appendingPathComponent(eventID), digest + "-" + eventID)
-            let bytes = try response.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard bytes <= 1_000_000 else { throw Failure.message("Resposta da GPU excedeu o limite.") }
-            do { pending.payload = try streamPayload(Data(contentsOf: response)) }
-            catch is ProviderFailure {
-                // This is a confirmed terminal provider failure, not a seek,
-                // background event or network dropout. Never auto-resubmit it.
-                try? FileManager.default.removeItem(at: pendingURL)
-                CloudStemTransfer.shared.remove(digest + "-" + eventID)
-                throw ProviderFailure.rejected
-            }
-            catch {
-                CloudStemTransfer.shared.remove(digest + "-" + eventID)
-                throw error
+            if suppliedTransfer != nil {
+                // Test/injected file transport retains its deterministic fixture path.
+                let response = try await transfer(callURL.appendingPathComponent(eventID), digest + "-" + eventID)
+                let bytes = try response.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard bytes <= 1_000_000 else { throw Failure.message("Resposta da GPU excedeu o limite.") }
+                do { pending.payload = try streamPayload(Data(contentsOf: response)) }
+                catch is ProviderFailure {
+                    try? FileManager.default.removeItem(at: pendingURL)
+                    CloudStemTransfer.shared.remove(digest + "-" + eventID)
+                    throw ProviderFailure.rejected
+                }
+                catch {
+                    CloudStemTransfer.shared.remove(digest + "-" + eventID)
+                    throw error
+                }
+            } else {
+                // Streaming interpretation: complete arrives before socket EOF.
+                // GET is safe to repeat for the same event, POST never is.
+                do {
+                    pending.payload = try await awaitSavedResult(
+                        url: callURL.appendingPathComponent(eventID), token: token,
+                        session: session, progress: progress)
+                } catch is ProviderFailure {
+                    try? FileManager.default.removeItem(at: pendingURL)
+                    throw ProviderFailure.rejected
+                }
             }
             try pending.save(to: pendingURL)
             CloudStemTransfer.shared.remove(digest + "-" + eventID)
