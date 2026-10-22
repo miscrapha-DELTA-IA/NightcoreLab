@@ -133,7 +133,7 @@ final class DemucsDSPTests: XCTestCase {
             var optimized = original
             OverlapAdd.advanceWeights(&optimized, by: amount)
             XCTAssertEqual(optimized.count, original.count)
-            XCTAssertEqual(optimized.map(\\.bitPattern), reference.map(\\.bitPattern),
+            XCTAssertEqual(optimized.map(\.bitPattern), reference.map(\.bitPattern),
                            "No normalization or overlap sample may change")
         }
 
@@ -144,7 +144,7 @@ final class DemucsDSPTests: XCTestCase {
             reference.append(contentsOf: repeatElement(Float.zero, count: amount))
             OverlapAdd.advanceWeights(&optimized, by: amount)
         }
-        XCTAssertEqual(optimized.map(\\.bitPattern), reference.map(\\.bitPattern))
+        XCTAssertEqual(optimized.map(\.bitPattern), reference.map(\.bitPattern))
     }
 
     func testChunkOffsetsCoverTrack() {
