@@ -110,6 +110,51 @@ final class CloudStemRecoveryTests: XCTestCase {
             XCTAssertTrue($0 is CloudStemWorker.ProviderFailure)
         }
     }
+
+    func testGradioStreamingCompletionIsReadableBeforeConnectionCloses() throws {
+        var events = CloudStemWorker.SSEEvents()
+        let input = [
+            "event: heartbeat", "data: null", "",
+            "event: pending", "data: {\"rank\": 2}", "",
+            "event: generating", "data: {\"progress\": 0.4}", "",
+            "event: complete", "data: [\"ok\", 4]", ""
+        ]
+        var heartbeat = false, queued = false, running = false
+        var complete: Data?
+        for line in input {
+            guard let status = try events.feed(line) else { continue }
+            switch status {
+            case .heartbeat: heartbeat = true
+            case .queued: queued = true
+            case .running: running = true
+            case .complete(let data): complete = data
+            }
+        }
+        XCTAssertTrue(heartbeat)
+        XCTAssertTrue(queued)
+        XCTAssertTrue(running)
+        XCTAssertEqual(complete, Data("[\"ok\", 4]".utf8),
+            "Terminal SSE frame must be consumed without waiting for HTTP stream EOF")
+    }
+
+    func testPartialSSEAndProviderErrorAreNotConfused() throws {
+        var partial = CloudStemWorker.SSEEvents()
+        XCTAssertNil(try partial.feed("event: complete"))
+        XCTAssertNil(try partial.feed("data: [1,2,3]"))
+        if case .complete(let payload)? = try partial.feed("") {
+            XCTAssertEqual(payload, Data("[1,2,3]".utf8))
+        } else { XCTFail("A final empty line must flush complete") }
+        var bad = CloudStemWorker.SSEEvents()
+        _ = try bad.feed("event: error")
+        _ = try bad.feed("data: null")
+        XCTAssertThrowsError(try bad.feed("")) {
+            XCTAssertTrue($0 is CloudStemWorker.ProviderFailure)
+        }
+        var oversized = CloudStemWorker.SSEEvents()
+        _ = try oversized.feed("event: complete")
+        XCTAssertThrowsError(try oversized.feed("data: " + String(repeating: "x", count: 1_000_001)))
+    }
+
 }
 
 private actor RecoveryDownloads {
