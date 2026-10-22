@@ -143,8 +143,9 @@ final class NeuralStemsRegressionTests: XCTestCase {
     }
 
     func testWindowWeightShiftIsBitIdenticalToTheWorkingBuild59() {
-        let sample = (0..<256).map { i in
-            i == 0 ? -Float.zero : Float(i) * 0.001 - 0.1
+        let sample: [Float] = (0..<256).map { (index: Int) -> Float in
+            if index == 0 { return -Float.zero }
+            return Float(index) * Float(0.001) - Float(0.1)
         }
         for advance in [0, 1, 3, 64, 192, 256] {
             var reference = sample
@@ -152,7 +153,9 @@ final class NeuralStemsRegressionTests: XCTestCase {
             reference.append(contentsOf: repeatElement(Float.zero, count: advance))
             var optimized = sample
             NeuralStemWorker.advanceOverlapWeights(&optimized, by: advance)
-            XCTAssertEqual(optimized.map(\.bitPattern), reference.map(\.bitPattern))
+            let optimizedBits: [UInt32] = optimized.map { $0.bitPattern }
+            let referenceBits: [UInt32] = reference.map { $0.bitPattern }
+            XCTAssertEqual(optimizedBits, referenceBits)
             XCTAssertEqual(optimized.count, sample.count)
         }
         var baseline = sample, optimized = sample
@@ -161,7 +164,9 @@ final class NeuralStemsRegressionTests: XCTestCase {
             baseline.append(contentsOf: repeatElement(Float.zero, count: advance))
             NeuralStemWorker.advanceOverlapWeights(&optimized, by: advance)
         }
-        XCTAssertEqual(optimized.map(\.bitPattern), baseline.map(\.bitPattern))
+        let optimizedBits: [UInt32] = optimized.map { $0.bitPattern }
+        let baselineBits: [UInt32] = baseline.map { $0.bitPattern }
+        XCTAssertEqual(optimizedBits, baselineBits)
     }
 
     func testCPUSelectionProtectsXRAndFourGBDevices() {
