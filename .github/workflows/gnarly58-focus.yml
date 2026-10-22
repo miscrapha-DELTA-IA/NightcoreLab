@@ -1,6 +1,12 @@
 name: Gnarly 58 focused latency and stem tests
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/gnarly-build58-fast-playback-stems]
+    paths: ['NightcoreLab/**', 'NightcoreLabTests/**', 'project.yml', '.github/workflows/gnarly58-focus.yml']
+concurrency:
+  group: gnarly58-focus-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   actions: read
