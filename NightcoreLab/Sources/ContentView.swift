@@ -1407,7 +1407,8 @@ struct ContentView: View {
                 }
                 coverURL = downloader.cachedArtworkURL(for: committedTrack) ??
                     downloadedCoverURL ?? committedTrack.thumbnailURL
-                audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL)
+                audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL,
+                    fallbackCoverURLs: committedTrack.artworkCandidateURLs)
                 playingTrackID = track.id
                 currentTrack = committedTrack
                 // SwiftUI onChange may be deferred while the screen is locked.
@@ -1475,7 +1476,8 @@ struct ContentView: View {
                 audio.seek(to: saved.position)
             }
             coverURL = downloader.cachedArtworkURL(for: saved.track) ?? saved.track.thumbnailURL
-            audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local)
+            audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local,
+                fallbackCoverURLs: saved.track.artworkCandidateURLs)
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
             synchronizeRemoteAvailability()
@@ -1489,7 +1491,8 @@ struct ContentView: View {
         guard let currentTrack,
               let local = downloader.cachedArtworkURL(for: currentTrack), local != coverURL else { return }
         coverURL = local
-        audio.loadNowPlayingArtwork(coverURL: local, mediaURL: audio.visualAnalysisURL)
+        audio.loadNowPlayingArtwork(coverURL: local, mediaURL: audio.visualAnalysisURL,
+            fallbackCoverURLs: currentTrack.artworkCandidateURLs)
     }
 
     private func lyricsMetadata(for track: Track, duration: TimeInterval?) -> TrackMetadata {
