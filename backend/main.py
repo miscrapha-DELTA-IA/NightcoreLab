@@ -910,7 +910,11 @@ class _YtdlpLog:
         pass
 
     def warning(self, msg: str) -> None:
-        if "http error 429" in msg.lower() or "too many requests" in msg.lower():
+        # A failure while loading an optional Mix /related must never switch
+        # OFF audio downloads. Only the downloader's own player client sees
+        # enough evidence to quarantine new YouTube extractions globally.
+        upstream_limited = "http error 429" in msg.lower() or "too many requests" in msg.lower()
+        if upstream_limited and self.label != "related":
             _pause_youtube_requests()
         log.warning("yt-dlp [%s]: %s", self.label, _redact_media_urls(msg)[:500])
 
