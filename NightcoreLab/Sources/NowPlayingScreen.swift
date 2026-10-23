@@ -46,6 +46,10 @@ extension MarbleTheme {
         case .purewhite:   return .purewhite
         case .ultrablack:  return .ultrablack
         case .gnarly: return .cyber // legible static lyric colors; visual background morphs
+        case .xeroxSerpentine, .lenticularWild: return .solar
+        case .prismCarmine, .gnarlyOrganism: return .crimson
+        case .subatomicBubble, .jacquardSignal: return .orchid
+        case .isometricChasm, .gnarlyStrata, .gnarlyCompiler: return .cyber
         }
     }
 }
@@ -897,9 +901,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         .task(id: "\(track.id)|\(appTheme.rawValue)") {
             let expected = track.id
             gnarlyArtworkHue = nil
-            guard appTheme == .gnarly else { return }
+            let coverDriven: Set<AppTheme> = [
+                .gnarly, .gnarlyStrata, .gnarlyCompiler, .gnarlyOrganism
+            ]
+            guard coverDriven.contains(appTheme) else { return }
             let hue = await ArtworkTintExtractor.fetch(url: track.coverURL)?.hue
-            guard !Task.isCancelled, track.id == expected, appTheme == .gnarly else { return }
+            guard !Task.isCancelled, track.id == expected,
+                  coverDriven.contains(appTheme) else { return }
             gnarlyArtworkHue = hue
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
@@ -1102,7 +1110,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 padPerformance: audio.frozenPadPerformance(),
                 reactionMode: reactionMode,
                 songDNA: liveUniforms.songDNA,
-                gnarlyArtworkHue: appTheme == .gnarly ? gnarlyArtworkHue : nil,
+                gnarlyArtworkHue: [.gnarly, .gnarlyStrata, .gnarlyCompiler, .gnarlyOrganism]
+                    .contains(appTheme) ? gnarlyArtworkHue : nil,
                 scoreStamp: scoreStamp ?? karaokeSummary?.stamp ?? (showsKaraoke ? KaraokePerformanceStamp(
                     snapshot: lyricsStore.scoring.snapshot,
                     mode: lyricsStore.scoring.mode) : nil)

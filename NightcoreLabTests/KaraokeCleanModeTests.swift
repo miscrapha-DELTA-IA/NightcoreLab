@@ -40,8 +40,8 @@ final class KaraokeCleanModeTests: XCTestCase {
     }
 
     func testAllThemesStayAvailableToControlCenter() {
-        XCTAssertEqual(AppTheme.allCases.count, 18)
-        XCTAssertEqual(Set(AppTheme.allCases.map(\.id)).count, 18)
+        XCTAssertEqual(AppTheme.allCases.count, 27)
+        XCTAssertEqual(Set(AppTheme.allCases.map(\.id)).count, 27)
         XCTAssertTrue(BackgroundStyle.allCases.contains(.marble))
         XCTAssertTrue(BackgroundStyle.allCases.contains(.cover))
         XCTAssertEqual(LyricsColorMode.allCases.count, 2)

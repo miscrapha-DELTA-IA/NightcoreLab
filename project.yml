@@ -51,6 +51,8 @@ targets:
       # NÃO copiar Shaders.metal como recurso solto do bundle.
       - path: NightcoreLab/Resources/Shaders.metal
         buildPhase: sources
+      - path: NightcoreLab/Resources/CreativeUniverse.metal
+        buildPhase: sources
       # Catálogo de assets (ícone do app)
       - path: NightcoreLab/Resources/Assets.xcassets
       # Manifesto de privacidade, copiado explicitamente como recurso do bundle
@@ -68,8 +70,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.nightcorelab.app
         INFOPLIST_FILE: NightcoreLab/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: "1.0.63"
-        CURRENT_PROJECT_VERSION: "64"
+        MARKETING_VERSION: "1.0.64"
+        CURRENT_PROJECT_VERSION: "65"
         TARGETED_DEVICE_FAMILY: "1"          # iPhone
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO

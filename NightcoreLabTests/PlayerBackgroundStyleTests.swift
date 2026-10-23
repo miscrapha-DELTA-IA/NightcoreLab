@@ -85,8 +85,10 @@ final class Stage24LiveExperienceTests: XCTestCase {
         let ids = CreativePresetCatalog.selectableExperiences.map(\.id)
         XCTAssertEqual(ids, CreativePresetCatalog.liveExperienceIDs)
         XCTAssertEqual(ids.first, "cyber-night")
-        XCTAssertEqual(ids.last, "atmospheric-smoke")
-        XCTAssertEqual(ids.count, 7)
+        XCTAssertEqual(Array(ids.prefix(7)).last, "atmospheric-smoke")
+        XCTAssertEqual(ids.count, 13)
+        XCTAssertEqual(Array(ids.suffix(6)),
+            CreativeUniverseCatalog.experiences.map { "gnarly-exp-" + $0.slug })
         for id in ["agate-zebra", "void-gloss", "terrazzo-magma",
                    "airbrush-mirage", "groove-ebru", "cymatic-rorschach"] {
             XCTAssertFalse(ids.contains(id))

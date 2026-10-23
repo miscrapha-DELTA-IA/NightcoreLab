@@ -9,6 +9,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
     case ultrapink, ultraorange, purewhite, ultrablack, gnarly
+    case xeroxSerpentine, prismCarmine, subatomicBubble, jacquardSignal, isometricChasm, lenticularWild, gnarlyStrata, gnarlyCompiler, gnarlyOrganism
 
     var id: String { rawValue }
 
@@ -32,6 +33,15 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .purewhite:   return "Pure White"
         case .ultrablack:  return "Ultra Black"
         case .gnarly: return "Gnarly"
+        case .xeroxSerpentine: return "Xerox Serpentine"
+        case .prismCarmine: return "Prism Carmine"
+        case .subatomicBubble: return "Subatomic Bubble"
+        case .jacquardSignal: return "Jacquard Signal"
+        case .isometricChasm: return "Isometric Chasm"
+        case .lenticularWild: return "Lenticular Wild"
+        case .gnarlyStrata: return "Gnarly · Strata"
+        case .gnarlyCompiler: return "Gnarly · Compiler"
+        case .gnarlyOrganism: return "Gnarly · Organism"
         }
     }
 
@@ -56,6 +66,15 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .purewhite:   return "branco puro"
         case .ultrablack:  return "preto absoluto"
         case .gnarly: return "cores da capa e fusão de temas"
+        case .xeroxSerpentine: return "pele e toner"
+        case .prismCarmine: return "carmesim e quartzo"
+        case .subatomicBubble: return "ouro e azul"
+        case .jacquardSignal: return "ocre e roxo"
+        case .isometricChasm: return "ultramarino"
+        case .lenticularWild: return "animal print e lenticular"
+        case .gnarlyStrata: return "estratos mutantes"
+        case .gnarlyCompiler: return "agentes vetoriais"
+        case .gnarlyOrganism: return "organismo cromático"
         }
     }
 
@@ -80,6 +99,15 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .purewhite:   return Color(red: 1.00, green: 1.00, blue: 1.00) // #FFFFFF branco puro
         case .ultrablack:  return Color(red: 0.62, green: 0.64, blue: 0.69) // #9EA3AF cinza-aço (preto absoluto)
         case .gnarly: return Color(red: 0.43, green: 0.89, blue: 1.00) // acento fixo AA; só o fundo muda com a música
+        case .xeroxSerpentine: return Color(red: 0.97, green: 0.93, blue: 0.09)
+        case .prismCarmine: return Color(red: 1.00, green: 0.05, blue: 0.22)
+        case .subatomicBubble: return Color(red: 0.96, green: 0.72, blue: 0.18)
+        case .jacquardSignal: return Color(red: 0.71, green: 0.58, blue: 0.29)
+        case .isometricChasm: return Color(red: 0.30, green: 0.47, blue: 1.00)
+        case .lenticularWild: return Color(red: 0.81, green: 0.61, blue: 0.28)
+        case .gnarlyStrata: return Color(red: 0.43, green: 0.65, blue: 1.00)
+        case .gnarlyCompiler: return Color(red: 0.32, green: 0.88, blue: 0.90)
+        case .gnarlyOrganism: return Color(red: 1.00, green: 0.42, blue: 0.65)
         }
     }
 
@@ -104,6 +132,15 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .purewhite:   return Color(red: 0.68, green: 0.71, blue: 0.77) // #AEB6C4 prata
         case .ultrablack:  return Color(red: 0.48, green: 0.50, blue: 0.55) // #7A7F8C grafite
         case .gnarly: return Color(red: 1.00, green: 0.51, blue: 0.81)
+        case .xeroxSerpentine: return Color(red: 0.95, green: 0.94, blue: 0.90)
+        case .prismCarmine: return Color(red: 0.48, green: 0.90, blue: 0.95)
+        case .subatomicBubble: return Color(red: 0.22, green: 0.58, blue: 0.83)
+        case .jacquardSignal: return Color(red: 0.50, green: 0.19, blue: 0.80)
+        case .isometricChasm: return Color(red: 0.78, green: 0.83, blue: 1.00)
+        case .lenticularWild: return Color(red: 0.96, green: 0.93, blue: 0.87)
+        case .gnarlyStrata: return Color(red: 0.88, green: 0.71, blue: 0.45)
+        case .gnarlyCompiler: return Color(red: 0.96, green: 0.72, blue: 0.18)
+        case .gnarlyOrganism: return Color(red: 0.38, green: 0.78, blue: 0.82)
         }
     }
 

@@ -306,7 +306,8 @@ enum StoryRequestBuilder {
         request.reactionMode = activeReaction
         request.liveVisualResponseEnabled = reactionMode != nil
         request.songDNA = songDNA?.isValid == true ? songDNA : nil
-        request.gnarlyArtworkHue = theme == .gnarly ? gnarlyArtworkHue : nil
+        request.gnarlyArtworkHue = [.gnarly, .gnarlyStrata, .gnarlyCompiler, .gnarlyOrganism].contains(theme)
+            ? gnarlyArtworkHue : nil
         request.scoreStamp = scoreStamp
         // One immutable source of truth for preview and the StoryFrameRenderer
         // scene. Do not rebuild from a potentially changed preset during export.

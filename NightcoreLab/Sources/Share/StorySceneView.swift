@@ -244,11 +244,12 @@ struct StorySceneView: View {
             StoryExportMarbleView(theme: request.theme,
                 renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
                 startingPhase: request.marblePhase, materialFrame: exportMaterialFrame,
-                gnarlyContext: request.theme == .gnarly
-                    ? GnarlyVisualContext(sourceTime: frame.sourceTime,
-                                          sourceDuration: request.totalSourceDuration,
-                                          artworkHue: request.gnarlyArtworkHue)
-                    : nil)
+                // Export and live MUST share the original source duration
+                // for experience timelines; legacy shaders ignore this context.
+                gnarlyContext: GnarlyVisualContext(
+                    sourceTime: frame.sourceTime,
+                    sourceDuration: request.totalSourceDuration,
+                    artworkHue: request.gnarlyArtworkHue))
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }

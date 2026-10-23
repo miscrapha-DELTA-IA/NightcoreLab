@@ -141,6 +141,13 @@ enum TurbulentPalette {
                 Color(red: 0.05, green: 0.05, blue: 0.07),
                 Color(red: 0.28, green: 0.29, blue: 0.34)
             ]
+        case .xeroxSerpentine, .prismCarmine, .subatomicBubble,
+             .jacquardSignal, .isometricChasm, .lenticularWild,
+             .gnarlyStrata, .gnarlyCompiler, .gnarlyOrganism:
+            // Fallback ambient blobs inherit the theme accent; the real
+            // visual remains on the shared Metal full-screen path.
+            return [theme.accent, theme.secondary,
+                    theme.accent.opacity(0.65), theme.secondary.opacity(0.60)]
         case .gnarly:
             // Low-frequency SwiftUI fallback; live/Story Metal use cover-aware fusion.
             return [Color(red: 0.10, green: 0.45, blue: 0.90),

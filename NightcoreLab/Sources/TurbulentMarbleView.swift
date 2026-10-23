@@ -7,6 +7,7 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
     case ultrapink, ultraorange, purewhite, ultrablack, gnarly
+    case xeroxSerpentine, prismCarmine, subatomicBubble, jacquardSignal, isometricChasm, lenticularWild, gnarlyStrata, gnarlyCompiler, gnarlyOrganism
     var id: String { rawValue }
 
     /// deep = veios/sombras · body = corpo do líquido · glow = brilho/acento
@@ -80,6 +81,24 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
             return (Color(red: 0.00, green: 0.00, blue: 0.00),
                     Color(red: 0.07, green: 0.07, blue: 0.09),
                     Color(red: 0.28, green: 0.29, blue: 0.34))
+        case .xeroxSerpentine:
+            return (Color(red: 0.05, green: 0.05, blue: 0.06), Color(red: 0.97, green: 0.93, blue: 0.09), Color(red: 0.95, green: 0.94, blue: 0.90))
+        case .prismCarmine:
+            return (Color(red: 0.22, green: 0.00, blue: 0.05), Color(red: 1.00, green: 0.05, blue: 0.22), Color(red: 0.48, green: 0.90, blue: 0.95))
+        case .subatomicBubble:
+            return (Color(red: 0.04, green: 0.13, blue: 0.27), Color(red: 0.96, green: 0.72, blue: 0.18), Color(red: 0.22, green: 0.58, blue: 0.83))
+        case .jacquardSignal:
+            return (Color(red: 0.06, green: 0.03, blue: 0.08), Color(red: 0.71, green: 0.58, blue: 0.29), Color(red: 0.50, green: 0.19, blue: 0.80))
+        case .isometricChasm:
+            return (Color(red: 0.01, green: 0.01, blue: 0.03), Color(red: 0.16, green: 0.31, blue: 1.00), Color(red: 0.78, green: 0.83, blue: 1.00))
+        case .lenticularWild:
+            return (Color(red: 0.04, green: 0.04, blue: 0.04), Color(red: 0.81, green: 0.61, blue: 0.28), Color(red: 0.96, green: 0.93, blue: 0.87))
+        case .gnarlyStrata:
+            return (Color(red: 0.02, green: 0.02, blue: 0.05), Color(red: 0.43, green: 0.65, blue: 1.00), Color(red: 0.88, green: 0.71, blue: 0.45))
+        case .gnarlyCompiler:
+            return (Color(red: 0.02, green: 0.02, blue: 0.05), Color(red: 0.32, green: 0.88, blue: 0.90), Color(red: 0.96, green: 0.72, blue: 0.18))
+        case .gnarlyOrganism:
+            return (Color(red: 0.02, green: 0.02, blue: 0.05), Color(red: 1.00, green: 0.42, blue: 0.65), Color(red: 0.38, green: 0.78, blue: 0.82))
         case .gnarly: // cover-aware palette is resolved per source timestamp
             return (Color(red: 0.02, green: 0.02, blue: 0.12),
                     Color(red: 0.20, green: 0.52, blue: 0.87),
@@ -273,6 +292,27 @@ struct TurbulentMarbleView: View {
             Self.shaderPalette(materialID: output.materialID,
                                theme: theme, authored: binding.paletteHex)
         let texture = binding.textured
+        let creativeLook = CreativeUniverseCatalog.lookID(theme: theme,
+                                                           materialID: output.materialID)
+        // Source time, never wall-clock time, governs every new identity.
+        // Both live and Story can seek to a reproducible visual state.
+        let creativeTime = sourceClock?.lyricTime ?? (materialFrame?.timestamp ?? Double(time))
+        let creativeProgress = sourceDuration > 0 && sourceDuration.isFinite
+            ? min(1, max(0, creativeTime / sourceDuration))
+            : min(1, max(0, creativeTime / 180))
+        let creativePalette: [Color] = creativeLook.map {
+            CreativeUniverseCatalog.palette(id: $0, sourceTime: creativeTime,
+                duration: sourceDuration, artworkHue: artworkHue,
+                theme: theme)
+        } ?? []
+        let creativeLevels = frozenTime == nil && reactionMode != .off
+            ? (liveMeter?.snapshot() ?? .silence) : .silence
+        let creativeLow = reactionMode == .off ? 0 :
+            max(creativeLevels.bass, output.signals.bass, output.parameters.beatPulse)
+        let creativeMid = reactionMode == .off ? 0 :
+            max(creativeLevels.mid, output.signals.energy)
+        let creativeHigh = reactionMode == .off ? 0 :
+            max(creativeLevels.onset, output.signals.brightness)
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
         // Export paths are frozen and never inherit live thermal degradation.
@@ -281,7 +321,23 @@ struct TurbulentMarbleView: View {
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
-                if texture, let colors {
+                if let creativeLook {
+                    content.colorEffect(
+                        ShaderLibrary.creativeUniverse(
+                            .float2(proxy.size), .float(Float(creativeTime)),
+                            .float(Float(creativeLook)),
+                            .float(Float(min(1, max(0, creativeLow)))),
+                            .float(Float(min(1, max(0, creativeMid)))),
+                            .float(Float(min(1, max(0, creativeHigh)))),
+                            .float(Float(creativeProgress)),
+                            .float(Float(output.seed % 65536)),
+                            .color(creativePalette[0]),
+                            .color(creativePalette[1]),
+                            .color(creativePalette[2]),
+                            .float(detailQuality)
+                        )
+                    )
+                } else if texture, let colors {
                     content.colorEffect(
                         ShaderLibrary.texturedMarble(
                             .float2(proxy.size), .float(time),

@@ -323,8 +323,25 @@ extension CreativePresetCatalog {
                 .init(signal: .energy, target: .visualIntensity, gain: 0.11),
                 .init(signal: .bass, target: .movement, gain: 0.07)
             ]))
-        return [cyber, liquid, neon, chrome, organic, marble, smoke,
-                agate, void, terrazzo, airbrush, ebru, cymatic].compactMap { $0 }
+        let creativeUniverse = CreativeUniverseCatalog.experiences.compactMap { entry in
+            authoredExperience(
+                id: "gnarly-exp-" + entry.slug, name: entry.name,
+                description: "Gnarly Creative Universe · " + entry.references,
+                sourceID: entry.id == 10 ? "night-drive" :
+                    (entry.id == 11 || entry.id == 12 ? "soft-flow" : "bass-pulse"),
+                typography: TypographyPreset(
+                    style: entry.id == 7 || entry.id == 12 ? .magazineCutout :
+                           (entry.id == 10 ? .kinetic : .minimal),
+                    effectIntensity: 0.38, deterministicSeed: UInt64(entry.id) * 0x1157),
+                seed: UInt64(entry.id) * 0x1157,
+                material: CreativeUniverseCatalog.material(for: entry),
+                mapping: CreativeAudioMapping(enabled: true, bindings: [
+                    .init(signal: .bass, target: .visualIntensity, gain: 0.20),
+                    .init(signal: .energy, target: .movement, gain: 0.12)
+                ]))
+        }
+        return ([cyber, liquid, neon, chrome, organic, marble, smoke,
+                agate, void, terrazzo, airbrush, ebru, cymatic].compactMap { $0 }) + creativeUniverse
     }()
 
     /// Look up demo experiences, then wrap the original four recipes losslessly.
@@ -362,7 +379,7 @@ extension CreativePresetCatalog {
     static let liveExperienceIDs: [String] = [
         "cyber-night", "liquid-dream", "neon-pulse", "chrome-night",
         "organic-pulse", "cyber-marble", "atmospheric-smoke"
-    ]
+    ] + CreativeUniverseCatalog.experiences.map { "gnarly-exp-" + $0.slug }
     static var selectableExperiences: [CreativeExperiencePreset] {
         liveExperienceIDs.compactMap { id in experiencePresets.first { $0.id == id } }
     }

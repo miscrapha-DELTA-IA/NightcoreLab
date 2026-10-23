@@ -225,7 +225,7 @@ final class KaraokeTypographyTests: XCTestCase {
     }
 
     func testMagazineForegroundHasAAContrastOnAllEighteenThemes() {
-        XCTAssertEqual(AppTheme.allCases.count, 18)
+        XCTAssertEqual(AppTheme.allCases.count, 27)
         for appTheme in AppTheme.allCases {
             let theme = KaraokeTheme.forAppTheme(appTheme)
             for tone in MagazineCutoutTone.allCases {
