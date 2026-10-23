@@ -172,7 +172,8 @@ final class StoryMetalSurface {
             colors = CreativeUniverseCatalog.palette(id: lookID,
                 sourceTime: creativeTime,
                 duration: gnarlyContext?.sourceDuration ?? 0,
-                artworkHue: gnarlyContext?.artworkHue)
+                artworkHue: gnarlyContext?.artworkHue,
+                theme: MarbleTheme(appTheme: theme))
         } else {
             colors = gnarly?.colors.map(\.color) ?? (binding.textured
                 ? (authored ?? [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
