@@ -227,7 +227,12 @@ struct StorySceneView: View {
 
     @ViewBuilder
     private var background: some View {
-        if request.mode == .lyrics && request.karaokeBackground == .cover,
+        if let snapshot = request.personalBackground,
+           let photo = PersonalBackgroundRenderCache.image(for: snapshot) {
+            PersonalBackgroundImageView(image: photo, settings: snapshot.settings)
+                .frame(width: layoutPolicy?.canvasSize.width ?? StoryVideoRequest.size.width,
+                       height: layoutPolicy?.canvasSize.height ?? StoryVideoRequest.size.height)
+        } else if request.mode == .lyrics && request.karaokeBackground == .cover,
            let artwork {
             Image(uiImage: artwork)
                 .resizable().scaledToFill()
