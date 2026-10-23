@@ -1,30 +1,39 @@
 import SDWebImageSwiftUI
 import SwiftUI
 
-/// A compact, cache-backed list thumbnail. Keep the provider artwork as first
-/// choice. SDWebImage normally blocks a failed URL for this session; retryFailed
-/// allows a later attempt, and a stable YouTube backup covers expired CDN URLs.
+/// Original-first thumbnails for search, queue and discovery. Local offline
+/// artwork wins when present; a provider URL and stable YouTube URL follow.
 struct TrackThumbnailImage: View {
     let track: Track
-    @State private var usingBackup = false
+    var localArtworkURL: URL? = nil
+    @State private var candidateIndex = 0
 
-    private var candidates: [URL] { track.artworkCandidateURLs }
+    private var candidates: [URL] {
+        var seen = Set<URL>()
+        return ([localArtworkURL].compactMap { $0 } + track.artworkCandidateURLs)
+            .filter { seen.insert($0).inserted }
+    }
     private var selectedURL: URL? {
-        usingBackup ? candidates.last : candidates.first
+        candidates.indices.contains(candidateIndex)
+            ? candidates[candidateIndex] : candidates.first
     }
 
     var body: some View {
         WebImage(url: selectedURL, options: [.retryFailed])
             .onFailure { _ in
-                guard !usingBackup, candidates.count > 1 else { return }
+                let nextIndex = candidateIndex + 1
+                guard nextIndex < candidates.count else { return }
                 Task { @MainActor in
-                    usingBackup = true
+                    // A stale failure from a previous source may not overwrite
+                    // the current track's fallback decision.
+                    guard candidateIndex < nextIndex else { return }
+                    candidateIndex = nextIndex
                 }
             }
             .resizable()
             .id(selectedURL)
             .onChange(of: candidates) { _, _ in
-                usingBackup = false
+                candidateIndex = 0
             }
     }
 }
