@@ -355,6 +355,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @State private var selectedPersonalPhoto: PhotosPickerItem?
     @State private var showingPersonalPicker = false
     @State private var showingPersonalAdjustments = false
+    @State private var showingSelfieRecorder = false
     @State private var visualEngine = AudioFeatureEngine()
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
@@ -626,6 +627,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                             shareVideo(mode: mode, includeAudio: includeAudio)
                         }
                     )
+                    selfieRecordButton
                     if canShowKaraoke {
                         micButton
                     }
@@ -650,6 +652,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 }
                 selectedPersonalPhoto = nil
             }
+        }
+        .fullScreenCover(isPresented: $showingSelfieRecorder) {
+            SelfieRecordingView(accent: appTheme.accent)
         }
         .sheet(isPresented: $showingPersonalAdjustments) {
             PersonalBackgroundAdjustmentSheet(store: personalBackground)
@@ -1172,6 +1177,36 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         lyricsStore.scoring.setKaraokePresented(shown, lines: lyricsStore.lines,
             at: clock.lyricTime + lyricsStore.sourceTimelineOffset(for: clock),
             trackEnergy: { [weak audio] in audio?.liveVisualMeter.snapshot().rms ?? 0 })
+    }
+
+    /// Fixed, 40 pt selfie recording affordance; does not replace the
+    /// karaoke toggle or share button and stays visible outside the drawer.
+    private var selfieRecordButton: some View {
+        Button {
+            // The existing microphone input tap cannot be owned by two capture
+            // pipelines. Release opt-in live vocal features before movie capture,
+            // while keeping the song transport and single AVAudioEngine intact.
+            if audio.karaokeMicrophoneActive {
+                audio.endKaraokeMicrophone()
+                audio.endVocalCapture()
+            }
+            showingSelfieRecorder = true
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .overlay(Circle().strokeBorder(appTheme.accent.opacity(0.85),
+                                                    lineWidth: 1.6))
+                Circle().fill(Color.red).frame(width: 11, height: 11)
+            }
+            .frame(width: 40, height: 40)
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Gravar vídeo selfie cantando")
+        .accessibilityHint("Abre a câmera frontal para gravar vídeo e voz")
+        .accessibilityIdentifier("selfie.openRecorder")
     }
 
     private var micButton: some View {
