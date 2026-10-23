@@ -345,6 +345,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.scenePhase) private var scenePhase
     @State private var marbleStartedAt = Date()
+    @State private var gnarlyArtworkHue: Double?
     @State private var visualEngine = AudioFeatureEngine()
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
@@ -394,6 +395,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         style: backgroundStyle,
                         theme: MarbleTheme(appTheme: appTheme),
                         coverURL: track.coverURL,
+                        sourceClock: clock, sourceDuration: audio.duration,
+                        artworkHue: gnarlyArtworkHue,
                         marbleStartedAt: marbleStartedAt,
                         frozenTime: frozenShareMarblePhase,
                         reactiveDistortion: distortion,
@@ -414,6 +417,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     TurbulentMarbleView(
                         theme: MarbleTheme(appTheme: appTheme),
+                        sourceClock: clock, sourceDuration: audio.duration,
+                        artworkHue: gnarlyArtworkHue,
                         speed: 0.6,
                         maxFPS: 60,
                         isPaused: false,
@@ -804,6 +809,14 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             // Saved profiles are suggestions, not silent overrides of a
             // currently selected palette or the independent AppTheme.
         }
+        .task(id: "\(track.id)|\(appTheme.rawValue)") {
+            let expected = track.id
+            gnarlyArtworkHue = nil
+            guard appTheme == .gnarly else { return }
+            let hue = await ArtworkTintExtractor.fetch(url: track.coverURL)?.hue
+            guard !Task.isCancelled, track.id == expected, appTheme == .gnarly else { return }
+            gnarlyArtworkHue = hue
+        }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: isKaraokeMode)
     }
 
@@ -890,6 +903,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                     PlayerBackgroundView(
                         style: effectivePlayerBackgroundStyle,
                         imageURL: track.coverURL, theme: appTheme,
+                        sourceClock: clock, sourceDuration: audio.duration,
+                        artworkHue: gnarlyArtworkHue,
                         frozenTime: frozenShareMarblePhase,
                         isPaused: false,
                         reactiveDistortion: distortion,
@@ -999,6 +1014,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 padPerformance: audio.frozenPadPerformance(),
                 reactionMode: reactionMode,
                 songDNA: liveUniforms.songDNA,
+                gnarlyArtworkHue: appTheme == .gnarly ? gnarlyArtworkHue : nil,
                 scoreStamp: scoreStamp ?? karaokeSummary?.stamp ?? (showsKaraoke ? KaraokePerformanceStamp(
                     snapshot: lyricsStore.scoring.snapshot,
                     mode: lyricsStore.scoring.mode) : nil)
@@ -1299,6 +1315,9 @@ private struct BackgroundLayer: View {
     let coverURL: URL?
     let marbleStartedAt: Date
     var frozenTime: Float? = nil
+    var sourceClock: PlaybackClock? = nil
+    var sourceDuration: TimeInterval = 0
+    var artworkHue: Double? = nil
     var reactiveDistortion: Double = 0
     var pulseDriver: MarblePulseDriver? = nil
     var material: VisualMaterial = .legacyMarble
@@ -1315,6 +1334,8 @@ private struct BackgroundLayer: View {
             switch style {
             case .marble:
                 TurbulentMarbleView(theme: theme, speed: 0.8,
+                                    sourceClock: sourceClock, sourceDuration: sourceDuration,
+                                    artworkHue: artworkHue,
                                     maxFPS: energyBudget.maxVisualFPS,
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
