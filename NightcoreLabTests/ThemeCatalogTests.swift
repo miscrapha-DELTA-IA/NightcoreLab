@@ -14,11 +14,12 @@ final class ThemeCatalogTests: XCTestCase {
         return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
     }
 
-    func testThemeCatalogContainsSeventeenThemes() {
-        XCTAssertEqual(AppTheme.allCases.count, 17)
-        XCTAssertEqual(MarbleTheme.allCases.count, 17)
+    func testThemeCatalogContainsEighteenThemes() {
+        XCTAssertEqual(AppTheme.allCases.count, 18)
+        XCTAssertEqual(MarbleTheme.allCases.count, 18)
         XCTAssertEqual(AppTheme.noir.next, .ultrapink)
-        XCTAssertEqual(AppTheme.ultrablack.next, .acid)
+        XCTAssertEqual(AppTheme.ultrablack.next, .gnarly)
+        XCTAssertEqual(AppTheme.gnarly.next, .acid)
     }
 
     func testNamesAndDominantColorsAreUnique() {
