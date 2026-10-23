@@ -1536,6 +1536,29 @@ private struct BackgroundLayer: View {
                     .transition(.opacity)
             }
             Color.black.opacity(0.35)               // scrim: contraste do preenchimento das letras
+
+            // The real cover reconstructs through halftone atop the Xerox shader.
+            // Preserve custom-photo and plain cover override paths upstream.
+            if style == .marble && theme == .xeroxSerpentine,
+               CreativeUniverseCatalog.lookID(
+                   theme: theme, materialID: material.id) == 1,
+               let sourceClock, let coverURL {
+                PlayerArtworkImage(url: coverURL) { artwork in
+                    if let artwork {
+                        TimelineView(.animation(
+                            minimumInterval: 1.0 / 12,
+                            paused: energyBudget.pausesShader)) { _ in
+                            XeroxArtworkFormationView(
+                                image: artwork, sourceTime: sourceClock.lyricTime,
+                                duration: sourceDuration,
+                                bass: reactionMode == .off ? 0 :
+                                    (liveMeter?.snapshot().bass ?? 0))
+                        }
+                    }
+                }
+                .accessibilityHidden(true)
+                .transition(.opacity)
+            }
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.6), value: style)

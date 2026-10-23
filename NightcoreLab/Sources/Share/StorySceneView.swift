@@ -252,6 +252,23 @@ struct StorySceneView: View {
                     artworkHue: request.gnarlyArtworkHue))
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
+                .overlay {
+                    // The exported still/MP4 uses the SAME actual bitmap,
+                    // source-time mask and geometry as the live Xerox scene.
+                    // Never fabricate the cover from a single album hue.
+                    if request.theme == .xeroxSerpentine,
+                       CreativeUniverseCatalog.lookID(
+                        theme: MarbleTheme(appTheme: request.theme),
+                        materialID: exportMaterialFrame.materialID) == 1,
+                       let artwork {
+                        XeroxArtworkFormationView(
+                            image: Image(uiImage: artwork),
+                            sourceTime: frame.sourceTime,
+                            duration: request.totalSourceDuration,
+                            bass: request.reactiveProgram == nil ? 0 :
+                                exportMaterialFrame.signals.bass)
+                    }
+                }
         }
     }
 
