@@ -10,11 +10,13 @@ struct StoryExportMarbleView: View {
     let steadyFlowSpeed: Float
     let startingPhase: Float
     let materialFrame: MaterialFrame
+    var gnarlyContext: GnarlyVisualContext? = nil
 
     var body: some View {
         GeometryReader { geo in
             if let image = try? StoryMetalSurface.shared.render(
                 size: geo.size, theme: theme, frame: materialFrame,
+                gnarlyContext: gnarlyContext,
                 phase: StoryExportMotion.phase(at: renderTimestamp,
                     start: startingPhase, speed: steadyFlowSpeed)) {
                 Image(decorative: image, scale: 2)
@@ -108,9 +110,11 @@ final class StoryMetalSurface {
     }
 
     func render(size: CGSize, theme: AppTheme, frame: MaterialFrame,
+                gnarlyContext: GnarlyVisualContext? = nil,
                 phase: Float) throws -> CGImage {
         do {
-            let result = try draw(size: size, theme: theme, frame: frame, phase: phase)
+            let result = try draw(size: size, theme: theme, frame: frame,
+                                  gnarlyContext: gnarlyContext, phase: phase)
             lastError = nil
             return result
         } catch {
@@ -121,11 +125,19 @@ final class StoryMetalSurface {
     }
 
     private func draw(size: CGSize, theme: AppTheme, frame: MaterialFrame,
+                      gnarlyContext: GnarlyVisualContext?,
                       phase: Float) throws -> CGImage {
         guard let device, let queue else { throw MetalFailure.noGPU }
-        let binding = MarbleSurfaceBinding.resolve(frame: frame)
+        let gnarly = theme == .gnarly && gnarlyContext != nil
+            ? GnarlyThemeEngine.sample(
+                sourceTime: gnarlyContext!.sourceTime,
+                duration: gnarlyContext!.sourceDuration,
+                artworkHue: gnarlyContext!.artworkHue, base: frame)
+            : nil
+        let output = gnarly?.frame ?? frame
+        let binding = MarbleSurfaceBinding.resolve(frame: output)
         let family: Family = binding.textured ? .textured :
-            (frame.type == .marble ? .liquid : .procedural)
+            (output.type == .marble ? .liquid : .procedural)
         let pipeline = try pipeline(for: family, on: device)
 
         // Scene coordinates remain 540x960 for 1080x1920 output. The same
@@ -150,27 +162,27 @@ final class StoryMetalSurface {
         let authored = TurbulentMarbleView.shaderPalette(materialID: frame.materialID,
             theme: MarbleTheme(appTheme: theme), authored: binding.paletteHex)
         // Avoid a force unwrap for imported/past presets without authored stops.
-        let colors = binding.textured
+        let colors = gnarly?.colors.map(\.color) ?? (binding.textured
             ? (authored ?? [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
-            : [palette.deep, palette.body, palette.glow, palette.body, palette.glow]
+            : [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
         let rgba: [SIMD4<Float>] = colors.map { color in
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
             return SIMD4(Float(r), Float(g), Float(b), Float(a))
         }
-        let u = frame.marbleUniforms
+        let u = output.marbleUniforms
         let values: [Float] = [Float(size.width), Float(size.height), phase,
-            binding.textured ? 2 : (frame.type == .marble ? 0 : 1),
+            binding.textured ? 2 : (output.type == .marble ? 0 : 1),
             Float(u.stripingFrequency), Float(u.stripingMix), Float(u.speckleIntensity),
             Float(u.embossStrength), Float(u.scanlineDensity), Float(u.diffusionSoftness),
             Float(u.voidThreshold), Float(u.combStretch), Float(u.bilateralSymmetry),
             Float(u.halftoneGrating), Float(u.distortion), Float(u.beatPulse),
-            Float(u.warpAmount), Float(u.brightnessBoost), frame.type.shaderID,
-            Float(frame.controls.primary), Float(frame.controls.secondary),
-            Float(frame.controls.tertiary), Float(frame.controls.quaternary),
-            Float(frame.signals.energy), Float(frame.signals.bass),
-            Float(frame.signals.movement), Float(frame.signals.brightness),
-            Float(frame.seed % 65536)]
+            Float(u.warpAmount), Float(u.brightnessBoost), output.type.shaderID,
+            Float(output.controls.primary), Float(output.controls.secondary),
+            Float(output.controls.tertiary), Float(output.controls.quaternary),
+            Float(output.signals.energy), Float(output.signals.bass),
+            Float(output.signals.movement), Float(output.signals.brightness),
+            Float(output.seed % 65536)]
 
         encoder.setComputePipelineState(pipeline)
         encoder.setTexture(target, index: 0)
