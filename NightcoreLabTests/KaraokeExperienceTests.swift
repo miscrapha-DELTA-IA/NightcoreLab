@@ -51,7 +51,11 @@ final class KaraokeExperienceTests: XCTestCase {
             await loading.value
             persisted.fulfill()
         }
-        await fulfillment(of: [persisted], timeout: 10)
+        // This assertion waits for BOTH local cue generation and disk-cache
+        // persistence. macOS CI runs other neural/iOS suites concurrently;
+        // 10s was insufficient under runner contention, despite app compiling.
+        // Keep a bounded timeout and assert the persisted data below.
+        await fulfillment(of: [persisted], timeout: 30)
         XCTAssertEqual(store.trackID, trackID)
         XCTAssertEqual(store.status, .ready)
         XCTAssertFalse(store.lines.isEmpty)
