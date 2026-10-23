@@ -1,6 +1,13 @@
 import Foundation
 import SwiftUI
 
+/// Immutable media-time context shared by Story preview and off-screen MP4.
+struct GnarlyVisualContext: Sendable {
+    let sourceTime: TimeInterval
+    let sourceDuration: TimeInterval
+    let artworkHue: Double?
+}
+
 /// Gnarly is a single-pass composition of the existing textured Marble
 /// materials, not a second Metal engine. A frame is a PURE function of the
 /// original song time, duration and one album-cover hue cached per track.
