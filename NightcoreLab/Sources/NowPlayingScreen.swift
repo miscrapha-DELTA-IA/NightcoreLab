@@ -654,7 +654,12 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             }
         }
         .fullScreenCover(isPresented: $showingSelfieRecorder) {
-            SelfieRecordingView(accent: appTheme.accent)
+            SelfieRecordingView(
+                accent: appTheme.accent,
+                clock: clock,
+                lyricLines: lyricsStore.trackID == track.id &&
+                    lyricsStore.status == .ready ? lyricsStore.lines : [],
+                lyricOffset: lyricsStore.sourceTimelineOffset(for: clock))
         }
         .sheet(isPresented: $showingPersonalAdjustments) {
             PersonalBackgroundAdjustmentSheet(store: personalBackground)

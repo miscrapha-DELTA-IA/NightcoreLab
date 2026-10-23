@@ -1,4 +1,6 @@
 import AVFoundation
+import AVKit
+import Combine
 import SwiftUI
 
 /// Temporary, local-only movie files. Nothing is uploaded by this feature.
@@ -135,6 +137,10 @@ final class SelfieVideoRecorder: ObservableObject {
     @Published var errorText: String?
     @Published private(set) var wasSaved = false
     @Published private(set) var isSaving = false
+    @Published private(set) var isProcessing = false
+
+    private var recordingStartedAt: TimeInterval?
+    private var lyricCues: [SelfieLyricCue] = []
 
     private let pipeline = SelfieCameraPipeline()
     private var closed = false
@@ -145,6 +151,8 @@ final class SelfieVideoRecorder: ObservableObject {
     init() {
         pipeline.didStart = { [weak self] in
             Task { @MainActor [weak self] in
+                self?.recordingStartedAt = ProcessInfo.processInfo.systemUptime
+                self?.lyricCues.removeAll(keepingCapacity: true)
                 self?.isRecording = true
                 self?.isFinishing = false
             }
@@ -159,7 +167,30 @@ final class SelfieVideoRecorder: ObservableObject {
                     if self.closed {
                         try? FileManager.default.removeItem(at: url)
                     } else {
-                        self.recordedURL = url
+                        self.isProcessing = true
+                        let cues = self.lyricCues
+                        Task { @MainActor [weak self] in
+                            do {
+                                let editedURL = try await Task.detached(priority: .userInitiated) {
+                                    try await SelfieKaraokeVideoExporter.render(sourceURL: url, cues: cues)
+                                }.value
+                                guard let self, !self.closed else {
+                                    if editedURL != url { try? FileManager.default.removeItem(at: editedURL) }
+                                    try? FileManager.default.removeItem(at: url)
+                                    return
+                                }
+                                self.recordedURL = editedURL
+                                if editedURL != url { try? FileManager.default.removeItem(at: url) }
+                                self.pendingURL = nil
+                                self.isProcessing = false
+                            } catch {
+                                guard let self, !self.closed else { return }
+                                self.errorText = "Não foi possível inserir as letras: \(error.localizedDescription) Você ainda pode visualizar o vídeo original."
+                                self.recordedURL = url
+                                self.pendingURL = nil
+                                self.isProcessing = false
+                            }
+                        }
                     }
                 case .failure(let error):
                     if !self.closed { self.errorText = error.localizedDescription }
@@ -167,9 +198,17 @@ final class SelfieVideoRecorder: ObservableObject {
                         try? FileManager.default.removeItem(at: url)
                     }
                 }
-                self.pendingURL = nil
+                if !self.isProcessing { self.pendingURL = nil }
             }
         }
+    }
+
+    /// Samples the live clock; stores only verse transitions (max 240).
+    func sampleLyrics(_ text: String) {
+        guard isRecording, let recordingStartedAt else { return }
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - recordingStartedAt)
+        SelfieLyricTimeline.append(text, at: elapsed, to: &lyricCues)
+        if elapsed >= 90 { stop() }
     }
 
     func prepare() async {
@@ -203,8 +242,11 @@ final class SelfieVideoRecorder: ObservableObject {
     }
 
     func start() {
-        guard isReady, !isRecording, !isFinishing, recordedURL == nil else { return }
+        guard isReady, !isRecording, !isFinishing, !isProcessing,
+              recordedURL == nil else { return }
         errorText = nil
+        lyricCues.removeAll()
+        recordingStartedAt = nil
         let url = SelfieVideoCaptureFile.temporaryURL()
         pendingURL = url
         isFinishing = true
@@ -230,9 +272,10 @@ final class SelfieVideoRecorder: ObservableObject {
     }
 
     func retake() {
-        guard !isRecording, !isFinishing else { return }
+        guard !isRecording, !isFinishing, !isProcessing else { return }
         if let recordedURL { try? FileManager.default.removeItem(at: recordedURL) }
         recordedURL = nil
+        lyricCues.removeAll()
         wasSaved = false
         errorText = nil
     }
@@ -242,6 +285,7 @@ final class SelfieVideoRecorder: ObservableObject {
         closed = true
         pipeline.shutdown()
         if let recordedURL { try? FileManager.default.removeItem(at: recordedURL) }
+        if let pendingURL { try? FileManager.default.removeItem(at: pendingURL) }
         recordedURL = nil
     }
 }
@@ -274,6 +318,16 @@ private struct SelfieCameraPreview: UIViewRepresentable {
 /// the user explicitly saves to Photos or shares it.
 struct SelfieRecordingView: View {
     let accent: Color
+    let clock: PlaybackClock
+    let lyricLines: [TimedLyricLine]
+    let lyricOffset: TimeInterval
+
+    private var liveLyric: String {
+        SelfieLyricTimeline.currentText(lines: lyricLines,
+                                       at: clock.lyricTime + lyricOffset)
+    }
+
+    @State private var previewPlayer: AVPlayer?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recorder = SelfieVideoRecorder()
@@ -282,19 +336,25 @@ struct SelfieRecordingView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            SelfieCameraPreview(session: recorder.session)
-                .ignoresSafeArea()
-                .accessibilityHidden(true)
-
-            LinearGradient(colors: [.black.opacity(0.75), .clear, .black.opacity(0.9)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+            if let previewPlayer {
+                VideoPlayer(player: previewPlayer)
+                    .ignoresSafeArea()
+                    .accessibilityIdentifier("selfie.videoPreview")
+            } else {
+                SelfieCameraPreview(session: recorder.session)
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+                LinearGradient(colors: [.black.opacity(0.75), .clear, .black.opacity(0.9)],
+                               startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
 
             VStack(spacing: 18) {
                 HStack {
                     Button {
                         if recorder.isRecording || recorder.isFinishing ||
+                           recorder.isProcessing ||
                            (recorder.recordedURL != nil && !recorder.wasSaved) {
                             confirmDiscard = true
                         } else {
@@ -309,7 +369,8 @@ struct SelfieRecordingView: View {
                     .accessibilityLabel("Fechar câmera")
                     .disabled(recorder.isSaving)
                     Spacer()
-                    Label(recorder.isRecording ? "GRAVANDO" : "GNARLY · CÂMERA",
+                    Label(recorder.isRecording ? "GRAVANDO" :
+                          (recorder.recordedURL != nil ? "PRÉVIA" : "KARAOKÊ + CÂMERA"),
                           systemImage: recorder.isRecording ? "record.circle.fill" : "camera.fill")
                         .font(.caption.bold()).tracking(1.2)
                         .foregroundStyle(recorder.isRecording ? .red : accent)
@@ -318,6 +379,45 @@ struct SelfieRecordingView: View {
                 }
 
                 Spacer()
+
+                // Source-clock lyrics remain legible over the full-screen selfie.
+                // The export pipeline uses sampled decisions from the same clock.
+                if recorder.recordedURL == nil && !recorder.isProcessing {
+                    TimelineView(.periodic(from: .now, by: 0.12)) { _ in
+                        let currentText = liveLyric
+                        VStack(spacing: 8) {
+                            Label("LETRA AO VIVO", systemImage: "waveform")
+                                .font(.system(size: 10, weight: .heavy))
+                                .tracking(1.5)
+                                .foregroundStyle(accent)
+                            Text(currentText.isEmpty ? (lyricLines.isEmpty
+                                 ? "Sem letra sincronizada" : "Aguardando a próxima estrofe")
+                                 : currentText)
+                                .font(.system(size: 23, weight: .bold, design: .rounded))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(3)
+                                .minimumScaleFactor(0.75)
+                                .frame(maxWidth: .infinity, minHeight: 60)
+                                .accessibilityIdentifier("selfie.liveLyrics")
+                        }
+                        .padding(.horizontal, 17)
+                        .padding(.vertical, 16)
+                        .background(.black.opacity(0.70),
+                                    in: RoundedRectangle(cornerRadius: 21))
+                        .overlay(RoundedRectangle(cornerRadius: 21)
+                            .strokeBorder(accent.opacity(0.38), lineWidth: 1))
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 24)
+                }
+                if recorder.isProcessing {
+                    ProgressView("Preparando prévia com as letras…")
+                        .tint(accent)
+                        .font(.caption)
+                        .padding(18)
+                        .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityIdentifier("selfie.processingVideo")
+                }
 
                 if let errorText = recorder.errorText {
                     Text(errorText)
@@ -329,10 +429,14 @@ struct SelfieRecordingView: View {
                 }
 
                 if let recordedURL = recorder.recordedURL {
-                    Text(recorder.wasSaved ? "Vídeo salvo em Fotos" : "Seu vídeo está pronto")
+                    Text(recorder.wasSaved ? "Vídeo salvo em Fotos" : "Confira a prévia antes de salvar")
                         .font(.headline)
                     HStack(spacing: 14) {
-                        Button("Gravar novamente") { recorder.retake() }
+                        Button("Descartar e refazer") {
+                            previewPlayer?.pause()
+                            previewPlayer = nil
+                            recorder.retake()
+                        }
                             .buttonStyle(.bordered)
                             .tint(.white)
                             .disabled(recorder.isSaving)
@@ -354,9 +458,9 @@ struct SelfieRecordingView: View {
                     }
                     .padding(.top, 6)
                 } else {
-                    Text("Vídeo selfie + sua voz")
+                    Text("Câmera + letra do karaokê")
                         .font(.headline)
-                    Text("A câmera grava a voz do microfone. A trilha não é mixada no arquivo; use o alto-falante se quiser captá-la junto.")
+                    Text("A letra acompanha o vídeo. A voz vem do microfone; a música não é mixada digitalmente.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.78))
                         .multilineTextAlignment(.center)
@@ -391,10 +495,21 @@ struct SelfieRecordingView: View {
         }
         .foregroundStyle(.white)
         .task { await recorder.prepare() }
+        .onReceive(Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()) { _ in
+            if recorder.isRecording { recorder.sampleLyrics(liveLyric) }
+        }
+        .onChange(of: recorder.recordedURL) { _, url in
+            previewPlayer?.pause()
+            previewPlayer = url.map { AVPlayer(url: $0) }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { recorder.stop() }
         }
-        .onDisappear { recorder.shutdown() }
+        .onDisappear {
+            previewPlayer?.pause()
+            previewPlayer = nil
+            recorder.shutdown()
+        }
         .confirmationDialog("Descartar a gravação?", isPresented: $confirmDiscard) {
             Button("Descartar e fechar", role: .destructive) { dismiss() }
             Button("Continuar", role: .cancel) {}

@@ -172,7 +172,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
         XCTAssertTrue(content.contains(".fixedSize(horizontal: true, vertical: false)"))
         XCTAssertTrue(content.contains(".layoutPriority(2)"))
-        XCTAssertTrue(content.contains("v66 · "), "Stage 44 preserves the full Gnarly lockup")
+        XCTAssertTrue(content.contains("v67 · "), "Stage 44 preserves the full Gnarly lockup")
         let lockup = try String(contentsOf: root.appendingPathComponent("AppIconView.swift"), encoding: .utf8)
         XCTAssertTrue(lockup.contains("Image(\"NightcoreLogo\")"))
         XCTAssertTrue(lockup.contains("Text(\"Gnarly\")"))
