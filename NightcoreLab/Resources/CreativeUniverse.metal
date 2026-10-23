@@ -120,20 +120,32 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
                                    0.14f);
         col = mix(mix(A,B,hide),mix(A,C,scale),slat*0.78f);
     } else if (look == 7) { // Subcultural Archive: cumulative print wear
-        float worn = universeNoise(p*18.0f+17.0f);
+        float worn = universeNoise(p*18.0f + float2(17.0f + t*0.052f,
+                                                     5.0f - t*0.031f));
         float stamp = universeLine(angle*7.0f+r*13.0f,0.17f);
         float print = step(0.41f+0.13f*phase,worn);
         float reticle = step(0.52f,universeHash(floor(pos/4.0f)));
         col = mix(B,A,print*(0.30f+0.55f*phase));
-        col = mix(col,C,reticle * phase * 0.23f + stamp*phase*0.18f);
+        // The print must already contain visible pigment on frame zero;
+        // otherwise low-contrast grayscale failed the actual Story GPU gate.
+        float pigment = (1.0f-print) * (0.58f + 0.08f*phase);
+        col = mix(col,C,saturate(pigment + reticle*0.17f +
+                                stamp*(0.06f+phase*0.18f)));
     } else if (look == 9) { // Tectonic Mesh: cracked rock + tension threads
-        float rock = universeNoise(p*11.0f) * 0.63f +
-                     universeNoise(p*29.0f)*0.37f;
+        float rock = universeNoise(p*11.0f + float2(t*0.045f, -t*0.027f)) * 0.63f +
+                     universeNoise(p*29.0f + float2(-t*0.023f,t*0.018f))*0.37f;
         float gap = 0.19f + 0.27f*bass + 0.12f*sin(p.y*2.3f+t*0.1f);
         float fissure = 1.0f-smoothstep(gap*0.78f,gap*1.20f,abs(p.x));
         float weave = universeLine(p.y*31.0f + p.x*8.0f,0.08f) *
                       universeLine(p.x*13.0f - p.y*2.0f,0.12f);
-        col = mix(A* (0.43f+rock*0.6f), B*(0.30f+0.70f*bass),fissure);
+        col = mix(A*(0.37f+rock*0.88f), B*(0.30f+0.70f*bass),fissure);
+        // Copper mineral streaks make the unexcited stone readable; animated
+        // slowly from the song clock so static/silent tracks do not freeze.
+        float mineral = smoothstep(0.52f, 0.76f,
+            universeNoise(p*17.0f + float2(t*0.037f, seed*0.0001f)));
+        float strata = universeLine(
+            (p.y*16.0f + rock*5.0f - t*0.09f)*3.14159f, 0.24f);
+        col = mix(col,C,(0.08f + 0.29f*mineral)*(0.30f+0.70f*strata));
         col = mix(col,C,weave*fissure*(0.62f+0.20f*phase));
     } else if (look == 10) { // Vector Drift: tunnel telemetry & curved rails
         float perspective = 1.0f/(r+0.11f);
