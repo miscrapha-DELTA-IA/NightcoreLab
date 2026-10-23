@@ -42,6 +42,36 @@ final class CreativeUniverseTests: XCTestCase {
                        CreativePresetCatalog.liveExperienceIDs.count)
     }
 
+    func testVisualTaxonomyPartitionsAllExistingThemeIDsWithoutChangingPersistence() {
+        let classic = CreativeVisualTaxonomy.classicThemes
+        let materials = CreativeVisualTaxonomy.materialThemes
+        let modes = CreativeVisualTaxonomy.gnarlyModes
+        XCTAssertEqual(materials.count, 6)
+        XCTAssertEqual(modes.count, 4) // original Gnarly + three new modes
+        let combined = classic + materials + modes
+        XCTAssertEqual(combined.count, AppTheme.allCases.count)
+        XCTAssertEqual(Set(combined), Set(AppTheme.allCases))
+        XCTAssertEqual(CreativeVisualTaxonomy.nextTheme(after: .gnarly), classic[0])
+        XCTAssertFalse(CreativeVisualTaxonomy.selectableThemes.contains(.gnarlyCompiler))
+    }
+
+    func testExperiencesReactToThemeWithoutReplacingLookIdentity() {
+        for entry in CreativeUniverseCatalog.experiences {
+            let selection = "gnarly-exp-" + entry.slug
+            let cyan = CreativeUniverseCatalog.palette(
+                id: entry.id, sourceTime: 15, duration: 160,
+                artworkHue: nil, theme: .cyber)
+            let solar = CreativeUniverseCatalog.palette(
+                id: entry.id, sourceTime: 15, duration: 160,
+                artworkHue: nil, theme: .solar)
+            XCTAssertNotEqual(cyan, solar)
+            XCTAssertEqual(CreativeUniverseCatalog.lookID(
+                theme: .solar, materialID: selection), entry.id)
+            XCTAssertFalse(CreativeUniverseCatalog.experienceDescription(
+                slug: entry.slug).isEmpty)
+        }
+    }
+
     func testArtworkHueEntersOnlyProceduralPhaseAndRemainsReproducible() {
         let a = CreativeUniverseCatalog.palette(id: 13, sourceTime: 10,
                                                  duration: 100, artworkHue: 0.2)
