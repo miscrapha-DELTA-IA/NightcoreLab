@@ -63,8 +63,9 @@ struct TrackInfo: Equatable {
         artist = track?.cleanArtist
             ?? track.flatMap { LyricsMatcher.identity(from: $0.title)?.artist }
             ?? (track == nil ? "Arquivo local" : "YouTube")
-        self.coverURL = coverURL ?? track?.thumbnailURL
-        artworkFallbackURLs = track?.artworkCandidateURLs.filter { $0 != self.coverURL } ?? []
+        let selectedCoverURL = coverURL ?? track?.thumbnailURL
+        self.coverURL = selectedCoverURL
+        artworkFallbackURLs = track?.artworkCandidateURLs.filter { $0 != selectedCoverURL } ?? []
     }
 }
 
