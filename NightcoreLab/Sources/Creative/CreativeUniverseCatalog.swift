@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// Stage 65: a single render vocabulary for live playback and Story GPU export.
 /// The original Gnarly theme and all existing preset IDs retain their legacy
@@ -58,12 +59,40 @@ enum CreativeUniverseCatalog {
     /// Uses the already-cached artwork hue; no network or bitmap processing
     /// occurs on the display link. On procedural modes the first 20% of the
     /// song stays cover-inspired and blends out gradually by 28%.
+    /// Stable conversion performed only once per theme. The 6 experiences
+    /// retain their authored material but inherit a restrained accent from the
+    /// user's current theme. Otherwise 27 distinct theme selections produced
+    /// bit-identical export pixels, unlike all established experiences.
+    private static let themeTints: [MarbleTheme: [GnarlyThemeEngine.RGB]] = {
+        Dictionary(uniqueKeysWithValues: MarbleTheme.allCases.map { theme in
+            let palette = theme.palette
+            let stops: [Color] = [palette.deep, palette.body, palette.glow]
+            return (theme, stops.map { color in
+                var r: CGFloat = 0
+                var g: CGFloat = 0
+                var b: CGFloat = 0
+                var a: CGFloat = 0
+                UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                return GnarlyThemeEngine.RGB(
+                    red: Double(r), green: Double(g), blue: Double(b))
+            })
+        })
+    }()
+
     static func palette(id: Int, sourceTime: TimeInterval,
-                        duration: TimeInterval, artworkHue: Double?) -> [Color] {
+                        duration: TimeInterval, artworkHue: Double?,
+                        theme: MarbleTheme? = nil) -> [Color] {
         guard let entry = entries.first(where: { $0.id == id }) else {
             return [Color.black, Color.gray, Color.white]
         }
         let authored = entry.palette.map(GnarlyThemeEngine.RGB.hex)
+        if (7...12).contains(id), let theme, let tint = themeTints[theme] {
+            return [
+                GnarlyThemeEngine.RGB.mix(authored[0], tint[0], 0.20).color,
+                GnarlyThemeEngine.RGB.mix(authored[1], tint[1], 0.36).color,
+                GnarlyThemeEngine.RGB.mix(authored[2], tint[2], 0.34).color
+            ]
+        }
         guard id >= 13, let hue = artworkHue, hue.isFinite,
               duration.isFinite, duration > 0 else {
             return authored.map(\.color)
