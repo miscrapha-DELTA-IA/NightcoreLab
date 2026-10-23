@@ -985,7 +985,8 @@ struct ContentView: View {
                             Text(String(format: "%02d", index + 1))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(currentTheme.accent)
-                            TrackThumbnailImage(track: track)
+                            TrackThumbnailImage(track: track,
+                        localArtworkURL: downloader.cachedArtworkURL(for: track))
                                 
                                 .scaledToFill()
                                 .frame(width: 42, height: 42)
