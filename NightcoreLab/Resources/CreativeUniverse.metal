@@ -97,11 +97,11 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
         knit.x += floor(knit.y)*0.5f;
         float2 stitch = fract(knit)-0.5f;
         float v = abs(abs(stitch.x) - 0.58f*(stitch.y+0.4f));
-        float thread = 1.0f-smoothstep(0.07f,0.18f,v);
+        float threadCoverage = 1.0f-smoothstep(0.07f,0.18f,v);
         float light = 0.68f + 0.30f*(stitch.x + 0.5f);
         float pattern = step(0.56f, universeNoise(floor(knit/7.0f)*0.7f +
                                                  float2(t*0.045f, voice)));
-        col = mix(A, mix(B,C,pattern)*light, thread);
+        col = mix(A, mix(B,C,pattern)*light, threadCoverage);
         col *= 0.91f + 0.09f*sin(p.x*2.2f + fold);
     } else if (look == 5) { // Isometric: sharp topographic contours
         float2 iso = float2(p.x*0.866f-p.y*0.5f,p.x*0.5f+p.y*0.866f);
