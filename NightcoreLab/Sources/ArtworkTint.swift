@@ -37,6 +37,17 @@ enum ArtworkTintExtractor {
         }
     }
 
+    /// Reuse the player's coalesced artwork cache; also supports offline file URLs.
+    /// A single 24px ImageIO read runs only when the selected track/theme changes.
+    static func fetch(url: URL?) async -> ArtworkTint? {
+        guard let url else { return nil }
+        guard let bytes = await PlayerArtworkStore.shared.data(at: url),
+              bytes.count <= 6 * 1_024 * 1_024, !Task.isCancelled else { return nil }
+        return await Task.detached(priority: .utility) {
+            extract(from: bytes)
+        }.value
+    }
+
     static func extract(from data: Data) -> ArtworkTint? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
