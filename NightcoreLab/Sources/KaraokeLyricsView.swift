@@ -137,6 +137,10 @@ extension KaraokeTheme {
         case .purewhite: return .purewhite
         case .ultrablack: return .ultrablack
         case .gnarly: return .cyber
+        case .xeroxSerpentine, .lenticularWild: return .solar
+        case .prismCarmine, .gnarlyOrganism: return .crimson
+        case .subatomicBubble, .jacquardSignal: return .orchid
+        case .isometricChasm, .gnarlyStrata, .gnarlyCompiler: return .cyber
         }
     }
 }
