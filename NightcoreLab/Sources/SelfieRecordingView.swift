@@ -1,4 +1,6 @@
 import AVFoundation
+import AVKit
+import Combine
 import SwiftUI
 
 /// Temporary, local-only movie files. Nothing is uploaded by this feature.
@@ -135,6 +137,10 @@ final class SelfieVideoRecorder: ObservableObject {
     @Published var errorText: String?
     @Published private(set) var wasSaved = false
     @Published private(set) var isSaving = false
+    @Published private(set) var isProcessing = false
+
+    private var recordingStartedAt: TimeInterval?
+    private var lyricCues: [SelfieLyricCue] = []
 
     private let pipeline = SelfieCameraPipeline()
     private var closed = false
@@ -145,6 +151,8 @@ final class SelfieVideoRecorder: ObservableObject {
     init() {
         pipeline.didStart = { [weak self] in
             Task { @MainActor [weak self] in
+                self?.recordingStartedAt = ProcessInfo.processInfo.systemUptime
+                self?.lyricCues.removeAll(keepingCapacity: true)
                 self?.isRecording = true
                 self?.isFinishing = false
             }
@@ -159,7 +167,30 @@ final class SelfieVideoRecorder: ObservableObject {
                     if self.closed {
                         try? FileManager.default.removeItem(at: url)
                     } else {
-                        self.recordedURL = url
+                        self.isProcessing = true
+                        let cues = self.lyricCues
+                        Task { @MainActor [weak self] in
+                            do {
+                                let editedURL = try await Task.detached(priority: .userInitiated) {
+                                    try await SelfieKaraokeVideoExporter.render(sourceURL: url, cues: cues)
+                                }.value
+                                guard let self, !self.closed else {
+                                    if editedURL != url { try? FileManager.default.removeItem(at: editedURL) }
+                                    try? FileManager.default.removeItem(at: url)
+                                    return
+                                }
+                                self.recordedURL = editedURL
+                                if editedURL != url { try? FileManager.default.removeItem(at: url) }
+                                self.pendingURL = nil
+                                self.isProcessing = false
+                            } catch {
+                                guard let self, !self.closed else { return }
+                                self.errorText = "Não foi possível inserir as letras: \(error.localizedDescription) Você ainda pode visualizar o vídeo original."
+                                self.recordedURL = url
+                                self.pendingURL = nil
+                                self.isProcessing = false
+                            }
+                        }
                     }
                 case .failure(let error):
                     if !self.closed { self.errorText = error.localizedDescription }
@@ -167,9 +198,17 @@ final class SelfieVideoRecorder: ObservableObject {
                         try? FileManager.default.removeItem(at: url)
                     }
                 }
-                self.pendingURL = nil
+                if !self.isProcessing { self.pendingURL = nil }
             }
         }
+    }
+
+    /// Samples the live clock; stores only verse transitions (max 240).
+    func sampleLyrics(_ text: String) {
+        guard isRecording, let recordingStartedAt else { return }
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - recordingStartedAt)
+        SelfieLyricTimeline.append(text, at: elapsed, to: &lyricCues)
+        if elapsed >= 90 { stop() }
     }
 
     func prepare() async {
@@ -203,8 +242,11 @@ final class SelfieVideoRecorder: ObservableObject {
     }
 
     func start() {
-        guard isReady, !isRecording, !isFinishing, recordedURL == nil else { return }
+        guard isReady, !isRecording, !isFinishing, !isProcessing,
+              recordedURL == nil else { return }
         errorText = nil
+        lyricCues.removeAll()
+        recordingStartedAt = nil
         let url = SelfieVideoCaptureFile.temporaryURL()
         pendingURL = url
         isFinishing = true
@@ -230,9 +272,10 @@ final class SelfieVideoRecorder: ObservableObject {
     }
 
     func retake() {
-        guard !isRecording, !isFinishing else { return }
+        guard !isRecording, !isFinishing, !isProcessing else { return }
         if let recordedURL { try? FileManager.default.removeItem(at: recordedURL) }
         recordedURL = nil
+        lyricCues.removeAll()
         wasSaved = false
         errorText = nil
     }
@@ -242,6 +285,7 @@ final class SelfieVideoRecorder: ObservableObject {
         closed = true
         pipeline.shutdown()
         if let recordedURL { try? FileManager.default.removeItem(at: recordedURL) }
+        if let pendingURL { try? FileManager.default.removeItem(at: pendingURL) }
         recordedURL = nil
     }
 }
