@@ -97,6 +97,25 @@ final class OmniboxRobustnessTests: XCTestCase {
             savedAt: now.addingTimeInterval(20), now: now), .expired)
     }
 
+    func testTypingStaysOfflineUntilExplicitSearch() async throws {
+        OmniboxStubServer.shared.set([
+            "/v1/search|song": .init(200, try hits([hit("ccccccccccc", name: "Song")])),
+            "/v1/suggest|song": .init(200, Data("[\\"song\\"]".utf8))
+        ])
+        let engine = client()
+        engine.queryChanged("so")
+        engine.queryChanged("son")
+        engine.queryChanged("song")
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertEqual(engine.loadState, .local)
+        XCTAssertFalse(engine.isSearching)
+        XCTAssertFalse(engine.hasSearched)
+        XCTAssertTrue(engine.results.isEmpty)
+        engine.submit("song")
+        await wait { engine.loadState == .ready && !engine.isSearching }
+        XCTAssertEqual(engine.results.first?.id, "ccccccccccc")
+    }
+
     func testNewQueryNeverShowsResultsFromPreviousQuery() async throws {
         OmniboxStubServer.shared.set([
             "/v1/search|alpha": .init(200, try hits([hit("aaaaaaaaaaa", name: "Alpha")]), delay: 0.5),
@@ -105,9 +124,9 @@ final class OmniboxRobustnessTests: XCTestCase {
             "/v1/suggest|beta": .init(200, Data("[\"Beta\"]".utf8), delay: 0.01)
         ])
         let engine = client()
-        engine.queryChanged("alpha")
+        engine.submit("alpha")
         try await Task.sleep(for: .milliseconds(80))
-        engine.queryChanged("beta")
+        engine.submit("beta")
         XCTAssertFalse(engine.results.contains { $0.id == "aaaaaaaaaaa" })
         await wait { engine.loadState == .ready && !engine.isSearching }
         XCTAssertEqual(engine.results.first?.id, "bbbbbbbbbbb")
@@ -122,7 +141,7 @@ final class OmniboxRobustnessTests: XCTestCase {
             "/v1/suggest|track": .init(200, Data("[\"Track suggestion\"]".utf8), delay: 0.3)
         ])
         let engine = client()
-        engine.queryChanged("track")
+        engine.submit("track")
         await wait { engine.loadState == .partial && engine.results.first?.id == "aaaaaaaaaaa" }
         XCTAssertTrue(engine.isSearching)
         await wait { engine.loadState == .ready && !engine.isSearching }
@@ -135,7 +154,7 @@ final class OmniboxRobustnessTests: XCTestCase {
             "/v1/suggest|song": .init(503, Data())
         ])
         let engine = client()
-        engine.queryChanged("song")
+        engine.submit("song")
         await wait { engine.hasSearched && !engine.isSearching }
         XCTAssertEqual(engine.results.first?.id, "ccccccccccc")
         XCTAssertTrue(engine.lastRequestFailed)
@@ -149,7 +168,7 @@ final class OmniboxRobustnessTests: XCTestCase {
             "/v1/suggest|song": .init(200, Data("[\"song\"]".utf8))
         ])
         let engine = client(now: { date })
-        engine.queryChanged("song")
+        engine.submit("song")
         await wait { engine.loadState == .ready && !engine.isSearching }
         XCTAssertEqual(engine.results.first?.id, "ccccccccccc")
 
@@ -158,7 +177,7 @@ final class OmniboxRobustnessTests: XCTestCase {
             "/v1/search|song": .init(500, Data()),
             "/v1/suggest|song": .init(500, Data())
         ])
-        engine.queryChanged("song")
+        engine.submit("song")
         XCTAssertTrue(engine.isShowingStaleCache)
         XCTAssertEqual(engine.results.first?.id, "ccccccccccc")
         await wait { engine.hasSearched && !engine.isSearching }
@@ -174,7 +193,7 @@ final class OmniboxRobustnessTests: XCTestCase {
             "/v1/suggest|song": .init(200, Data("[\"song\"]".utf8), delay: 0.25)
         ])
         let engine = client()
-        engine.queryChanged("song")
+        engine.submit("song")
         try await Task.sleep(for: .milliseconds(50))
         engine.useServer(URL(string: "https://another-server.test/")!)
         XCTAssertEqual(engine.loadState, .idle)
