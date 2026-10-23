@@ -7,6 +7,7 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
     case ultrapink, ultraorange, purewhite, ultrablack, gnarly
+    case xeroxSerpentine, prismCarmine, subatomicBubble, jacquardSignal, isometricChasm, lenticularWild, gnarlyStrata, gnarlyCompiler, gnarlyOrganism
     var id: String { rawValue }
 
     /// deep = veios/sombras · body = corpo do líquido · glow = brilho/acento
@@ -80,6 +81,24 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
             return (Color(red: 0.00, green: 0.00, blue: 0.00),
                     Color(red: 0.07, green: 0.07, blue: 0.09),
                     Color(red: 0.28, green: 0.29, blue: 0.34))
+        case .xeroxSerpentine:
+            return (Color(red: 0.05, green: 0.05, blue: 0.06), Color(red: 0.97, green: 0.93, blue: 0.09), Color(red: 0.95, green: 0.94, blue: 0.90))
+        case .prismCarmine:
+            return (Color(red: 0.22, green: 0.00, blue: 0.05), Color(red: 1.00, green: 0.05, blue: 0.22), Color(red: 0.48, green: 0.90, blue: 0.95))
+        case .subatomicBubble:
+            return (Color(red: 0.04, green: 0.13, blue: 0.27), Color(red: 0.96, green: 0.72, blue: 0.18), Color(red: 0.22, green: 0.58, blue: 0.83))
+        case .jacquardSignal:
+            return (Color(red: 0.06, green: 0.03, blue: 0.08), Color(red: 0.71, green: 0.58, blue: 0.29), Color(red: 0.50, green: 0.19, blue: 0.80))
+        case .isometricChasm:
+            return (Color(red: 0.01, green: 0.01, blue: 0.03), Color(red: 0.16, green: 0.31, blue: 1.00), Color(red: 0.78, green: 0.83, blue: 1.00))
+        case .lenticularWild:
+            return (Color(red: 0.04, green: 0.04, blue: 0.04), Color(red: 0.81, green: 0.61, blue: 0.28), Color(red: 0.96, green: 0.93, blue: 0.87))
+        case .gnarlyStrata:
+            return (Color(red: 0.02, green: 0.02, blue: 0.05), Color(red: 0.43, green: 0.65, blue: 1.00), Color(red: 0.88, green: 0.71, blue: 0.45))
+        case .gnarlyCompiler:
+            return (Color(red: 0.02, green: 0.02, blue: 0.05), Color(red: 0.32, green: 0.88, blue: 0.90), Color(red: 0.96, green: 0.72, blue: 0.18))
+        case .gnarlyOrganism:
+            return (Color(red: 0.02, green: 0.02, blue: 0.05), Color(red: 1.00, green: 0.42, blue: 0.65), Color(red: 0.38, green: 0.78, blue: 0.82))
         case .gnarly: // cover-aware palette is resolved per source timestamp
             return (Color(red: 0.02, green: 0.02, blue: 0.12),
                     Color(red: 0.20, green: 0.52, blue: 0.87),
