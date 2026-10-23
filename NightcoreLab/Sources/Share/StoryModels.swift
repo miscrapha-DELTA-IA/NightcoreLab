@@ -93,6 +93,9 @@ struct StoryVideoRequest: Sendable {
     let totalSourceDuration: TimeInterval
     /// Captured once when the Story draft opens; no network/artwork reads per frame.
     var gnarlyArtworkHue: Double? = nil
+    /// Immutable imported JPEG and crop; changing the live image never changes
+    /// an already-open preview or its exported MP4.
+    var personalBackground: PersonalBackgroundSnapshot? = nil
     let lines: [TimedLyricLine]
     let lyricOffset: TimeInterval
     /// Frozen effect + font. The same value the live karaoke resolves with,
