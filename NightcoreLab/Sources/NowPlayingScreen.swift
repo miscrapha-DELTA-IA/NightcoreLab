@@ -55,6 +55,7 @@ struct TrackInfo: Equatable {
     let title: String
     let artist: String
     let coverURL: URL?
+    let artworkFallbackURLs: [URL]
 
     init(track: Track?, fileName: String?, coverURL: URL?) {
         id = track?.id ?? (fileName.map { "local:\($0)" } ?? "idle")
@@ -63,6 +64,7 @@ struct TrackInfo: Equatable {
             ?? track.flatMap { LyricsMatcher.identity(from: $0.title)?.artist }
             ?? (track == nil ? "Arquivo local" : "YouTube")
         self.coverURL = coverURL ?? track?.thumbnailURL
+        artworkFallbackURLs = track?.artworkCandidateURLs.filter { $0 != self.coverURL } ?? []
     }
 }
 
@@ -395,6 +397,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         style: backgroundStyle,
                         theme: MarbleTheme(appTheme: appTheme),
                         coverURL: track.coverURL,
+                        fallbackCoverURLs: track.artworkFallbackURLs,
                         marbleStartedAt: marbleStartedAt,
                         frozenTime: frozenShareMarblePhase,
                         sourceClock: clock, sourceDuration: audio.duration,
@@ -903,6 +906,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                     PlayerBackgroundView(
                         style: effectivePlayerBackgroundStyle,
                         imageURL: track.coverURL, theme: appTheme,
+                        fallbackCoverURLs: track.artworkFallbackURLs,
                         sourceClock: clock, sourceDuration: audio.duration,
                         artworkHue: gnarlyArtworkHue,
                         frozenTime: frozenShareMarblePhase,
@@ -1230,7 +1234,7 @@ private struct PlayerHeader: View {
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12))
                              : AnyLayout(VStackLayout(spacing: 9))
         layout {
-            CoverArt(url: track.coverURL)
+            CoverArt(url: track.coverURL, fallbackURLs: track.artworkFallbackURLs)
                 .frame(width: compact ? 52 : 164, height: compact ? 52 : 164)
                 .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 28, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: compact ? 6 : 30, y: compact ? 2 : 14)
@@ -1296,8 +1300,9 @@ private struct Transport: View {
 
 private struct CoverArt: View {
     let url: URL?
+    let fallbackURLs: [URL]
     var body: some View {
-        PlayerArtworkImage(url: url) { image in
+        PlayerArtworkImage(url: url, fallbackURLs: fallbackURLs) { image in
             if let image {
                 image.resizable().scaledToFill()
             } else {
@@ -1313,6 +1318,7 @@ private struct BackgroundLayer: View {
     let style: BackgroundStyle
     let theme: MarbleTheme
     let coverURL: URL?
+    var fallbackCoverURLs: [URL] = []
     let marbleStartedAt: Date
     var frozenTime: Float? = nil
     var sourceClock: PlaybackClock? = nil
@@ -1350,7 +1356,7 @@ private struct BackgroundLayer: View {
                                     padAccentEmitter: padAccentEmitter)
                     .transition(.opacity)
             case .cover:
-                BlurredCover(url: coverURL)
+                BlurredCover(url: coverURL, fallbackURLs: fallbackCoverURLs)
                     .transition(.opacity)
             }
             Color.black.opacity(0.35)               // scrim: contraste do preenchimento das letras
@@ -1363,10 +1369,11 @@ private struct BackgroundLayer: View {
 
 private struct BlurredCover: View {
     let url: URL?
+    let fallbackURLs: [URL]
 
     var body: some View {
         GeometryReader { viewport in
-            PlayerArtworkImage(url: url) { image in
+            PlayerArtworkImage(url: url, fallbackURLs: fallbackURLs) { image in
                 ZStack {
                     Color.black
 
