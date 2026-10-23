@@ -191,7 +191,7 @@ private struct CreatorStudioPanel: View {
                             .foregroundStyle(theme.accent)
                         Text(CreativeVisualTaxonomy.roleExplanation)
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("Escolha um tema no raio para mudar materiais e cores. Aqui você escolhe como eles se movimentam.")
+                        Text("Escolha um tema no raio para mudar materiais e cores. Aqui você escolhe como eles se movimentam. Os modos GNARLY assumem o visual enquanto ativos, sem apagar a experiência escolhida.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     .padding(12)
