@@ -48,6 +48,7 @@ struct PlayerBackgroundView: View {
     let style: PlayerBackgroundStyle
     let imageURL: URL?
     let theme: AppTheme
+    var fallbackCoverURLs: [URL] = []
     var sourceClock: PlaybackClock? = nil
     var sourceDuration: TimeInterval = 0
     var artworkHue: Double? = nil
@@ -103,7 +104,7 @@ struct PlayerBackgroundView: View {
                 switch effectiveStyle {
                 case .blurred:
                 ZStack {
-                    CoverFill(url: imageURL)
+                    CoverFill(url: imageURL, fallbackURLs: fallbackCoverURLs)
                         .blur(radius: 15, opaque: true)
                     Color.black.opacity(0.4)
                 }
@@ -111,14 +112,14 @@ struct PlayerBackgroundView: View {
 
             case .sharp:
                 ZStack {
-                    CoverFill(url: imageURL)
+                    CoverFill(url: imageURL, fallbackURLs: fallbackCoverURLs)
                     Color.black.opacity(0.6)
                 }
                 .transition(.opacity)
 
                 case .marquee:
                     ZStack {
-                        MarqueeCover(url: imageURL)
+                        MarqueeCover(url: imageURL, fallbackURLs: fallbackCoverURLs)
                         Color.black.opacity(0.5)
                     }
                     .transition(.opacity)
@@ -136,10 +137,11 @@ struct PlayerBackgroundView: View {
 /// Imagem preenchendo todo o espaço proposto (`scaledToFill`), sem vazar do quadro.
 private struct CoverFill: View {
     let url: URL
+    let fallbackURLs: [URL]
 
     var body: some View {
         GeometryReader { geometry in
-            PlayerArtworkImage(url: url) { image in
+            PlayerArtworkImage(url: url, fallbackURLs: fallbackURLs) { image in
                 if let image { image.resizable().scaledToFill() }
                 else { GnarlyArtworkPlaceholder() }
             }
@@ -160,6 +162,7 @@ private struct CoverFill: View {
 /// na segunda visita e a animação não recomeçaria.
 private struct MarqueeCover: View {
     let url: URL
+    let fallbackURLs: [URL]
 
     @State private var isAnimating = false
     @Environment(\.energyBudget) private var energyBudget
@@ -188,7 +191,7 @@ private struct MarqueeCover: View {
     }
 
     private func tile(in size: CGSize) -> some View {
-        PlayerArtworkImage(url: url) { image in
+        PlayerArtworkImage(url: url, fallbackURLs: fallbackURLs) { image in
             if let image { image.resizable().scaledToFill() }
             else { GnarlyArtworkPlaceholder() }
         }
