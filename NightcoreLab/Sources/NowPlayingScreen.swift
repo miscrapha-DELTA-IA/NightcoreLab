@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 // =============================================================================
 // Depende de: LyricsStore (environment), KaraokeLyricsView, PlaybackClock,
@@ -346,6 +347,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @Environment(\.scenePhase) private var scenePhase
     @State private var marbleStartedAt = Date()
     @State private var gnarlyArtworkHue: Double?
+    @State private var personalBackground = PersonalBackgroundStore()
+    @State private var selectedPersonalPhoto: PhotosPickerItem?
+    @State private var showingPersonalPicker = false
+    @State private var showingPersonalAdjustments = false
     @State private var visualEngine = AudioFeatureEngine()
     /// Observed only by LiveMarbleDistortion leaves (Stage 10C): reactive
     /// updates no longer re-evaluate this whole screen at 12 Hz.
@@ -389,7 +394,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     private var playerCanvas: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if showsKaraoke {
+            if let personalImage = personalBackground.activeImage {
+                PersonalBackgroundImageView(image: personalImage, settings: personalBackground.settings)
+                    .ignoresSafeArea()
+            } else if showsKaraoke {
                 LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     BackgroundLayer(
                         style: backgroundStyle,
@@ -536,11 +544,46 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             }
         }
         .overlay(alignment: .topLeading) {
-            EnvironmentBar(theme: $appTheme,
-                           panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels,
-                           microphoneActive: audio.karaokeMicrophoneActive)
-                .padding(.top, 16)
-                .padding(.leading, 16)
+            HStack(spacing: 8) {
+                EnvironmentBar(theme: $appTheme,
+                               panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels,
+                               microphoneActive: audio.karaokeMicrophoneActive)
+                Menu {
+                    Button("Tema visual", systemImage: "sparkles") {
+                        personalBackground.disable()
+                        backgroundStyle = .marble
+                    }
+                    Button("Capa do álbum", systemImage: "square.stack") {
+                        personalBackground.disable()
+                        backgroundStyle = .cover
+                    }
+                    Button("Minha foto · escolher / trocar", systemImage: "photo.on.rectangle") {
+                        showingPersonalPicker = true
+                    }
+                    if personalBackground.snapshot != nil {
+                        Button("Usar minha foto", systemImage: "checkmark.circle") {
+                            personalBackground.enable()
+                        }
+                        Button("Ajustar foto", systemImage: "slider.horizontal.3") {
+                            showingPersonalAdjustments = true
+                        }
+                        Button("Remover foto", systemImage: "trash", role: .destructive) {
+                            personalBackground.remove()
+                        }
+                    }
+                } label: {
+                    Image(systemName: personalBackground.activeSnapshot == nil
+                        ? "photo.on.rectangle.angled" : "photo.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(personalBackground.activeSnapshot == nil
+                            ? Color.white : appTheme.accent)
+                        .environmentButtonSurface()
+                }
+                .accessibilityLabel("Fundo: tema, capa ou minha foto")
+                .accessibilityIdentifier("background.personalMenu")
+            }
+            .padding(.top, 16)
+            .padding(.leading, 16)
         }
         .overlay(alignment: .topTrailing) {
             if isTrackLoaded {
@@ -567,6 +610,24 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
 
     private var playerSheets: some View {
         playerCanvas
+        .photosPicker(isPresented: $showingPersonalPicker,
+                      selection: $selectedPersonalPhoto, matching: .images)
+        .onChange(of: selectedPersonalPhoto) { _, item in
+            guard let item else { return }
+            Task {
+                if let bytes = try? await item.loadTransferable(type: Data.self) {
+                    await personalBackground.importPhoto(bytes)
+                } else {
+                    personalBackground.errorMessage = "Não foi possível abrir a imagem escolhida."
+                }
+                selectedPersonalPhoto = nil
+            }
+        }
+        .sheet(isPresented: $showingPersonalAdjustments) {
+            PersonalBackgroundAdjustmentSheet(store: personalBackground)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
                 track: track, theme: appTheme,
@@ -898,7 +959,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         .padding(.horizontal, showsKaraoke ? 12 : 12)
         .padding(.vertical, showsKaraoke ? 10 : 11)
         .background {
-            if !showsKaraoke {
+            if !showsKaraoke, let personalImage = personalBackground.activeImage {
+                PersonalBackgroundImageView(image: personalImage,
+                                            settings: personalBackground.settings)
+            } else if !showsKaraoke {
                 LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     PlayerBackgroundView(
                         style: effectivePlayerBackgroundStyle,
@@ -995,7 +1059,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             lyricsStore.status == .ready ? lyricsStore.lines : []
         do {
             let capturedAt = Date()
-            let frame = try StoryRequestBuilder.make(
+            var frame = try StoryRequestBuilder.make(
                 mode: mode, track: track, theme: appTheme,
                 playerStyle: playerBackgroundStyle, karaokeBackground: backgroundStyle,
                 marblePhase: Float(max(0, capturedAt.timeIntervalSince(marbleStartedAt)) *
@@ -1019,6 +1083,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                     snapshot: lyricsStore.scoring.snapshot,
                     mode: lyricsStore.scoring.mode) : nil)
             )
+            // Freeze the exact image bytes/settings now. Replacing/removing a
+            // live photo cannot mutate an already-open Story draft.
+            frame.personalBackground = personalBackground.activeSnapshot
             let frozenAudio = try audio.storyAudioSource()
             // Preview and export share the exact same immutable snapshot,
             // artwork and frame-rate profile. No video work starts until
