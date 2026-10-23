@@ -1333,9 +1333,9 @@ private struct BackgroundLayer: View {
         ZStack {
             switch style {
             case .marble:
-                TurbulentMarbleView(theme: theme, speed: 0.8,
+                TurbulentMarbleView(theme: theme,
                                     sourceClock: sourceClock, sourceDuration: sourceDuration,
-                                    artworkHue: artworkHue,
+                                    artworkHue: artworkHue, speed: 0.8,
                                     maxFPS: energyBudget.maxVisualFPS,
                                     frozenTime: frozenTime,
                                     startedAt: marbleStartedAt,
