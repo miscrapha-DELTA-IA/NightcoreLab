@@ -199,3 +199,46 @@ final class PersonalBackgroundStore {
         return output as Data
     }
 }
+
+struct PersonalBackgroundAdjustmentSheet: View {
+    let store: PersonalBackgroundStore
+    private func value(_ read: @escaping (PersonalBackgroundSettings) -> Double,
+                       update: @escaping (inout PersonalBackgroundSettings, Double) -> Void) -> Binding<Double> {
+        Binding(get: { read(store.settings) }, set: { value in store.update { update(&$0, value) } })
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Minha foto").font(.headline)
+            if let image = store.activeImage {
+                PersonalBackgroundImageView(image: image, settings: store.settings)
+                    .frame(height: 112)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            Text("Zoom").font(.caption)
+            Slider(value: value({ $0.scale }, update: { $0.scale = $1 }), in: 1...2)
+                .accessibilityIdentifier("background.photoZoom")
+            HStack {
+                Text("Posição horizontal").font(.caption)
+                Spacer()
+                Text("Posição vertical").font(.caption)
+            }
+            HStack {
+                Slider(value: value({ $0.offsetX }, update: { $0.offsetX = $1 }), in: -0.5...0.5)
+                Slider(value: value({ $0.offsetY }, update: { $0.offsetY = $1 }), in: -0.5...0.5)
+            }
+            Text("Escurecimento").font(.caption)
+            Slider(value: value({ $0.dimming }, update: { $0.dimming = $1 }), in: 0.15...0.75)
+                .accessibilityIdentifier("background.photoDimming")
+            Button("Restaurar enquadramento") {
+                store.update {
+                    $0.scale = 1; $0.offsetX = 0; $0.offsetY = 0; $0.dimming = 0.38
+                }
+            }
+            .font(.caption)
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .background(.regularMaterial)
+        .accessibilityIdentifier("background.photoAdjustments")
+    }
+}
