@@ -35,6 +35,28 @@ enum CreativeUniverseCatalog {
 
     static let experiences: [Entry] = entries.filter { $0.category == "experience" }
 
+    /// User-facing role vocabulary. No change to IDs, serialized packages,
+    /// render topology, or existing preset lookup contracts.
+    static func experienceDescription(slug: String) -> String {
+        switch slug {
+        case "subcultural-archive":
+            return "Colagem de zine, retículas e golpes gráficos guiados pela bateria."
+        case "caustic-dissection":
+            return "Cristais refratam e se fragmentam ao ritmo da música."
+        case "tectonic-mesh":
+            return "Falhas geológicas e filamentos sob tensão reativa."
+        case "vector-drift-2000":
+            return "Travessia de um túnel em perspectiva, acelerado por graves."
+        case "liquid-monochrome":
+            return "Convecção de esmalte e células que se abrem com os graves."
+        case "nocturnal-lithograph":
+            return "Gravura noturna com interferências, oxidação e ondas."
+        default:
+            return "Experiência audiovisual de transformação."
+        }
+    }
+
+
     static func lookID(theme: MarbleTheme, materialID: String) -> Int? {
         // An explicitly chosen creative experience takes priority over theme
         // colors; the remaining presets keep their exact previous rendering.
@@ -60,9 +82,9 @@ enum CreativeUniverseCatalog {
     /// occurs on the display link. On procedural modes the first 20% of the
     /// song stays cover-inspired and blends out gradually by 28%.
     /// Stable conversion performed only once per theme. The 6 experiences
-    /// retain their authored material but inherit a restrained accent from the
-    /// user's current theme. Otherwise 27 distinct theme selections produced
-    /// bit-identical export pixels, unlike all established experiences.
+    /// retain their authored behavior; the user's theme supplies meaningful
+    /// material contrast and highlight direction instead of a token accent.
+    /// The shader reads these tones to modify geometry without a new uniform.
     private static let themeTints: [MarbleTheme: [GnarlyThemeEngine.RGB]] = {
         Dictionary(uniqueKeysWithValues: MarbleTheme.allCases.map { theme in
             let palette = theme.palette
@@ -88,9 +110,9 @@ enum CreativeUniverseCatalog {
         let authored = entry.palette.map(GnarlyThemeEngine.RGB.hex)
         if (7...12).contains(id), let theme, let tint = themeTints[theme] {
             return [
-                GnarlyThemeEngine.RGB.mix(authored[0], tint[0], 0.20).color,
-                GnarlyThemeEngine.RGB.mix(authored[1], tint[1], 0.36).color,
-                GnarlyThemeEngine.RGB.mix(authored[2], tint[2], 0.34).color
+                GnarlyThemeEngine.RGB.mix(authored[0], tint[0], 0.46).color,
+                GnarlyThemeEngine.RGB.mix(authored[1], tint[1], 0.67).color,
+                GnarlyThemeEngine.RGB.mix(authored[2], tint[2], 0.78).color
             ]
         }
         guard id >= 13, let hue = artworkHue, hue.isFinite,
