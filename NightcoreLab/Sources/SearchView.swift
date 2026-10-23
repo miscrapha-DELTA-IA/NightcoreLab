@@ -158,7 +158,7 @@ struct SearchView: View {
             // Reveal results for this session without changing either preference.
             searchExpansionOverride = nil
             session.submittedQuery = value
-            session.omnibox.queryChanged(value)
+            session.omnibox.submit(value)
             session.searchRequestID = UUID()
         }
     }
@@ -643,7 +643,9 @@ struct SearchView: View {
                 Text(errorMessage).font(.caption).foregroundStyle(.secondary)
             } else if isSearchMode && (session.hasSearched || session.omnibox.hasSearched) &&
                       displayedTracks.isEmpty && !session.isSearching && !session.omnibox.isSearching {
-                Text("Nenhuma música encontrada. Experimente outro termo.")
+                Text(session.submittedQuery == nil
+                     ? "Digite a música e toque em Buscar no teclado."
+                     : "Nenhuma música encontrada. Experimente outro termo.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if !isSearchMode && suggestedTracks.isEmpty && !isLoadingSuggestions {
                 Text("Escolha uma música para descobrir faixas relacionadas.")
@@ -690,7 +692,8 @@ struct SearchView: View {
             guard !previous.isEmpty, session.submittedQuery == nil, session.searchResults.isEmpty else { return }
             // A deliberate saved text search is restored once, never on every keystroke.
             session.query = previous
-            session.omnibox.queryChanged(previous)
+            // Restored searches are explicit prior user intent, not keystrokes.
+            session.omnibox.submit(previous)
             session.submittedQuery = previous
             session.searchRequestID = UUID()
         }

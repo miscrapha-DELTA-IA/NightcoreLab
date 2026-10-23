@@ -172,7 +172,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
         XCTAssertTrue(content.contains(".fixedSize(horizontal: true, vertical: false)"))
         XCTAssertTrue(content.contains(".layoutPriority(2)"))
-        XCTAssertTrue(content.contains("v68 · "), "Stage 44 preserves the full Gnarly lockup")
+        XCTAssertTrue(content.contains("v70 · "), "Stage 44 preserves the full Gnarly lockup")
         let lockup = try String(contentsOf: root.appendingPathComponent("AppIconView.swift"), encoding: .utf8)
         XCTAssertTrue(lockup.contains("Image(\"NightcoreLogo\")"))
         XCTAssertTrue(lockup.contains("Text(\"Gnarly\")"))
@@ -288,7 +288,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(search.contains("onSaveMixOffline(result.playbackTracks)"))
         XCTAssertTrue(search.contains("searchDrawer.focusAlbum."))
         XCTAssertTrue(content.contains("activeTrack: currentTrack"))
-        XCTAssertTrue(content.contains("v68 · "))
+        XCTAssertTrue(content.contains("v70 · "))
     }
 
 }

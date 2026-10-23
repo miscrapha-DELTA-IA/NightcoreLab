@@ -773,7 +773,22 @@ extension AudioDownloadManager: DownloadManagerDelegate {
                          .notConnectedToInternet, .dnsLookupFailed].contains(network.code)
         default: retryable = false
         }
-        guard retryable, attempt < 2 else {
+        // The backend can return a real YouTube cooldown (up to 5 minutes),
+        // per-client admission limits, or a busy queue. Do not display
+        // "servidor acordando" or silently spin for minutes on HTTP 429.
+        // Preserve the Retry-After circuit and require a new explicit selection.
+        if rateLimited {
+            completeOfflineAudio(track.id, result: .failure(error))
+            fail(track, message: DownloadFailureMessage.describe(
+                error, status: 429,
+                serverCode: response?.value(forHTTPHeaderField: "X-Download-Error"),
+                retryAfter: retryAfter))
+            return
+        }
+        // Free-tier cold starts may transiently 502/503 while the new
+        // instance initializes. Only the selected track is retried twice,
+        // with bounded cancellation-safe backoff and no prefetch fan-out.
+        guard retryable, attempt < 3 else {
             completeOfflineAudio(track.id, result: .failure(error))
             fail(track, message: DownloadFailureMessage.describe(error, status: response?.statusCode))
             return
@@ -781,7 +796,7 @@ extension AudioDownloadManager: DownloadManagerDelegate {
         isRetrying = true
         let generation = selectionGeneration
         let retry = Task { @MainActor in
-            let delay = rateLimited ? max(60, self.rateLimitUntil.timeIntervalSinceNow) : Double(3 * (1 << (attempt - 1)))
+            let delay: Double = attempt == 1 ? 8 : 18
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard generation == self.selectionGeneration || self.offlineWaiters[track.id] != nil else { return }
             self.serialize {
@@ -815,9 +830,23 @@ extension AudioDownloadManager: DownloadManagerDelegate {
 }
 
 enum DownloadFailureMessage {
-    static func describe(_ error: Error, status: Int? = nil) -> String {
+    static func describe(_ error: Error, status: Int? = nil,
+                         serverCode: String? = nil, retryAfter: TimeInterval? = nil) -> String {
         if let status, status >= 400 {
-            if status == 429 { return "Servidor ocupado (HTTP 429). Aguarde um minuto e tente novamente." }
+            if status == 429 {
+                let seconds = max(1, Int((retryAfter ?? 60).rounded(.up)))
+                let wait = seconds >= 120 ? "\((seconds + 59) / 60) min" : "\(seconds) s"
+                if serverCode == "upstream_rate_limited" {
+                    return "O YouTube limitou temporariamente os downloads. Tente novamente em \(wait). As músicas offline continuam disponíveis."
+                }
+                if serverCode == "queue_full" {
+                    return "A fila do servidor está cheia. Tente novamente em \(wait)."
+                }
+                return "Limite temporário do servidor (HTTP 429). Tente novamente em \(wait)."
+            }
+            if status == 502 || status == 503 || status == 504 {
+                return "Servidor temporariamente indisponível (HTTP \(status)). Tente novamente."
+            }
             return "O servidor recusou o áudio (HTTP \(status)). Tente novamente ou escolha outra versão."
         }
         if let transfer = error as? DownloadError {

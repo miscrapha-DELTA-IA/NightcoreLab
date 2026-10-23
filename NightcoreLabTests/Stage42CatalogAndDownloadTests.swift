@@ -37,6 +37,21 @@ final class Stage42CatalogAndDownloadTests: XCTestCase {
         XCTAssertFalse(DownloadFailureMessage.describe(NSError(domain: "audio", code: 0)).contains("0"))
     }
 
+    func testRateLimitedDownloadShowsUpstreamWaitNotColdStart() {
+        let error = URLError(.badServerResponse)
+        let youtube = DownloadFailureMessage.describe(
+            error, status: 429, serverCode: "upstream_rate_limited", retryAfter: 300)
+        XCTAssertTrue(youtube.contains("YouTube"))
+        XCTAssertTrue(youtube.contains("5 min"))
+        XCTAssertFalse(youtube.contains("acordando"))
+        let busy = DownloadFailureMessage.describe(
+            error, status: 429, serverCode: "queue_full", retryAfter: 30)
+        XCTAssertTrue(busy.contains("fila"))
+        XCTAssertTrue(busy.contains("30 s"))
+        XCTAssertTrue(DownloadFailureMessage.describe(
+            error, status: 429, serverCode: nil, retryAfter: 60).contains("HTTP 429"))
+    }
+
     func testMissingMetadataIsNotInvented() {
         for label in ["Não identificado", "Unknown Artist", "Unknown Album", "Artista não identificado"] {
             XCTAssertNil(AlbumArtistCollectionResolver.normalize(label))
