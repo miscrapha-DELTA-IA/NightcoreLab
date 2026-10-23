@@ -20,6 +20,22 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var artistID: String? = nil
     var streamVideoID: String? = nil
 
+    /// Never replace provider artwork when it works. For YouTube tracks only,
+    /// keep a stable video thumbnail as backup when a signed/expiring URL fails.
+    var artworkCandidateURLs: [URL] {
+        var candidates: [URL] = []
+        if let thumbnailURL, thumbnailURL.scheme?.lowercased() == "https" || thumbnailURL.isFileURL {
+            candidates.append(thumbnailURL)
+        }
+        let videoID = streamVideoID ?? id
+        if videoID.range(of: "^[A-Za-z0-9_-]{11}$", options: .regularExpression) != nil,
+           let fallback = URL(string: "https://i.ytimg.com/vi/\(videoID)/hqdefault.jpg"),
+           !candidates.contains(fallback) {
+            candidates.append(fallback)
+        }
+        return candidates
+    }
+
     var url: URL { URL(string: "https://www.youtube.com/watch?v=\(streamVideoID ?? id)")! }
 
     static func from(url: String) -> Track? {
