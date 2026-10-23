@@ -65,6 +65,8 @@ struct KaraokeScoringEngine {
     private var judged: Set<Int> = []
     private var visited: [ClosedRange<Double>] = []
     private var priorVoice = KaraokeVoiceFrame.silence
+    /// Accepted live vocal evidence only; reset on seek/pause/dropout.
+    private var lastAcceptedVoiceTime: Double?
     private var attackTime: Double?
     private(set) var snapshot = KaraokeScoreSnapshot()
     var key: KeyAnalysisResult?
@@ -100,7 +102,7 @@ struct KaraokeScoringEngine {
         guard time.isFinite, !snapshot.isFinished else { return }
         lastTime = max(0, time)
         cursor = verses.firstIndex(where: { $0.end > lastTime }) ?? verses.count
-        priorVoice = .silence; attackTime = nil
+        priorVoice = .silence; attackTime = nil; lastAcceptedVoiceTime = nil
         snapshot.vocalAccuracy = 0
     }
 
@@ -127,7 +129,7 @@ struct KaraokeScoringEngine {
     }
 
     static func harmonicAccuracy(frequency: Double, key: KeyAnalysisResult?,
-                                 pitchShift: Double = 0) -> Double? {
+                                 pitchShift: Double = 0, sustainedTail: Bool = false) -> Double? {
         guard frequency.isFinite, frequency > 0, pitchShift.isFinite,
               let key, key.confidence >= 0.55, let tonic = key.key,
               let root = MusicalPitchClass.allCases.firstIndex(of: tonic), let scale = key.scale
@@ -138,17 +140,34 @@ struct KaraokeScoringEngine {
             let delta = abs((midi - Double(root + note)).truncatingRemainder(dividingBy: 12))
             return min(delta, 12 - delta)
         }.min() ?? 6
-        return max(0, min(1, 1 - max(0, distance - 0.35) / 0.75))
+        // A held note naturally drifts with vibrato. Only an explicitly
+        // detected final-word sustain gets a slightly wider pitch window.
+        let tolerance = sustainedTail ? 0.65 : 0.35
+        let falloff = sustainedTail ? 1.0 : 0.75
+        return max(0, min(1, 1 - max(0, distance - tolerance) / falloff))
+    }
+
+    private static func isSustainedFinalWord(_ window: ClosedRange<Double>,
+                                              in verse: Verse, at time: Double) -> Bool {
+        guard let final = verse.windows.last, final == window,
+              final.upperBound - final.lowerBound >= 0.9 else { return false }
+        return time >= final.lowerBound + (final.upperBound - final.lowerBound) * 0.5
     }
 
     mutating func advance(to time: Double, voice: KaraokeVoiceFrame, playing: Bool,
                           trackPresence: Bool? = nil) {
         guard !snapshot.isFinished, time.isFinite else { return }
-        guard playing else { lastTime = time; priorVoice = .silence; return }
+        guard playing else {
+            lastTime = time; priorVoice = .silence; lastAcceptedVoiceTime = nil
+            return
+        }
         let delta = time - lastTime
         guard delta > 0 else { return }
         // Seek/dropout: no historical points and no silent verses fabricated.
-        guard delta <= 0.5 else { lastTime = time; priorVoice = .silence; return }
+        guard delta <= 0.5 else {
+            lastTime = time; priorVoice = .silence; lastAcceptedVoiceTime = nil
+            return
+        }
         let from = lastTime
         lastTime = time
         let voiced = trackPresence ?? voice.isVoiced
@@ -167,18 +186,39 @@ struct KaraokeScoringEngine {
                 coveredEnd = b
                 let duration = unvisitedDuration(from: a, to: b)
                 guard duration > 0 else { continue }
+                // Be gentle only on the second half of a long final word.
+                // A recent voiced frame and a still-measurable microphone
+                // fundamental are required; true silence never receives credit.
+                let sustainedTail = trackPresence == nil &&
+                    Self.isSustainedFinalWord(window, in: verse, at: upper)
+                let recentVocal = lastAcceptedVoiceTime.map {
+                    time >= $0 && time - $0 <= 0.20
+                } ?? false
+                let softSustain = sustainedTail && recentVocal &&
+                    priorVoice.rms.isFinite && priorVoice.rms >= 0.045 &&
+                    voice.rms.isFinite && voice.rms >= 0.045 &&
+                    voice.confidence.isFinite && voice.confidence >= 0.55 &&
+                    voice.frequency.map { $0.isFinite && (65...1_100).contains($0) } == true
+                let acceptedVoice = voiced || softSustain
                 var quality = 0.0
-                if voiced {
+                if acceptedVoice {
+                    lastAcceptedVoiceTime = time
                     let attack = attackTime.map { abs($0 - window.lowerBound) <= 0.3 ? 1.0 : 0.0 } ?? 0
                     let rhythm = 0.75 + 0.25 * attack
-                    let sustain = priorVoice.isVoiced
+                    let measuredSustain = priorVoice.isVoiced
                         ? max(0, 1 - abs(voice.rms - priorVoice.rms) / max(voice.rms, priorVoice.rms)) : 0.7
+                    let sustain = sustainedTail ? max(0.7, measuredSustain) : measuredSustain
                     if let hz = voice.frequency,
-                       let harmony = Self.harmonicAccuracy(frequency: hz, key: key, pitchShift: pitchShift) {
+                       let harmony = Self.harmonicAccuracy(frequency: hz, key: key,
+                                                           pitchShift: pitchShift,
+                                                           sustainedTail: sustainedTail) {
+                        // Vibrato on a held ending is not a new melodic leap.
                         let contour = contourAccuracy(at: time, frequency: hz) ?? 1
-                        quality = 0.4 * rhythm + 0.4 * harmony * contour + 0.2 * sustain
+                        quality = sustainedTail
+                            ? 0.4 * rhythm + 0.36 * harmony * max(0.95, contour) + 0.24 * sustain
+                            : 0.4 * rhythm + 0.4 * harmony * contour + 0.2 * sustain
                     } else {
-                        // Missing evidence is labeled rhythm-only; never invent pitch.
+                        // Missing evidence remains rhythm-only, never fake pitch.
                         quality = (0.4 * rhythm + 0.2 * sustain) / 0.6
                     }
                 }
