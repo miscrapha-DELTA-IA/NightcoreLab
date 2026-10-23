@@ -985,8 +985,8 @@ struct ContentView: View {
                             Text(String(format: "%02d", index + 1))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(currentTheme.accent)
-                            WebImage(url: track.thumbnailURL)
-                                .resizable()
+                            TrackThumbnailImage(track: track)
+                                
                                 .scaledToFill()
                                 .frame(width: 42, height: 42)
                                 .background(GnarlyArtworkPlaceholder())
@@ -1720,8 +1720,8 @@ private struct RelatedVideoCard: View {
         Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial)
-                WebImage(url: video.thumbnailURL)
-                    .resizable()
+                TrackThumbnailImage(track: video)
+                    
                     .transition(.fade(duration: 0.2))
                     .scaledToFill()
                 .frame(width: 152, height: 120)
