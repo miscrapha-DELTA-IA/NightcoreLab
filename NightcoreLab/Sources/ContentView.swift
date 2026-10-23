@@ -985,8 +985,9 @@ struct ContentView: View {
                             Text(String(format: "%02d", index + 1))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(currentTheme.accent)
-                            WebImage(url: track.thumbnailURL)
-                                .resizable()
+                            TrackThumbnailImage(track: track,
+                        localArtworkURL: downloader.cachedArtworkURL(for: track))
+                                
                                 .scaledToFill()
                                 .frame(width: 42, height: 42)
                                 .background(GnarlyArtworkPlaceholder())
@@ -1407,7 +1408,8 @@ struct ContentView: View {
                 }
                 coverURL = downloader.cachedArtworkURL(for: committedTrack) ??
                     downloadedCoverURL ?? committedTrack.thumbnailURL
-                audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL)
+                audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: localURL,
+                    fallbackCoverURLs: committedTrack.artworkCandidateURLs)
                 playingTrackID = track.id
                 currentTrack = committedTrack
                 // SwiftUI onChange may be deferred while the screen is locked.
@@ -1475,7 +1477,8 @@ struct ContentView: View {
                 audio.seek(to: saved.position)
             }
             coverURL = downloader.cachedArtworkURL(for: saved.track) ?? saved.track.thumbnailURL
-            audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local)
+            audio.loadNowPlayingArtwork(coverURL: coverURL, mediaURL: local,
+                fallbackCoverURLs: saved.track.artworkCandidateURLs)
             currentTrack = downloader.cachedTrack(saved.track)
             playingTrackID = saved.track.id
             synchronizeRemoteAvailability()
@@ -1489,7 +1492,8 @@ struct ContentView: View {
         guard let currentTrack,
               let local = downloader.cachedArtworkURL(for: currentTrack), local != coverURL else { return }
         coverURL = local
-        audio.loadNowPlayingArtwork(coverURL: local, mediaURL: audio.visualAnalysisURL)
+        audio.loadNowPlayingArtwork(coverURL: local, mediaURL: audio.visualAnalysisURL,
+            fallbackCoverURLs: currentTrack.artworkCandidateURLs)
     }
 
     private func lyricsMetadata(for track: Track, duration: TimeInterval?) -> TrackMetadata {
@@ -1717,8 +1721,8 @@ private struct RelatedVideoCard: View {
         Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial)
-                WebImage(url: video.thumbnailURL)
-                    .resizable()
+                TrackThumbnailImage(track: video)
+                    
                     .transition(.fade(duration: 0.2))
                     .scaledToFill()
                 .frame(width: 152, height: 120)

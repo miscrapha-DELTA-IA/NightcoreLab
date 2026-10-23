@@ -225,18 +225,25 @@ final class AudioDownloadManager: ObservableObject {
     func ensureArtwork(for track: Track) async -> URL? {
         if let local = cachedArtworkURL(for: track) { return local }
         if let task = artworkTasks[track.id] { return await task.value }
-        guard let remote = track.thumbnailURL else { return nil }
+        let candidateURLs = track.artworkCandidateURLs
+        guard !candidateURLs.isEmpty else { return nil }
         let task = Task { @MainActor [weak self] () -> URL? in
             guard let self else { return nil }
             defer { self.artworkTasks[track.id] = nil }
-            guard let data = await NowPlayingArtworkLoader.coverData(at: remote),
-                  let (local, _) = try? await self.cacheIO.perform({
-                      try $0.storeArtwork(data, for: track.id)
-                  }) else { return nil }
-            // Cover completion must not replace a newer audio-index snapshot
-            // published by another download/eviction while this task awaited.
-            if local != nil { self.artworkRevision &+= 1 }
-            return local
+            for remote in candidateURLs {
+                guard !Task.isCancelled else { return nil }
+                guard let data = await NowPlayingArtworkLoader.coverData(at: remote),
+                      let (local, _) = try? await self.cacheIO.perform({
+                          try $0.storeArtwork(data, for: track.id)
+                      }) else { continue }
+                if let local {
+                    // Persist the actual cover, not a logo, before the offline
+                    // entry becomes the preferred source for the player.
+                    self.artworkRevision &+= 1
+                    return local
+                }
+            }
+            return nil
         }
         artworkTasks[track.id] = task
         return await task.value

@@ -1451,12 +1451,14 @@ final class AudioEngineManager {
 
     /// Cover loading is independent of transport. A late response cannot put
     /// a previous song's thumbnail onto the current Lock Screen card.
-    func loadNowPlayingArtwork(coverURL: URL?, mediaURL: URL? = nil) {
+    func loadNowPlayingArtwork(coverURL: URL?, mediaURL: URL? = nil,
+                               fallbackCoverURLs: [URL] = []) {
         artworkLoadTask?.cancel()
         let revision = playbackSourceRevision
         artworkLoadTask = Task { [weak self] in
             let artwork = await NowPlayingArtworkLoader.load(
-                coverURL: coverURL, mediaURL: mediaURL)
+                coverURL: coverURL, mediaURL: mediaURL,
+                fallbackCoverURLs: fallbackCoverURLs)
             guard !Task.isCancelled, let self,
                   self.playbackSourceRevision == revision else { return }
             self.nowPlayingArtwork = artwork ?? NowPlayingArtworkLoader.officialLogo()
