@@ -44,8 +44,6 @@ struct StemMixerControls: View {
                     .font(.caption.weight(.semibold))
                     .accessibilityIdentifier("stem.reset")
             }
-            Text("Separação real por IA")
-                .font(.caption.weight(.semibold))
             if audio.isPreparingStems {
                 Text(audio.stemPreparationTitle).font(.caption.weight(.semibold)).lineLimit(1)
                 ProgressView(value: audio.stemPreparationProgress) {
@@ -96,16 +94,20 @@ struct StemMixerControls: View {
                 .accessibilityIdentifier("stem.computeLocation")
 
                 if computeLocation == .iphone {
-                    Text("HTDemucs · sem envio de áudio · qualidade local preservada. O tempo depende deste iPhone.")
+                    Text("HTDemucs · processamento neste iPhone, sem upload")
                         .font(.caption2).foregroundStyle(.secondary)
                     if !audio.hasNeuralStemModel {
                         Text("A separação local requer iOS 18 ou superior e o modelo incluído.")
                             .font(.caption2).foregroundStyle(.orange)
                     }
+                } else if audio.canResumeStemPreparation {
+                    Label("Pedido salvo · retome antes de começar outro", systemImage: "arrow.clockwise")
+                        .font(.caption2).foregroundStyle(.secondary)
                 } else {
                     cloudDetails
                 }
 
+                if !audio.canResumeStemPreparation {
                 Button {
                     if computeLocation == .iphone {
                         audio.prepareNeuralStems()
@@ -121,16 +123,13 @@ struct StemMixerControls: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!canStartSelected)
                 .accessibilityIdentifier(computeLocation == .iphone ? "stem.prepareNeural" : "stem.prepareCloud")
+                }
 
                 if !audio.hasStemSource {
                     Text("Escolha uma música para separar voz, bateria, baixo e outros instrumentos.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
-                if audio.canResumeStemPreparation {
-                    Text("Existe uma separação salva. Retome-a ou descarte-a antes de iniciar outra.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                if !audio.stemPreparationMessage.isEmpty {
+                if !audio.canResumeStemPreparation && !audio.stemPreparationMessage.isEmpty {
                     Text(audio.stemPreparationMessage).font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -151,9 +150,17 @@ struct StemMixerControls: View {
                     .accessibilityIdentifier("stem.preparationError")
             }
             if audio.canResumeStemPreparation && !audio.isPreparingStems {
-                Button("Retomar separação salva") { audio.resumeStemPreparation() }
-                    .accessibilityIdentifier("stem.resume")
+                Button {
+                    audio.resumeStemPreparation()
+                } label: {
+                    Label("Retomar separação salva", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("stem.resume")
                 Button("Descartar tarefa salva", role: .destructive) { showDiscard = true }
+                    .font(.caption)
             }
             ForEach(StemKind.allCases) { kind in
                 VStack(alignment: .leading, spacing: 4) {
@@ -229,86 +236,81 @@ struct StemMixerControls: View {
         if isCheckingGPU {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Conferindo GPU gratuita (sem enviar música)…")
-                    .font(.caption2).foregroundStyle(.secondary)
+                Text("Consultando GPU…").font(.caption2).foregroundStyle(.secondary)
             }
         }
         if let status = gpuStatus, status.isReady {
             Label(status.modelTitle, systemImage: "checkmark.circle")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.green)
-            if status.usesDifferentModel {
-                Text("Esta GPU comunitária usa BS-Roformer, não o HTDemucs do iPhone. " +
-                     "A qualidade e o resultado podem ser diferentes. " +
-                     "O HTDemucs remoto aparecerá aqui quando um Space próprio estiver validado.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            } else {
-                Text("Mesmo modelo HTDemucs da opção local, executado em GPU remota.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        if let message = gpuStatusMessage {
-            Text(message).font(.caption2)
-                .foregroundStyle(gpuStatus?.isReady == true ? Color.secondary : Color.orange)
+                .font(.caption.weight(.semibold)).foregroundStyle(.green)
+        } else if let message = gpuStatusMessage {
+            Text(message).font(.caption2).foregroundStyle(.orange)
                 .accessibilityIdentifier("stem.cloudStatus")
-        }
-        if !isCheckingGPU {
-            Button("Verificar GPU novamente") {
-                Task { await refreshGPUStatus() }
-            }
-            .font(.caption2)
-            .disabled(isCheckingGPU)
-            .accessibilityIdentifier("stem.refreshCloudStatus")
         }
         if cloudNeedsCode {
             SecureField("Código de acesso do beta", text: $betaCode)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .accessibilityIdentifier("stem.betaCode")
             if !cloudCodeValid {
-                Text("Digite o código do beta fornecido pelo operador.")
+                Text("Informe o código do beta para continuar.")
                     .font(.caption2).foregroundStyle(.orange)
             }
         }
-        if gpuStatus?.provider == "community_bs_roformer" {
-            DisclosureGroup("Conta Hugging Face (opcional)") {
-                Text("O acesso anônimo é permitido. Um token Read pessoal gratuito pode usar sua cota; nunca será enviado ao Render.")
+        DisclosureGroup("Detalhes e conta (opcional)") {
+            if let status = gpuStatus, status.isReady {
+                Text(status.usesDifferentModel
+                     ? "BS-Roformer comunitário: resultado diferente do HTDemucs local."
+                     : "HTDemucs em GPU remota.")
                     .font(.caption2).foregroundStyle(.secondary)
-                SecureField("Token Read · hf_…", text: $hfToken)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityIdentifier("stem.hfToken")
-                HStack {
-                    Button(checkingAccount ? "Verificando…" : "Verificar e salvar token") {
-                        checkingAccount = true
-                        accountStatus = nil
-                        let token = hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
-                        Task { @MainActor in
-                            defer { checkingAccount = false }
-                            do {
-                                let profile = try await HuggingFaceAccess.verify(token)
-                                guard HuggingFaceAccess.save(token) else {
-                                    accountStatus = "Não foi possível salvar o token."; return
-                                }
-                                accountStatus = "Conta gratuita conectada: " + profile.name
-                            } catch { accountStatus = error.localizedDescription }
-                        }
-                    }.disabled(checkingAccount || hfToken.isEmpty)
-                    if !hfToken.isEmpty {
-                        Button("Usar anônimo") {
-                            if HuggingFaceAccess.save("") {
-                                hfToken = ""; accountStatus = "Acesso anônimo selecionado"
-                            } else { accountStatus = "Não foi possível remover o token." }
-                        }.disabled(checkingAccount)
-                    }
-                }.font(.caption2)
-                if let accountStatus {
-                    Text(accountStatus).font(.caption2).foregroundStyle(.secondary)
+                if let message = gpuStatusMessage {
+                    Text(message).font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            .font(.caption)
+            Button("Verificar GPU novamente") {
+                Task { await refreshGPUStatus() }
+            }
+            .font(.caption2).disabled(isCheckingGPU)
+            .accessibilityIdentifier("stem.refreshCloudStatus")
+            if gpuStatus?.provider == "community_bs_roformer" {
+                DisclosureGroup("Conta Hugging Face") {
+                    Text("Uso anônimo disponível. Token Read pessoal opcional, enviado somente ao Hugging Face.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    SecureField("Token Read · hf_…", text: $hfToken)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("stem.hfToken")
+                    HStack {
+                        Button(checkingAccount ? "Verificando…" : "Verificar e salvar token") {
+                            checkingAccount = true
+                            accountStatus = nil
+                            let token = hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Task { @MainActor in
+                                defer { checkingAccount = false }
+                                do {
+                                    let profile = try await HuggingFaceAccess.verify(token)
+                                    guard HuggingFaceAccess.save(token) else {
+                                        accountStatus = "Não foi possível salvar o token."; return
+                                    }
+                                    accountStatus = "Conta gratuita conectada: " + profile.name
+                                } catch { accountStatus = error.localizedDescription }
+                            }
+                        }.disabled(checkingAccount || hfToken.isEmpty)
+                        if !hfToken.isEmpty {
+                            Button("Usar anônimo") {
+                                if HuggingFaceAccess.save("") {
+                                    hfToken = ""; accountStatus = "Acesso anônimo selecionado"
+                                } else { accountStatus = "Não foi possível remover o token." }
+                            }.disabled(checkingAccount)
+                        }
+                    }.font(.caption2)
+                    if let accountStatus {
+                        Text(accountStatus).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+            }
+            Text("O áudio é enviado ao Space público somente após confirmar. Fila e cota são limitadas; não há segunda separação automática na CPU.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
-        Text("Na nuvem, os stems ficam salvos no iPhone quando prontos. " +
-             "Se a GPU falhar, a CPU não iniciará uma segunda separação automaticamente.")
-            .font(.caption2).foregroundStyle(.secondary)
+        .font(.caption)
     }
 
     @MainActor
