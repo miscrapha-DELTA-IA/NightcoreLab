@@ -6,7 +6,7 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
     case acid, cyber, crimson
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
-    case ultrapink, ultraorange, purewhite, ultrablack
+    case ultrapink, ultraorange, purewhite, ultrablack, gnarly
     var id: String { rawValue }
 
     /// deep = veios/sombras · body = corpo do líquido · glow = brilho/acento
@@ -80,6 +80,10 @@ enum MarbleTheme: String, CaseIterable, Identifiable {
             return (Color(red: 0.00, green: 0.00, blue: 0.00),
                     Color(red: 0.07, green: 0.07, blue: 0.09),
                     Color(red: 0.28, green: 0.29, blue: 0.34))
+        case .gnarly: // cover-aware palette is resolved per source timestamp
+            return (Color(red: 0.02, green: 0.02, blue: 0.12),
+                    Color(red: 0.20, green: 0.52, blue: 0.87),
+                    Color(red: 0.73, green: 0.91, blue: 1.00))
         }
     }
 }
@@ -96,6 +100,11 @@ extension MarbleTheme {
 /// Fundo animado. Use como primeira camada do ZStack principal.
 struct TurbulentMarbleView: View {
     var theme: MarbleTheme = .acid
+    /// Original source clock. Only Gnarly reads it; other themes are bit-identical.
+    var sourceClock: PlaybackClock? = nil
+    var sourceTime: TimeInterval = 0
+    var sourceDuration: TimeInterval = 0
+    var artworkHue: Double? = nil
     var speed: Double = 1.0          // 0.5 = mais calmo (e mais bonito atrás de letras)
     var maxFPS: Double = 60          // use 30 em Low Power Mode
     var isPaused: Bool = false
@@ -251,11 +260,18 @@ struct TurbulentMarbleView: View {
     }
 
     private func marbleSurface(time: Float, resolved: MaterialFrame) -> some View {
+        let gnarly = theme == .gnarly
+            ? GnarlyThemeEngine.sample(sourceTime: sourceClock?.lyricTime ?? sourceTime,
+                                       duration: sourceDuration,
+                                       artworkHue: artworkHue, base: resolved)
+            : nil
+        let output = gnarly?.frame ?? resolved
         let palette = theme.palette
-        let uniforms = resolved.marbleUniforms
-        let binding = MarbleSurfaceBinding.resolve(frame: resolved)
-        let colors = Self.shaderPalette(materialID: resolved.materialID,
-                                        theme: theme, authored: binding.paletteHex)
+        let uniforms = output.marbleUniforms
+        let binding = MarbleSurfaceBinding.resolve(frame: output)
+        let colors = gnarly?.colors.map(\.color) ??
+            Self.shaderPalette(materialID: output.materialID,
+                               theme: theme, authored: binding.paletteHex)
         let texture = binding.textured
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
@@ -288,7 +304,7 @@ struct TurbulentMarbleView: View {
                             .float(detailQuality)
                         )
                     )
-                } else if resolved.type == .marble {
+                } else if output.type == .marble {
                     // Identity path: retain the complete Stage 13 shader call.
                     content.colorEffect(
                         ShaderLibrary.liquidMarble(
@@ -306,7 +322,7 @@ struct TurbulentMarbleView: View {
                         ShaderLibrary.proceduralMaterial(
                             .float2(proxy.size), .float(time),
                             .color(palette.deep), .color(palette.body),
-                            .color(palette.glow), .float(resolved.type.shaderID),
+                            .color(palette.glow), .float(output.type.shaderID),
                             .float(Float(resolved.controls.primary)),
                             .float(Float(resolved.controls.secondary)),
                             .float(Float(resolved.controls.tertiary)),
@@ -499,7 +515,7 @@ struct MarbleSurfaceBinding: Equatable {
         return Self(materialID: frame.materialID, paletteHex: hex,
                     parameters: frame.parameters,
                     textured: frame.parameters.usesProceduralTexture &&
-                              hex?.count == 5)
+                              (hex?.count == 5 || frame.materialID == "gnarly"))
     }
 
     static func resolve(material: VisualMaterial) -> Self {
