@@ -312,26 +312,52 @@ enum CloudStemWorker {
         return path
     }
 
+    /// Accept documented Gradio result envelopes, including JSON-string-encoded
+    /// envelopes seen after queue proxies. Only structured arrays are returned.
+    /// Never interpret raw HTML, provider text or arbitrary URLs as stems.
     static func normalizedResult(_ payload: Data) throws -> Data {
-        guard payload.count > 0, payload.count <= 1_000_000,
-              let decoded = try? JSONSerialization.jsonObject(with: payload) else {
-            throw Failure.message("A GPU concluiu, mas enviou dados que não são JSON. O identificador do pedido foi preservado.")
+        guard !payload.isEmpty, payload.count <= 1_000_000 else {
+            throw Failure.message("A GPU retornou uma resposta vazia ou grande demais. O pedido está salvo.")
         }
-        // Gradio queue events normally contain a plain array, but some versions
-        // wrap the outputs under data or output.data. Never accept arbitrary
-        // objects or attempt a second POST to repair a mismatched response.
-        if decoded is [Any] { return payload }
-        if let object = decoded as? [String: Any] {
-            if let error = object["error"] as? String, !error.isEmpty {
-                throw Failure.message("A GPU retornou um erro: " + String(error.prefix(200)))
+        var candidate = payload
+        for _ in 0..<3 {
+            guard let decoded = try? JSONSerialization.jsonObject(
+                with: candidate, options: [.fragmentsAllowed]) else { break }
+            if let encoded = decoded as? String {
+                guard let next = encoded.data(using: .utf8), !next.isEmpty,
+                      next.count <= 1_000_000 else { break }
+                candidate = next
+                continue
             }
-            let wrapped = (object["data"] as? [Any])
-                ?? ((object["output"] as? [String: Any])?["data"] as? [Any])
-            if let wrapped, JSONSerialization.isValidJSONObject(wrapped) {
-                return try JSONSerialization.data(withJSONObject: wrapped)
+            if let array = decoded as? [Any] {
+                return try JSONSerialization.data(withJSONObject: array)
             }
+            if let object = decoded as? [String: Any] {
+                if let error = object["error"] as? String, !error.isEmpty {
+                    throw Failure.message("A GPU retornou um erro: " + String(error.prefix(200)))
+                }
+                let wrapped = (object["data"] as? [Any])
+                    ?? ((object["output"] as? [String: Any])?["data"] as? [Any])
+                    ?? (object["output"] as? [Any])
+                if let wrapped {
+                    return try JSONSerialization.data(withJSONObject: wrapped)
+                }
+            }
+            break
         }
-        throw Failure.message("A GPU devolveu um formato de resultados incompatível. O pedido continua salvo; não enviaremos outro automaticamente.")
+        throw Failure.message("A resposta da GPU não contém um resultado JSON de stems válido. O pedido original continua salvo para nova consulta, sem reenvio de áudio.")
+    }
+
+    /// A previous app version may have saved a malformed completion body.
+    /// Resume must re-GET its *existing* event_id rather than endlessly parse
+    /// the same cached bytes. This check makes no network requests.
+    static func cachedResultRequiresReadOnlyRefresh(
+        _ payload: Data, community: Bool, space: URL, sourceHash: String
+    ) -> Bool {
+        if community {
+            return (try? communityCompletion(payload, space: space)) == nil
+        }
+        return (try? completion(payload, space: space, sourceHash: sourceHash)) == nil
     }
 
     /// Public Space contract: status, four named files, ZIP, HTML. Only the
@@ -545,6 +571,15 @@ enum CloudStemWorker {
         guard let eventID = pending.eventID,
               eventID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else {
             throw Failure.message("Identificador do pedido salvo inválido.")
+        }
+        if let cached = pending.payload,
+           cachedResultRequiresReadOnlyRefresh(cached, community: community,
+                                               space: space, sourceHash: digest) {
+            // Keep admission, remote path, event_id, partial WAVs and idempotency
+            // key. Only the unusable cached response is released for a GET.
+            pending.payload = nil
+            try pending.save(to: pendingURL)
+            progress(0.1, "Conferindo o resultado do pedido salvo, sem reenviar música…")
         }
         if pending.payload == nil {
             progress(0.1, "Acompanhando o pedido salvo na GPU gratuita…")

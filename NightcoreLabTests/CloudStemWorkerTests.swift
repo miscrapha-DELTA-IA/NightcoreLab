@@ -49,6 +49,47 @@ final class CloudStemWorkerTests: XCTestCase {
         }
     }
 
+    func testEscapedGradioJSONAndSSECompletionAreReadable() throws {
+        let space = CloudStemWorker.communityURL
+        let files = ["01_vocals.wav", "02_drums.wav", "03_bass.wav", "04_other.wav"].map {
+            ["orig_name": $0, "url": space.absoluteString + "/gradio_api/file=/tmp/" + $0]
+        }
+        let result: [Any] = ["Ready", files, NSNull(), "unused HTML"]
+        let plain = try JSONSerialization.data(withJSONObject: result)
+        let text = try XCTUnwrap(String(data: plain, encoding: .utf8))
+        let encoded = try JSONSerialization.data(withJSONObject: text, options: [.fragmentsAllowed])
+        XCTAssertEqual(try CloudStemWorker.communityCompletion(encoded, space: space),
+                       try CloudStemWorker.communityCompletion(plain, space: space))
+
+        var events = CloudStemWorker.SSEEvents()
+        XCTAssertNil(try events.feed("event: complete"))
+        XCTAssertNil(try events.feed("data: " + text))
+        guard case .complete(let response)? = try events.feed("") else {
+            return XCTFail("Expected a completed SSE result")
+        }
+        XCTAssertEqual(try CloudStemWorker.communityCompletion(response, space: space),
+                       try CloudStemWorker.communityCompletion(plain, space: space))
+    }
+
+    func testBadCachedResultCanBeRequeriedWithoutChangingSavedIdentifiers() throws {
+        let space = CloudStemWorker.communityURL
+        let malformed = Data("<html>temporarily unavailable</html>".utf8)
+        XCTAssertTrue(CloudStemWorker.cachedResultRequiresReadOnlyRefresh(
+            malformed, community: true, space: space, sourceHash: sourceHash))
+        let absent = Data("null".utf8)
+        XCTAssertTrue(CloudStemWorker.cachedResultRequiresReadOnlyRefresh(
+            absent, community: true, space: space, sourceHash: sourceHash))
+        let files = ["01_vocals.wav", "02_drums.wav", "03_bass.wav", "04_other.wav"].map {
+            ["orig_name": $0, "url": space.absoluteString + "/gradio_api/file=/tmp/" + $0]
+        }
+        let valid = try JSONSerialization.data(
+            withJSONObject: ["Ready", files, NSNull(), "HTML"] as [Any])
+        XCTAssertFalse(CloudStemWorker.cachedResultRequiresReadOnlyRefresh(
+            valid, community: true, space: space, sourceHash: sourceHash))
+        // The pending admission, eventID, source audio and partial downloads
+        // are not modified by validation. Production only issues GET on resume.
+    }
+
     func testOnlyExactHTTPSFileOriginIsAccepted() {
         XCTAssertTrue(CloudStemWorker.permittedSpace(space))
         XCTAssertTrue(CloudStemWorker.permittedDownload(space.appendingPathComponent("gradio_api/file=/tmp/test.wav"), space: space))
