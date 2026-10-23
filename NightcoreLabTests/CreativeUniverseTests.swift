@@ -28,6 +28,14 @@ final class CreativeUniverseTests: XCTestCase {
                                                       materialID: "original-marble"), 14)
         XCTAssertEqual(CreativeUniverseCatalog.lookID(theme: .gnarlyOrganism,
                                                       materialID: "original-marble"), 15)
+        // Mode GNARLY is standalone: selecting an experience must not
+        // overwrite a previously selected autonomous visual system.
+        XCTAssertEqual(CreativeUniverseCatalog.lookID(
+            theme: .gnarlyCompiler, materialID: "gnarly-exp-vector-drift-2000"), 14)
+        XCTAssertEqual(CreativeUniverseCatalog.lookID(
+            theme: .gnarlyStrata, materialID: "gnarly-exp-caustic-dissection"), 13)
+        XCTAssertNil(CreativeUniverseCatalog.lookID(
+            theme: .gnarly, materialID: "gnarly-exp-tectonic-mesh"))
     }
 
     func testAllSixExperiencesAreRealSelectableMaterials() {
