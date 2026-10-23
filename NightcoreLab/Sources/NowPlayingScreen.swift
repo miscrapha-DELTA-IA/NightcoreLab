@@ -397,6 +397,30 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             if let personalImage = personalBackground.activeImage {
                 PersonalBackgroundImageView(image: personalImage, settings: personalBackground.settings)
                     .ignoresSafeArea()
+            } else if backgroundStyle == .cover {
+                // Album-cover mode fills the entire canvas in both player and
+                // karaoke; previously the main player ignored this selection.
+                GeometryReader { geometry in
+                    PlayerArtworkImage(url: track.coverURL) { artwork in
+                        if let artwork {
+                            artwork.resizable()
+                                .scaledToFill()
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .clipped()
+                                // Soft editorial blur, not the thumbnail-sized
+                                // surface or aggressive blur of the old route.
+                                .blur(radius: 7, opaque: true)
+                                .overlay(Color.black.opacity(0.32))
+                        } else {
+                            Color.black
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             } else if showsKaraoke {
                 LiveMarbleDistortion(uniforms: liveUniforms) { distortion, pulse, section in
                     BackgroundLayer(
