@@ -100,6 +100,49 @@ final class NowPlayingArtworkTests: XCTestCase {
         XCTAssertNil(TrackAudioCache(folder: cache.folder).artworkURL(for: track.id))
     }
 
+    func testThumbnailKeepsProviderFirstAndUsesStableYouTubeBackup() {
+        let primary = URL(string: "https://cdn.example.org/ephemeral-cover.jpg")!
+        let track = Track(id: "dQw4w9WgXcQ", title: "Fixture", thumbnailURL: primary)
+        XCTAssertEqual(track.artworkCandidateURLs, [
+            primary, URL(string: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")!
+        ])
+        let defaultCover = Track.from(url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!
+        XCTAssertEqual(defaultCover.artworkCandidateURLs.count, 1,
+                       "Do not retry the exact same image URL as a second candidate")
+    }
+
+    func testOtherCatalogTracksDoNotInventYouTubeArtwork() {
+        let primary = URL(string: "https://example.org/deezer-cover.jpg")!
+        let track = Track(id: "deezer-123", title: "Fixture", thumbnailURL: primary)
+        XCTAssertEqual(track.artworkCandidateURLs, [primary])
+        XCTAssertTrue(Track(id: "local-file", title: "Local", thumbnailURL: nil)
+            .artworkCandidateURLs.isEmpty)
+    }
+
+    func testArtworkStoreFailureDoesNotPoisonNextRetry() async throws {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 24, height: 24))
+        }
+        let bytes = try XCTUnwrap(image.pngData())
+        actor IntermittentLoader {
+            var reads = 0
+            func data(_ bytes: Data) -> Data? {
+                reads += 1
+                return reads == 1 ? nil : bytes
+            }
+        }
+        let loader = IntermittentLoader()
+        let store = PlayerArtworkStore { _ in await loader.data(bytes) }
+        let url = URL(string: "https://example.org/transient.jpg")!
+        let failed = await store.image(at: url)
+        XCTAssertNil(failed)
+        let recovered = await store.image(at: url)
+        XCTAssertNotNil(recovered)
+        let reads = await loader.reads
+        XCTAssertEqual(reads, 2)
+    }
+
     private func writeAudio(_ url: URL) throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128)!
