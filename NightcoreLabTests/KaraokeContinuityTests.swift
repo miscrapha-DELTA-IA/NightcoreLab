@@ -72,6 +72,76 @@ final class KaraokeContinuityTests: XCTestCase {
         XCTAssertGreaterThan(session.snapshot.totalScore, earned)
     }
 
+    func testLongFinalWordAcceptsQuietRealVoiceWithoutScoringSilence() {
+        let line = TimedLyricLine(id: 0, start: 0, end: 2, words: [
+            WordSync(id: 0, text: "AMOR", start: 0, end: 2, spaceAfter: false)
+        ], precision: .word)
+        var engine = KaraokeScoringEngine()
+        engine.start(lines: [line], at: 0)
+        for step in 1...25 {
+            engine.advance(to: Double(step) * 0.05, voice: voice, playing: true)
+        }
+        let beforeSoft = engine.snapshot.totalScore
+        let quietButPitched = KaraokeVoiceFrame(rms: 0.05, frequency: 220, confidence: 0.60)
+        XCTAssertFalse(quietButPitched.isVoiced, "This must exercise the limited soft-tail grace")
+        engine.advance(to: 1.30, voice: quietButPitched, playing: true)
+        XCTAssertGreaterThan(engine.snapshot.totalScore, beforeSoft)
+        let afterSoft = engine.snapshot.totalScore
+
+        engine.advance(to: 1.35, voice: .silence, playing: true)
+        XCTAssertEqual(engine.snapshot.totalScore, afterSoft,
+                       "True silence never earns sustained-note points")
+        engine.advance(to: 1.40, voice: quietButPitched, playing: true)
+        XCTAssertEqual(engine.snapshot.totalScore, afterSoft,
+                       "A quiet frame must not resurrect a vocal after silence")
+    }
+
+    func testSoftGraceDoesNotApplyToShortWordsOrAfterSeek() {
+        let shortLine = TimedLyricLine(id: 0, start: 0, end: 0.7, words: [
+            WordSync(id: 0, text: "SOL", start: 0, end: 0.7, spaceAfter: false)
+        ], precision: .word)
+        let soft = KaraokeVoiceFrame(rms: 0.05, frequency: 220, confidence: 0.60)
+        var short = KaraokeScoringEngine()
+        short.start(lines: [shortLine], at: 0)
+        for step in 1...10 { short.advance(to: Double(step) * 0.05, voice: voice, playing: true) }
+        let shortScore = short.snapshot.totalScore
+        short.advance(to: 0.55, voice: soft, playing: true)
+        XCTAssertEqual(short.snapshot.totalScore, shortScore)
+
+        let longLine = TimedLyricLine(id: 0, start: 0, end: 2, words: [
+            WordSync(id: 0, text: "LONGO", start: 0, end: 2, spaceAfter: false)
+        ], precision: .word)
+        var afterSeek = KaraokeScoringEngine()
+        afterSeek.start(lines: [longLine], at: 0)
+        for step in 1...25 {
+            afterSeek.advance(to: Double(step) * 0.05, voice: voice, playing: true)
+        }
+        let scoreBeforeSeek = afterSeek.snapshot.totalScore
+        afterSeek.seek(to: 1.30)
+        afterSeek.advance(to: 1.35, voice: soft, playing: true)
+        XCTAssertEqual(afterSeek.snapshot.totalScore, scoreBeforeSeek)
+    }
+
+    func testHeldEndingWidensPitchToleranceOnlyWhenRequested() throws {
+        let key = KeyAnalysisResult(hypotheses: [
+            KeyHypothesis(tonic: .c, scale: .major, confidence: 0.95)
+        ], provenance: ExpressionProvenance(method: "fixture",
+            fingerprint: ExpressionFingerprint(algorithmVersion: 1),
+            analyzedThrough: 2, confidence: 0.95))
+        // A vibrato peak 0.56 semitones away from A4 in the C major scale.
+        let frequency = 440 * pow(2, 0.56 / 12)
+        let ordinary = try XCTUnwrap(KaraokeScoringEngine.harmonicAccuracy(
+            frequency: frequency, key: key))
+        let sustained = try XCTUnwrap(KaraokeScoringEngine.harmonicAccuracy(
+            frequency: frequency, key: key, sustainedTail: true))
+        XCTAssertEqual(ordinary, 1 - (0.56 - 0.35) / 0.75, accuracy: 0.005)
+        XCTAssertEqual(sustained, 1, accuracy: 0.005)
+        XCTAssertGreaterThan(sustained, ordinary)
+        XCTAssertNil(KaraokeScoringEngine.harmonicAccuracy(frequency: 440, key: nil,
+                                                           sustainedTail: true),
+                     "Missing key analysis must never become fabricated pitch evidence")
+    }
+
     @MainActor
     func testResultCaptureUsesVisibleViewAndDisplayScale() async throws {
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
