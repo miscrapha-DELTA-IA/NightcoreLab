@@ -44,6 +44,7 @@ extension MarbleTheme {
         case .ultraorange: return .ultraorange
         case .purewhite:   return .purewhite
         case .ultrablack:  return .ultrablack
+        case .gnarly: return .cyber // legible static lyric colors; visual background morphs
         }
     }
 }
