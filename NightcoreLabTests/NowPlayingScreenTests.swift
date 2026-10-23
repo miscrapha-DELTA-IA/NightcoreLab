@@ -288,7 +288,7 @@ final class NowPlayingScreenTests: XCTestCase {
         XCTAssertTrue(search.contains("onSaveMixOffline(result.playbackTracks)"))
         XCTAssertTrue(search.contains("searchDrawer.focusAlbum."))
         XCTAssertTrue(content.contains("activeTrack: currentTrack"))
-        XCTAssertTrue(content.contains("v65 · "))
+        XCTAssertTrue(content.contains("v66 · "))
     }
 
 }
