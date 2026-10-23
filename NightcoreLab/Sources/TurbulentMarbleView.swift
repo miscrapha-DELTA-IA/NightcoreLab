@@ -292,6 +292,26 @@ struct TurbulentMarbleView: View {
             Self.shaderPalette(materialID: output.materialID,
                                theme: theme, authored: binding.paletteHex)
         let texture = binding.textured
+        let creativeLook = CreativeUniverseCatalog.lookID(theme: theme,
+                                                           materialID: output.materialID)
+        // Source time, never wall-clock time, governs every new identity.
+        // Both live and Story can seek to a reproducible visual state.
+        let creativeTime = sourceClock?.lyricTime ?? (materialFrame?.timestamp ?? Double(time))
+        let creativeProgress = sourceDuration > 0 && sourceDuration.isFinite
+            ? min(1, max(0, creativeTime / sourceDuration))
+            : min(1, max(0, creativeTime / 180))
+        let creativePalette: [Color] = creativeLook.map {
+            CreativeUniverseCatalog.palette(id: $0, sourceTime: creativeTime,
+                duration: sourceDuration, artworkHue: artworkHue)
+        } ?? []
+        let creativeLevels = frozenTime == nil && reactionMode != .off
+            ? (liveMeter?.snapshot() ?? .silence) : .silence
+        let creativeLow = reactionMode == .off ? 0 :
+            max(creativeLevels.bass, output.signals.bass, output.parameters.beatPulse)
+        let creativeMid = reactionMode == .off ? 0 :
+            max(creativeLevels.mid, output.signals.energy)
+        let creativeHigh = reactionMode == .off ? 0 :
+            max(creativeLevels.onset, output.signals.brightness)
         // Secondary details are gated under thermal pressure; main flow,
         // palette and timestamp stay identical and never allocate bitmaps.
         // Export paths are frozen and never inherit live thermal degradation.
@@ -300,7 +320,23 @@ struct TurbulentMarbleView: View {
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
-                if texture, let colors {
+                if let creativeLook {
+                    content.colorEffect(
+                        ShaderLibrary.creativeUniverse(
+                            .float2(proxy.size), .float(Float(creativeTime)),
+                            .float(Float(creativeLook)),
+                            .float(Float(min(1, max(0, creativeLow)))),
+                            .float(Float(min(1, max(0, creativeMid)))),
+                            .float(Float(min(1, max(0, creativeHigh)))),
+                            .float(Float(creativeProgress)),
+                            .float(Float(output.seed % 65536)),
+                            .color(creativePalette[0]),
+                            .color(creativePalette[1]),
+                            .color(creativePalette[2]),
+                            .float(detailQuality)
+                        )
+                    )
+                } else if texture, let colors {
                     content.colorEffect(
                         ShaderLibrary.texturedMarble(
                             .float2(proxy.size), .float(time),
