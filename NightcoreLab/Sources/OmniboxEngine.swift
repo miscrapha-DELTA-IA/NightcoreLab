@@ -209,9 +209,21 @@ final class OmniboxEngine {
         loadState = .idle
     }
 
-    /// Each edit starts a new generation. Cancellation alone is not a
-    /// correctness boundary; no old generation may publish or cache results.
+    /// Editing must NEVER hit the network. In production the user explicitly
+    /// submits a search; local history and fresh cached results remain instant.
+    /// This prevents per-character /v1/search + /v1/suggest bursts that exhaust
+    /// the free backend and interfere with foreground music downloads.
     func queryChanged(_ raw: String) {
+        resolve(raw, fetchRemote: false)
+    }
+
+    /// Called once by the keyboard's Search action (or a suggestion tap).
+    func submit(_ raw: String) {
+        resolve(raw, fetchRemote: true)
+    }
+
+    /// One generation per change/submit; cancellation prevents stale display.
+    private func resolve(_ raw: String, fetchRemote: Bool) {
         task?.cancel()
         requestGeneration = UUID()
         let generation = requestGeneration
@@ -254,6 +266,14 @@ final class OmniboxEngine {
                     return
                 }
                 isShowingStaleCache = true
+            }
+
+            // A text edit may reuse cached results but must not start a new
+            // remote operation until Enter/Search. Even stale metadata stays
+            // available to the user while the server is sleeping.
+            guard fetchRemote else {
+                loadState = isShowingStaleCache ? .partial : .local
+                return
             }
 
             let endpoint = baseURL
