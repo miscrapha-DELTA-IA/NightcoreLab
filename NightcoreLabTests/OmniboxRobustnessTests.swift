@@ -100,7 +100,7 @@ final class OmniboxRobustnessTests: XCTestCase {
     func testTypingStaysOfflineUntilExplicitSearch() async throws {
         OmniboxStubServer.shared.set([
             "/v1/search|song": .init(200, try hits([hit("ccccccccccc", name: "Song")])),
-            "/v1/suggest|song": .init(200, Data("[\\"song\\"]".utf8))
+            "/v1/suggest|song": .init(200, Data("[\"song\"]".utf8))
         ])
         let engine = client()
         engine.queryChanged("so")
