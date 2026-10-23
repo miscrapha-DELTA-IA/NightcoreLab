@@ -181,7 +181,8 @@ struct SearchView: View {
                                 onSelect(track, [])
                             } label: {
                                 HStack(spacing: 7) {
-                                    TrackThumbnailImage(track: track)
+                                    TrackThumbnailImage(track: track,
+                        localArtworkURL: downloader.cachedArtworkURL(for: track))
                                         .scaledToFill()
                                         .frame(width: 38, height: 38)
                                         .background(GnarlyArtworkPlaceholder())
@@ -229,7 +230,8 @@ struct SearchView: View {
             } else {
                 ForEach(queuedTracks.prefix(3)) { track in
                     HStack(spacing: 8) {
-                        TrackThumbnailImage(track: track)
+                        TrackThumbnailImage(track: track,
+                        localArtworkURL: downloader.cachedArtworkURL(for: track))
                             .scaledToFill()
                             .frame(width: 34, height: 34)
                             .background(GnarlyArtworkPlaceholder())
@@ -316,7 +318,8 @@ struct SearchView: View {
     private var albumArtistHub: some View {
         if let result = collectionResult {
             HStack(spacing: 10) {
-                TrackThumbnailImage(track: result.anchor)
+                TrackThumbnailImage(track: result.anchor,
+                        localArtworkURL: downloader.cachedArtworkURL(for: result.anchor))
                     .scaledToFill().frame(width: 52, height: 52)
                     .background(GnarlyArtworkPlaceholder())
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -394,7 +397,8 @@ struct SearchView: View {
         HStack(spacing: 8) {
             Button { onSelect(track, []) } label: {
                 HStack(spacing: 8) {
-                    TrackThumbnailImage(track: track)
+                    TrackThumbnailImage(track: track,
+                        localArtworkURL: downloader.cachedArtworkURL(for: track))
                         .scaledToFill().frame(width: 40, height: 40)
                         .background(GnarlyArtworkPlaceholder())
                         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -479,7 +483,8 @@ struct SearchView: View {
             onSelect(track, [])
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                TrackThumbnailImage(track: track)
+                TrackThumbnailImage(track: track,
+                        localArtworkURL: downloader.cachedArtworkURL(for: track))
                     
                     .transition(.fade(duration: 0.2))
                     .scaledToFill()
