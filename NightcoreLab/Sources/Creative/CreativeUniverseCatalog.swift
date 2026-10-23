@@ -58,8 +58,21 @@ enum CreativeUniverseCatalog {
 
 
     static func lookID(theme: MarbleTheme, materialID: String) -> Int? {
-        // An explicitly chosen creative experience takes priority over theme
-        // colors; the remaining presets keep their exact previous rendering.
+        // Modes are standalone systems, not color skins. A previously chosen
+        // experience stays saved but cannot silently replace Gnarly mode.
+        // The original .gnarly is handled by GnarlyThemeEngine upstream.
+        switch theme {
+        case .gnarly, .gnarlyStrata, .gnarlyCompiler, .gnarlyOrganism:
+            switch theme {
+            case .gnarlyStrata: return 13
+            case .gnarlyCompiler: return 14
+            case .gnarlyOrganism: return 15
+            default: return nil
+            }
+        default: break
+        }
+        // For ordinary themes, experience supplies the composition and the
+        // theme affects its palette/material geometry without a duplicate ID.
         if materialID.hasPrefix("gnarly-exp-"),
            let entry = experiences.first(where: { "gnarly-exp-" + $0.slug == materialID }) {
             return entry.id
