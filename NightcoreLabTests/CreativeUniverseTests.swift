@@ -34,7 +34,7 @@ final class CreativeUniverseTests: XCTestCase {
         for entry in CreativeUniverseCatalog.experiences {
             let id = "gnarly-exp-" + entry.slug
             XCTAssertTrue(CreativePresetCatalog.isLiveExperience(id))
-            XCTAssertEqual(CreativePresetCatalog.selectedExperience(id: id)?.material.id, id)
+            XCTAssertEqual(CreativePresetCatalog.selectedExperience(id: id)?.visualMaterial.id, id)
             XCTAssertEqual(CreativeUniverseCatalog.lookID(theme: .acid, materialID: id),
                            entry.id)
         }
