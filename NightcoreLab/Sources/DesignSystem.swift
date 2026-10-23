@@ -103,7 +103,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .prismCarmine: return Color(red: 1.00, green: 0.05, blue: 0.22)
         case .subatomicBubble: return Color(red: 0.96, green: 0.72, blue: 0.18)
         case .jacquardSignal: return Color(red: 0.71, green: 0.58, blue: 0.29)
-        case .isometricChasm: return Color(red: 0.16, green: 0.31, blue: 1.00)
+        case .isometricChasm: return Color(red: 0.30, green: 0.47, blue: 1.00)
         case .lenticularWild: return Color(red: 0.81, green: 0.61, blue: 0.28)
         case .gnarlyStrata: return Color(red: 0.43, green: 0.65, blue: 1.00)
         case .gnarlyCompiler: return Color(red: 0.32, green: 0.88, blue: 0.90)
