@@ -141,6 +141,12 @@ enum TurbulentPalette {
                 Color(red: 0.05, green: 0.05, blue: 0.07),
                 Color(red: 0.28, green: 0.29, blue: 0.34)
             ]
+        case .gnarly:
+            // Low-frequency SwiftUI fallback; live/Story Metal use cover-aware fusion.
+            return [Color(red: 0.10, green: 0.45, blue: 0.90),
+                    Color(red: 0.90, green: 0.17, blue: 0.66),
+                    Color(red: 0.35, green: 0.24, blue: 0.78),
+                    Color(red: 0.16, green: 0.68, blue: 0.60)]
         }
     }
 }

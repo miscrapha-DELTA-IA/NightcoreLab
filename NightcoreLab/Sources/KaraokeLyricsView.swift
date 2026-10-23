@@ -136,6 +136,7 @@ extension KaraokeTheme {
         case .ultraorange: return .ultraorange
         case .purewhite: return .purewhite
         case .ultrablack: return .ultrablack
+        case .gnarly: return .cyber
         }
     }
 }

@@ -91,6 +91,8 @@ struct StoryVideoRequest: Sendable {
     let speed: Float
     var duration: TimeInterval
     let totalSourceDuration: TimeInterval
+    /// Captured once when the Story draft opens; no network/artwork reads per frame.
+    var gnarlyArtworkHue: Double? = nil
     let lines: [TimedLyricLine]
     let lyricOffset: TimeInterval
     /// Frozen effect + font. The same value the live karaoke resolves with,
@@ -265,6 +267,7 @@ enum StoryRequestBuilder {
                      padPerformance: PerformanceTimeline? = nil,
                      reactionMode: CreativePreset.AudioReaction? = nil,
                      songDNA: SongDNA? = nil,
+                     gnarlyArtworkHue: Double? = nil,
                      scoreStamp: KaraokePerformanceStamp? = nil,
                      clipDuration: TimeInterval = StoryVideoRequest.maxSeconds) throws -> StoryVideoRequest {
         if mode == .lyrics && lines.isEmpty { throw StoryRequestError.lyricsUnavailable }
@@ -300,6 +303,7 @@ enum StoryRequestBuilder {
         request.reactionMode = activeReaction
         request.liveVisualResponseEnabled = reactionMode != nil
         request.songDNA = songDNA?.isValid == true ? songDNA : nil
+        request.gnarlyArtworkHue = theme == .gnarly ? gnarlyArtworkHue : nil
         request.scoreStamp = scoreStamp
         // One immutable source of truth for preview and the StoryFrameRenderer
         // scene. Do not rebuild from a potentially changed preset during export.

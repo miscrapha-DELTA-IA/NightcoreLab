@@ -44,7 +44,7 @@ final class ShareSnapshotTests: XCTestCase {
 
     @MainActor
     func testEveryCurrentThemeCanBeCaptured() {
-        XCTAssertEqual(AppTheme.allCases.count, 17)
+        XCTAssertEqual(AppTheme.allCases.count, 18)
         for theme in AppTheme.allCases {
             let value = ShareSnapshot(trackID: "a", title: "Long Title", artist: "Artist",
                 artworkURL: nil, theme: theme, visualStyle: .marble,
@@ -94,7 +94,7 @@ final class ShareSnapshotTests: XCTestCase {
 
     /// Attach the portrait image for every theme to the CI test bundle for visual review.
     @MainActor
-    func testShareCardVisualCatalogForAllSeventeenThemes() async throws {
+    func testShareCardVisualCatalogForAllEighteenThemes() async throws {
         for theme in AppTheme.allCases {
             try Task.checkCancellation()
             let snapshot = ShareSnapshot(trackID: "demo", title: "Nightcore • 120 BPM",

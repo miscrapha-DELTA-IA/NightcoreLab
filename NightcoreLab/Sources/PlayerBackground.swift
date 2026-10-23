@@ -48,6 +48,9 @@ struct PlayerBackgroundView: View {
     let style: PlayerBackgroundStyle
     let imageURL: URL?
     let theme: AppTheme
+    var sourceClock: PlaybackClock? = nil
+    var sourceDuration: TimeInterval = 0
+    var artworkHue: Double? = nil
     var frozenTime: Float? = nil
     var isPaused: Bool = false
     var reactiveDistortion: Double = 0
@@ -76,6 +79,8 @@ struct PlayerBackgroundView: View {
                 // principal; frame pacing follows EnergyBudget and thermal limits.
                 TurbulentMarbleView(
                     theme: MarbleTheme(appTheme: theme),
+                    sourceClock: sourceClock, sourceDuration: sourceDuration,
+                    artworkHue: artworkHue,
                     speed: 0.6,
                     maxFPS: 60,
                     isPaused: isPaused,

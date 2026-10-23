@@ -8,7 +8,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
     // Os novos temas precisam compartilhar o rawValue com MarbleTheme.
     case ultraviolet, solar, orchid, sapphire
     case atomic, lagoon, volt, prism, magma, noir
-    case ultrapink, ultraorange, purewhite, ultrablack
+    case ultrapink, ultraorange, purewhite, ultrablack, gnarly
 
     var id: String { rawValue }
 
@@ -31,6 +31,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .ultraorange: return "Ultra Orange"
         case .purewhite:   return "Pure White"
         case .ultrablack:  return "Ultra Black"
+        case .gnarly: return "Gnarly"
         }
     }
 
@@ -54,6 +55,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .ultraorange: return "laranja neon"
         case .purewhite:   return "branco puro"
         case .ultrablack:  return "preto absoluto"
+        case .gnarly: return "cores da capa e fusão de temas"
         }
     }
 
@@ -77,6 +79,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .ultraorange: return Color(red: 1.00, green: 0.29, blue: 0.10) // #FF4A1A laranja neon
         case .purewhite:   return Color(red: 1.00, green: 1.00, blue: 1.00) // #FFFFFF branco puro
         case .ultrablack:  return Color(red: 0.62, green: 0.64, blue: 0.69) // #9EA3AF cinza-aço (preto absoluto)
+        case .gnarly: return Color(red: 0.43, green: 0.89, blue: 1.00) // acento fixo AA; só o fundo muda com a música
         }
     }
 
@@ -100,6 +103,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .ultraorange: return Color(red: 0.79, green: 0.84, blue: 0.94) // #C9D6F0 branco azulado
         case .purewhite:   return Color(red: 0.68, green: 0.71, blue: 0.77) // #AEB6C4 prata
         case .ultrablack:  return Color(red: 0.48, green: 0.50, blue: 0.55) // #7A7F8C grafite
+        case .gnarly: return Color(red: 1.00, green: 0.51, blue: 0.81)
         }
     }
 

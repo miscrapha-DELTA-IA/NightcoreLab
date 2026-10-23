@@ -238,7 +238,12 @@ struct StorySceneView: View {
         } else {
             StoryExportMarbleView(theme: request.theme,
                 renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
-                startingPhase: request.marblePhase, materialFrame: exportMaterialFrame)
+                startingPhase: request.marblePhase, materialFrame: exportMaterialFrame,
+                gnarlyContext: request.theme == .gnarly
+                    ? GnarlyVisualContext(sourceTime: frame.sourceTime,
+                                          sourceDuration: request.totalSourceDuration,
+                                          artworkHue: request.gnarlyArtworkHue)
+                    : nil)
                 .frame(width: layoutPolicy?.materialViewport.width ?? StoryVideoRequest.size.width,
                        height: layoutPolicy?.materialViewport.height ?? StoryVideoRequest.size.height)
         }
