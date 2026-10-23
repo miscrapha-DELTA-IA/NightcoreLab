@@ -302,7 +302,8 @@ struct TurbulentMarbleView: View {
             : min(1, max(0, creativeTime / 180))
         let creativePalette: [Color] = creativeLook.map {
             CreativeUniverseCatalog.palette(id: $0, sourceTime: creativeTime,
-                duration: sourceDuration, artworkHue: artworkHue)
+                duration: sourceDuration, artworkHue: artworkHue,
+                theme: theme)
         } ?? []
         let creativeLevels = frozenTime == nil && reactionMode != .off
             ? (liveMeter?.snapshot() ?? .silence) : .silence
