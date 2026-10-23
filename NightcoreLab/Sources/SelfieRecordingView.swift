@@ -144,25 +144,31 @@ final class SelfieVideoRecorder: ObservableObject {
 
     init() {
         pipeline.didStart = { [weak self] in
-            self?.isRecording = true
-            self?.isFinishing = false
+            Task { @MainActor [weak self] in
+                self?.isRecording = true
+                self?.isFinishing = false
+            }
         }
         pipeline.didFinish = { [weak self] result in
-            guard let self else { return }
-            self.isRecording = false
-            self.isFinishing = false
-            switch result {
-            case .success(let url):
-                if self.closed {
-                    try? FileManager.default.removeItem(at: url)
-                } else {
-                    self.recordedURL = url
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isRecording = false
+                self.isFinishing = false
+                switch result {
+                case .success(let url):
+                    if self.closed {
+                        try? FileManager.default.removeItem(at: url)
+                    } else {
+                        self.recordedURL = url
+                    }
+                case .failure(let error):
+                    if !self.closed { self.errorText = error.localizedDescription }
+                    if let url = self.pendingURL {
+                        try? FileManager.default.removeItem(at: url)
+                    }
                 }
-            case .failure(let error):
-                if !self.closed { self.errorText = error.localizedDescription }
-                if let url = self.pendingURL { try? FileManager.default.removeItem(at: url) }
+                self.pendingURL = nil
             }
-            self.pendingURL = nil
         }
     }
 
@@ -178,10 +184,12 @@ final class SelfieVideoRecorder: ObservableObject {
         }
         guard !closed else { return }
         pipeline.prepare { [weak self] result in
-            guard let self, !self.closed else { return }
-            switch result {
-            case .success: self.isReady = true
-            case .failure(let error): self.errorText = error.localizedDescription
+            Task { @MainActor [weak self] in
+                guard let self, !self.closed else { return }
+                switch result {
+                case .success: self.isReady = true
+                case .failure(let error): self.errorText = error.localizedDescription
+                }
             }
         }
     }
@@ -299,6 +307,7 @@ struct SelfieRecordingView: View {
                             .background(.ultraThinMaterial, in: Circle())
                     }
                     .accessibilityLabel("Fechar câmera")
+                    .disabled(recorder.isSaving)
                     Spacer()
                     Label(recorder.isRecording ? "GRAVANDO" : "GNARLY · CÂMERA",
                           systemImage: recorder.isRecording ? "record.circle.fill" : "camera.fill")
