@@ -44,7 +44,7 @@ final class ShareSnapshotTests: XCTestCase {
 
     @MainActor
     func testEveryCurrentThemeCanBeCaptured() {
-        XCTAssertEqual(AppTheme.allCases.count, 18)
+        XCTAssertEqual(AppTheme.allCases.count, 27)
         for theme in AppTheme.allCases {
             let value = ShareSnapshot(trackID: "a", title: "Long Title", artist: "Artist",
                 artworkURL: nil, theme: theme, visualStyle: .marble,
@@ -79,7 +79,7 @@ final class ShareSnapshotTests: XCTestCase {
     @MainActor
     func testEveryVisibleExperienceSurvivesStillCardCapture() {
         let info = TrackInfo(track: nil, fileName: "demo.m4a", coverURL: nil)
-        XCTAssertEqual(CreativePresetCatalog.selectableExperiences.count, 7)
+        XCTAssertEqual(CreativePresetCatalog.selectableExperiences.count, 13)
         for experience in CreativePresetCatalog.selectableExperiences {
             let captured = ShareSnapshotBuilder.make(
                 track: info, theme: .volt, visualStyle: .marble,
