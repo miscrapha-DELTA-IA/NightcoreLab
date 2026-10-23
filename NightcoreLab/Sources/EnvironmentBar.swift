@@ -33,7 +33,7 @@ struct ThemeBoltButton: View {
     }
 
     var body: some View {
-        Button { select(theme.next) } label: {
+        Button { select(CreativeVisualTaxonomy.nextTheme(after: theme)) } label: {
             Image(systemName: "bolt.fill")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(theme.accent)
@@ -41,15 +41,33 @@ struct ThemeBoltButton: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            ForEach(AppTheme.allCases) { option in
-                Button { select(option) } label: {
-                    Label("\(option.displayName) · \(option.dominantColorName)",
-                          systemImage: option == theme ? "checkmark.circle.fill" : "circle")
+            Section("Temas · clássicos") {
+                ForEach(CreativeVisualTaxonomy.classicThemes) { option in
+                    Button { select(option) } label: {
+                        Label(option.displayName,
+                              systemImage: option == theme ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            }
+            Section("Temas · materiais") {
+                ForEach(CreativeVisualTaxonomy.materialThemes) { option in
+                    Button { select(option) } label: {
+                        Label(option.displayName,
+                              systemImage: option == theme ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            }
+            Section("Modos GNARLY · autônomos") {
+                ForEach(CreativeVisualTaxonomy.gnarlyModes) { option in
+                    Button { select(option) } label: {
+                        Label(option.displayName,
+                              systemImage: option == theme ? "checkmark.circle.fill" : "circle")
+                    }
                 }
             }
         }
         .accessibilityLabel("Trocar tema")
         .accessibilityValue("\(theme.displayName), \(theme.dominantColorName)")
-        .accessibilityHint("Alterna entre os temas. Toque e segure para escolher um.")
+        .accessibilityHint("Toque para trocar tema. Toque e segure para escolher temas ou modos GNARLY.")
     }
 }
