@@ -195,6 +195,7 @@ struct KaraokeScoringEngine {
                     time >= $0 && time - $0 <= 0.20
                 } ?? false
                 let softSustain = sustainedTail && recentVocal &&
+                    priorVoice.rms.isFinite && priorVoice.rms >= 0.045 &&
                     voice.rms.isFinite && voice.rms >= 0.045 &&
                     voice.confidence.isFinite && voice.confidence >= 0.55 &&
                     voice.frequency.map { $0.isFinite && (65...1_100).contains($0) } == true
@@ -218,9 +219,7 @@ struct KaraokeScoringEngine {
                             : 0.4 * rhythm + 0.4 * harmony * contour + 0.2 * sustain
                     } else {
                         // Missing evidence remains rhythm-only, never fake pitch.
-                        quality = sustainedTail
-                            ? (0.4 * rhythm + 0.24 * sustain) / 0.64
-                            : (0.4 * rhythm + 0.2 * sustain) / 0.6
+                        quality = (0.4 * rhythm + 0.2 * sustain) / 0.6
                     }
                 }
                 elapsed += duration; earned += duration * quality
