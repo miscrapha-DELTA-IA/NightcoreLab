@@ -23,13 +23,19 @@ final class PersonalBackgroundTests: XCTestCase {
             UIColor.systemPink.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 160, height: 240))
         }
+        // UIGraphicsImageRenderer.size is measured in points. Its CGImage
+        // dimensions are PIXELS, and Retina simulators commonly use 3x scale
+        // (160x240 points -> 480x720 pixels). The production normalizer must
+        // preserve pixel resolution below the 2304px cap, not shrink to points.
+        let sourcePixels = try XCTUnwrap(image.cgImage)
         let data = try XCTUnwrap(image.pngData())
         let output = try XCTUnwrap(PersonalBackgroundStore.downsample(data))
         XCTAssertLessThan(output.count, 10_000_000)
         let source = try XCTUnwrap(CGImageSourceCreateWithData(output as CFData, nil))
         let frame = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
-        XCTAssertEqual(frame.width, 160)
-        XCTAssertEqual(frame.height, 240)
+        XCTAssertEqual(frame.width, sourcePixels.width)
+        XCTAssertEqual(frame.height, sourcePixels.height)
+        XCTAssertLessThanOrEqual(max(frame.width, frame.height), 2304)
         XCTAssertEqual(CGImageSourceGetType(source) as String?, "public.jpeg")
     }
 
