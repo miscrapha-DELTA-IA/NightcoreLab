@@ -149,6 +149,34 @@ private struct CreatorStudioPanel: View {
         CreativePresetCatalog.selectableExperiences
     @Environment(\.dismiss) private var dismiss
 
+    @ViewBuilder
+    private func experienceOption(_ experience: CreativeExperiencePreset) -> some View {
+        Button {
+            selectedPresetID = experience.id
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(experience.name).font(.subheadline.weight(.semibold))
+                    if experience.id.hasPrefix("gnarly-exp-") {
+                        Text(CreativeUniverseCatalog.experienceDescription(
+                            slug: String(experience.id.dropFirst("gnarly-exp-".count))))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 5)
+                if experience.id == selectedPresetID {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(theme.accent)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 5)
+        }
+        .accessibilityIdentifier("creator.preset.\(experience.id)")
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -157,8 +185,18 @@ private struct CreatorStudioPanel: View {
                     TrackIdentityPill(title: track.title, artist: track.artist,
                                       artworkURL: track.coverURL)
                         .accessibilityIdentifier("creator.trackHeader")
-                    Text("Experiências visuais. Seu tema e a música continuam inalterados.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("COMO O VISUAL FUNCIONA")
+                            .font(.caption2.bold()).tracking(1.1)
+                            .foregroundStyle(theme.accent)
+                        Text(CreativeVisualTaxonomy.roleExplanation)
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Escolha um tema no raio para mudar materiais e cores. Aqui você escolhe como eles se movimentam.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityIdentifier("creator.visualTaxonomy")
                     if let suggestedPresetID,
                        CreativePresetCatalog.isLiveExperience(suggestedPresetID) {
                         Button("Aplicar sugestão: \(suggestedPresetID)") {
@@ -166,20 +204,15 @@ private struct CreatorStudioPanel: View {
                         }
                         .accessibilityIdentifier("creator.suggested")
                     }
-                    ForEach(experiences) { experience in
-                        Button {
-                            selectedPresetID = experience.id
-                        } label: {
-                            HStack {
-                                Text(experience.name)
-                                Spacer()
-                                if experience.id == selectedPresetID {
-                                    Image(systemName: "checkmark.circle.fill")
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .accessibilityIdentifier("creator.preset.\(experience.id)")
+                    Text("EXPERIÊNCIAS CLÁSSICAS")
+                        .font(.caption2.bold()).foregroundStyle(.secondary)
+                    ForEach(experiences.filter { !$0.id.hasPrefix("gnarly-exp-") }) { experience in
+                        experienceOption(experience)
+                    }
+                    Text("EXPERIÊNCIAS GNARLY")
+                        .font(.caption2.bold()).foregroundStyle(theme.accent)
+                    ForEach(experiences.filter { $0.id.hasPrefix("gnarly-exp-") }) { experience in
+                        experienceOption(experience)
                     }
                     Divider()
                     Text("Performance Pads").font(.headline)
@@ -258,6 +291,15 @@ private struct CreatorStudioPanel: View {
                         Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
                     }
                     .pickerStyle(.segmented)
+                    Text("Desligado = sem resposta ao áudio · Fluido = suave · Reativo = intenso.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if reactionMode == .off {
+                        Button("Ativar reação ao áudio nesta experiência") {
+                            reactionMode = .responsive
+                        }
+                        .font(.caption.weight(.semibold))
+                        .accessibilityIdentifier("creator.enableVisualReactivity")
+                    }
                     Text("Controles do material").font(.headline)
                     ForEach([CreatorControl.materialIntensity, .distortion, .brightness,
                              .movement, .beatSensitivity, .energyResponse]) { control in
@@ -1562,7 +1604,7 @@ private struct KaraokeBottomBar: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(AppTheme.allCases) { t in
+                        ForEach(CreativeVisualTaxonomy.selectableThemes) { t in
                             Button {
                                 CreativeHaptics.selection(microphoneActive: microphoneActive)
                                 withAnimation(.snappy(duration: 0.35)) { theme = t }
@@ -1576,7 +1618,7 @@ private struct KaraokeBottomBar: View {
                     }
                     .padding(.horizontal, 2)
                 }
-                .frame(maxWidth: 232)
+                .frame(maxWidth: 182)
                 .onAppear { proxy.scrollTo(theme.id, anchor: .center) }
                 .onChange(of: theme) { _, newTheme in
                     withAnimation(.snappy(duration: 0.35)) {
@@ -1584,6 +1626,27 @@ private struct KaraokeBottomBar: View {
                     }
                 }
             }
+
+            Menu {
+                ForEach(CreativeVisualTaxonomy.gnarlyModes) { mode in
+                    Button {
+                        CreativeHaptics.selection(microphoneActive: microphoneActive)
+                        withAnimation(.snappy(duration: 0.35)) { theme = mode }
+                    } label: {
+                        Label(mode.displayName,
+                              systemImage: theme == mode ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            } label: {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 36, height: 40)
+                    .foregroundStyle(CreativeVisualTaxonomy.gnarlyModes.contains(theme)
+                                     ? theme.accent : .white)
+            }
+            .accessibilityLabel("Modos GNARLY")
+            .accessibilityValue(CreativeVisualTaxonomy.gnarlyModes.contains(theme)
+                                 ? theme.displayName : "Inativo")
 
             Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 26)
 
