@@ -244,7 +244,7 @@ struct StorySceneView: View {
             StoryExportMarbleView(theme: request.theme,
                 renderTimestamp: frame.elapsed, steadyFlowSpeed: request.marbleSpeed,
                 startingPhase: request.marblePhase, materialFrame: exportMaterialFrame,
-                gnarlyContext: request.theme == .gnarly
+                gnarlyContext: [.gnarly, .gnarlyStrata, .gnarlyCompiler, .gnarlyOrganism].contains(request.theme)
                     ? GnarlyVisualContext(sourceTime: frame.sourceTime,
                                           sourceDuration: request.totalSourceDuration,
                                           artworkHue: request.gnarlyArtworkHue)
