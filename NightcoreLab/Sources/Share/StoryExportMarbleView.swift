@@ -39,6 +39,7 @@ final class StoryMetalSurface {
         case liquid = "storyLiquidMarbleFrame"
         case textured = "storyTexturedMarbleFrame"
         case procedural = "storyProceduralMarbleFrame"
+        case creative = "storyCreativeUniverseFrame"
     }
 
     private enum MetalFailure: LocalizedError {
@@ -136,8 +137,11 @@ final class StoryMetalSurface {
             : nil
         let output = gnarly?.frame ?? frame
         let binding = MarbleSurfaceBinding.resolve(frame: output)
-        let family: Family = binding.textured ? .textured :
-            (output.type == .marble ? .liquid : .procedural)
+        let lookID = CreativeUniverseCatalog.lookID(
+            theme: MarbleTheme(appTheme: theme), materialID: output.materialID)
+        let family: Family = lookID != nil ? .creative :
+            (binding.textured ? .textured :
+             (output.type == .marble ? .liquid : .procedural))
         let pipeline = try pipeline(for: family, on: device)
 
         // Scene coordinates remain 540x960 for 1080x1920 output. The same
@@ -162,16 +166,35 @@ final class StoryMetalSurface {
         let authored = TurbulentMarbleView.shaderPalette(materialID: frame.materialID,
             theme: MarbleTheme(appTheme: theme), authored: binding.paletteHex)
         // Avoid a force unwrap for imported/past presets without authored stops.
-        let colors = gnarly?.colors.map(\.color) ?? (binding.textured
-            ? (authored ?? [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
-            : [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
+        let creativeTime = gnarlyContext?.sourceTime ?? output.timestamp
+        let colors: [Color]
+        if let lookID {
+            colors = CreativeUniverseCatalog.palette(id: lookID,
+                sourceTime: creativeTime,
+                duration: gnarlyContext?.sourceDuration ?? 0,
+                artworkHue: gnarlyContext?.artworkHue)
+        } else {
+            colors = gnarly?.colors.map(\.color) ?? (binding.textured
+                ? (authored ?? [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
+                : [palette.deep, palette.body, palette.glow, palette.body, palette.glow])
+        }
         let rgba: [SIMD4<Float>] = colors.map { color in
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
             return SIMD4(Float(r), Float(g), Float(b), Float(a))
         }
         let u = output.marbleUniforms
-        let values: [Float] = [Float(size.width), Float(size.height), phase,
+        let values: [Float] = lookID.map { creativeID in
+            let progress = gnarlyContext?.sourceDuration ?? 0
+            let ratio = progress > 0 ? creativeTime / progress : creativeTime / 180
+            return [Float(size.width), Float(size.height), Float(creativeTime),
+                    Float(creativeID),
+                    Float(min(1, max(0, max(output.signals.bass, output.parameters.beatPulse)))),
+                    Float(min(1, max(0, output.signals.energy))),
+                    Float(min(1, max(0, output.signals.brightness))),
+                    Float(min(1, max(0, ratio))),
+                    Float(output.seed % 65536)]
+        } ?? [Float(size.width), Float(size.height), phase,
             binding.textured ? 2 : (output.type == .marble ? 0 : 1),
             Float(u.stripingFrequency), Float(u.stripingMix), Float(u.speckleIntensity),
             Float(u.embossStrength), Float(u.scanlineDensity), Float(u.diffusionSoftness),
