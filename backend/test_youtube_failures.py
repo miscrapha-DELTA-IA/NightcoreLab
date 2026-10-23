@@ -26,6 +26,22 @@ class YouTubeFailureTests(unittest.TestCase):
         main._strategy_outcome(label, True)
         self.assertTrue(main._strategy_available(label))
 
+    def test_related_429_isolated_from_download_circuit(self):
+        main._youtube_cooldown_until = 0
+        main._YtdlpLog("related").warning("HTTP Error 429: Too Many Requests")
+        self.assertEqual(main._youtube_cooldown_until, 0)
+        # A metadata crawler may be limited independently while the user
+        # is still allowed to start an explicitly requested download.
+        main._check_youtube_cooldown()
+
+    def test_real_audio_client_429_still_protects_backend(self):
+        main._YtdlpLog("logado/web").warning("HTTP Error 429: Too Many Requests")
+        with self.assertRaises(HTTPException) as raised:
+            main._check_youtube_cooldown()
+        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(raised.exception.headers["X-Download-Error"],
+                         "upstream_rate_limited")
+
     def test_429_does_not_try_more_clients_and_returns_retry_after(self):
         def blocked(*args):
             main._YtdlpLog("test").warning("HTTP Error 429: Too Many Requests")
