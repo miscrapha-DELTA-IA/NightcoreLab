@@ -14,10 +14,28 @@ enum NowPlayingArtworkLoader {
         UIImage(named: "NightcoreLogo").flatMap(artwork)
     }
 
-    static func load(coverURL: URL?, mediaURL: URL?) async -> MPMediaItemArtwork? {
-        if let coverURL, let image = await coverImage(at: coverURL),
-           !Task.isCancelled,
-           let cover = artwork(image) { return cover }
+    static func load(coverURL: URL?, mediaURL: URL?,
+                     fallbackCoverURLs: [URL] = []) async -> MPMediaItemArtwork? {
+        var seen = Set<URL>()
+        let candidates = ([coverURL].compactMap { $0 } + fallbackCoverURLs)
+            .filter { seen.insert($0).inserted }
+        // Prefer the real cover, then a stable alternate. Retry transient CDN
+        // failures before publishing the generic logo to the lock screen.
+        for attempt in 0..<3 where !Task.isCancelled {
+            for candidate in candidates {
+                guard !Task.isCancelled else { return nil }
+                if let image = await coverImage(at: candidate),
+                   !Task.isCancelled, let cover = artwork(image) {
+                    return cover
+                }
+            }
+            guard attempt < 2, !candidates.isEmpty else { break }
+            do {
+                try await Task.sleep(for: .seconds(attempt == 0 ? 1.5 : 4))
+            } catch {
+                return nil
+            }
+        }
         if let mediaURL, mediaURL.isFileURL,
            ["mp4", "m4v", "mov"].contains(mediaURL.pathExtension.lowercased()),
            let frame = await Task.detached(priority: .utility, operation: {
