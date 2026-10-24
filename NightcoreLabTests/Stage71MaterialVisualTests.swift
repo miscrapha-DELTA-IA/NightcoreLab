@@ -32,6 +32,33 @@ final class Stage71MaterialVisualTests: XCTestCase {
                        "Prism and Caustic must never be the same geometry")
     }
 
+    func testArgonStage72BoundedGeometryAndExportShareIdenticalEvaluator() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf:
+            root.appendingPathComponent("NightcoreLab/Resources/CreativeUniverse.metal"),
+            encoding: .utf8)
+        for signature in [
+            "universePlateMetric(",
+            "universeStrataHeight(",
+            "if (q>0.60f)",
+            "if (q>0.68f)",
+            "float propulsion=t*0.92f+1.42f*bass+0.36f*voice;",
+            "float aperture = 0.042f+0.102f*pressure;",
+            "float terracing=17.0f+19.0f*age;",
+            "return saturate(col);"
+        ] {
+            XCTAssertTrue(source.contains(signature), "Missing Stage 72 material: \\(signature)")
+        }
+        // Keep both entry points bound to ONE core: no duplicated live/export
+        // geometry algorithms, no per-frame mutable simulation state.
+        XCTAssertEqual(source.components(separatedBy: "universeEval(position,size,").count-1, 2)
+        XCTAssertFalse(source.contains("threadgroup_barrier"),
+                       "No persistent GPU texture state in this release")
+        XCTAssertFalse(source.contains("t*(0.92f+1.42f*bass"),
+                       "Bass must not multiply song elapsed time")
+    }
+
     func testExistingVisualIdentityAndSavedIDsAreStable() {
         XCTAssertEqual(CreativeUniverseCatalog.lookID(
             theme: .xeroxSerpentine, materialID: "original-marble"), 1)
