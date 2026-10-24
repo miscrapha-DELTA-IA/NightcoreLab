@@ -57,6 +57,36 @@ final class Stage73VisualChoiceTests: XCTestCase {
             levels: loud, mode: .off), .silence)
     }
 
+    func testStage74NoCreateShortcutOverlapAndAdvancedControlsRemainAccessible() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
+        let player = try String(contentsOf: root.appendingPathComponent("NowPlayingScreen.swift"),
+                                encoding: .utf8)
+        let chrome = try String(contentsOf: root.appendingPathComponent("EnvironmentBar.swift"),
+                                encoding: .utf8)
+        let picker = try String(contentsOf: root.appendingPathComponent("Creative/VisualChoiceSheet.swift"),
+                                encoding: .utf8)
+        XCTAssertFalse(player.contains("creator.openStudio"),
+                       "No redundant Criar button should collide with top-right Share")
+        // Scope the overlap check to the player's outer chrome only.
+        // The player card itself intentionally has its own top-aligned overlay.
+        let chromeStart = try XCTUnwrap(player.range(of: ".environment(liveUniforms)"))
+        let leadingBar = try XCTUnwrap(player.range(
+            of: ".overlay(alignment: .topLeading) {",
+            range: chromeStart.upperBound..<player.endIndex))
+        let chromeBeforeLeading = player[chromeStart.upperBound..<leadingBar.lowerBound]
+        XCTAssertFalse(chromeBeforeLeading.contains(".overlay(alignment: .top) {"),
+                       "No extra centered toolbar can cover the share controls")
+        XCTAssertTrue(player.contains(".overlay(alignment: .topTrailing) {"))
+        XCTAssertTrue(player.contains("ShareButton("))
+        XCTAssertTrue(player.contains("onChooseVisual: openVisualChoice"))
+        XCTAssertTrue(chrome.contains("Text(\"Visual\")"))
+        XCTAssertTrue(chrome.contains("visual.openPicker"))
+        XCTAssertTrue(picker.contains("visual.openAdvanced"))
+        XCTAssertTrue(player.contains("creatorRoute.isPresented = true"),
+                      "Pads, loops and fine controls remain accessible through Visual")
+    }
+
     func testSubtleReactionCannotCreateBiggerSpikeThanIntenseMode() {
         let base = Date(timeIntervalSince1970: 1_000)
         let heavy = LiveAudioLevels(rms: 0.7, bass: 1, mid: 1,

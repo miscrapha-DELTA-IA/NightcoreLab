@@ -45,6 +45,7 @@ struct VisualChoiceSheet: View {
     let previewMaterial: () -> Void
     let cancel: () -> Void
     let apply: () -> Void
+    let openAdvanced: () -> Void
 
     @State private var selectedTab = 0
     @State private var visualCategory = 0
@@ -266,6 +267,21 @@ struct VisualChoiceSheet: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("visual.reactivity")
                     Text("Contínuo mantém o movimento natural. Suave acompanha a energia sem solavancos. Intenso responde mais aos ataques da música.")
+                        .font(.caption2).foregroundStyle(.secondary)
+
+                    Divider()
+                    Button(action: openAdvanced) {
+                        Label("Ferramentas avançadas · pads, loops e ajustes",
+                              systemImage: "slider.horizontal.3")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(.white.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("visual.openAdvanced")
+                    Text("Abrir ferramentas avançadas mantém o visual testado.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 .padding(17)

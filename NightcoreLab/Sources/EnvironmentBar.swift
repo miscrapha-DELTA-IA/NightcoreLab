@@ -45,10 +45,21 @@ struct ThemeBoltButton: View {
             if let onChooseVisual { onChooseVisual() }
             else { select(CreativeVisualTaxonomy.nextTheme(after: theme)) }
         } label: {
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(theme.accent)
-                .environmentButtonSurface()
+            Group {
+                if onChooseVisual != nil {
+                    VStack(spacing: 0) {
+                        Image(systemName: "circle.hexagongrid.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text("Visual")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                } else {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 18, weight: .bold))
+                }
+            }
+            .foregroundStyle(theme.accent)
+            .environmentButtonSurface()
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -78,6 +89,7 @@ struct ThemeBoltButton: View {
             }
         }
         .accessibilityLabel(onChooseVisual == nil ? "Trocar tema" : "Escolher visual")
+        .accessibilityIdentifier(onChooseVisual == nil ? "theme.next" : "visual.openPicker")
         .accessibilityValue("\(theme.displayName), \(theme.dominantColorName)")
         .accessibilityHint("Toque para escolher o visual; toque e segure para selecionar diretamente um tema e limpar experiências.")
     }
