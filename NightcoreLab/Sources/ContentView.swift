@@ -190,8 +190,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.energyBudget) private var energyBudget
 
-    // Troque pelo seu link (Ko-fi, GitHub Sponsors, página com QR Code do Pix…)
-    private let donationURL = URL(string: "https://ko-fi.com/SEU_USUARIO")!
+    // Página oficial para apoiar o desenvolvimento do GNARLY.
+    private let donationURL = URL(string: "https://apoia.se/gnarlyapp")!
 
     private var hasTrack: Bool { audio.fileName != nil }
     private var hasAudioPanels: Bool {
