@@ -104,24 +104,38 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
         col = mix(A,B,saturate(depth));
         col += C*sparkle*(0.14f+0.4f*bass);
         col += float3(0.3f)*bevel*(0.18f+0.28f*treble);
-    } else if (look == 8) { // Caustic Dissection: fractured fluid optics, NOT diamonds
-        float melt = 0.17f*sin(p.y*5.0f+t*0.23f+themeTilt*2.0f) +
-                     0.11f*cos(p.x*3.7f-t*0.17f);
-        float2 liquid = p + float2(melt*0.55f,-melt*0.40f);
-        float fractureAngle = atan2(liquid.y,liquid.x);
-        float dist = length(liquid);
-        float shards = universeLine(fractureAngle*(5.0f+floor(themeShift*5.0f))+
-                                   dist*(8.0f+6.0f*bass)-t*0.30f,0.048f);
-        float silk = universeNoise(liquid*5.0f+float2(t*0.10f,-t*0.08f));
-        float flow = sin(liquid.x*8.0f+liquid.y*5.0f+
-                         silk*7.0f-t*(0.30f+voice*1.2f));
-        float refract = smoothstep(0.18f,0.85f,flow*0.5f+0.5f);
-        float caustic = pow(saturate(0.5f+0.5f*sin(
-            (liquid.x-liquid.y)*31.0f+silk*13.0f+t*0.75f)),18.0f);
-        col = mix(A,B,refract*0.76f);
-        col += C*shards*(0.16f+0.65f*bass);
-        col += C*caustic*(0.12f+0.40f*treble);
-        col = mix(col,C,shards*refract*0.28f);
+    } else if (look == 8) { // Caustic: liquid quartz, refracting rather than Prism's diamonds
+        float2 glass = universeAdvection(p,t*0.21f+themeShift*7.0f,
+                                       0.10f+0.15f*bass);
+        float current = universeFbm(glass*3.6f+float2(t*0.05f,-t*0.07f));
+        float ripples = sin(glass.y*7.9f+current*14.0f-t*0.32f);
+        glass += float2(0.12f*ripples,0.07f*sin(
+                   glass.x*9.0f+current*11.0f+t*0.12f));
+        // Thin etched edges form flowing mineral fissures rather than a
+        // fixed repeating rhombus. Bass opens cracks; treble scatters light.
+        float mineral = universeFbm(glass*6.5f+21.0f);
+        float ridge = abs(mineral-0.51f);
+        float fracture = 1.0f-smoothstep(0.018f,0.070f+bass*0.065f,ridge);
+        float2 pane = glass*float2(4.5f,5.6f);
+        float2 facet = abs(fract(pane+float2(
+                          current*0.8f,-current*0.5f))-0.5f);
+        float cut = 1.0f-smoothstep(0.025f,0.075f,
+                        min(facet.x,abs(facet.y-0.4f*facet.x)));
+        float optical = sin(
+            (glass.x*16.0f+glass.y*8.0f)+current*23.0f+
+            mineral*10.0f+t*(0.39f+0.16f*voice));
+        float bright = pow(saturate(optical*0.5f+0.5f),19.0f);
+        float opticBand = 0.5f+0.5f*sin(current*9.0f+
+                                    glass.y*5.0f+themeTilt*2.0f);
+        float3 spectrum = float3(
+            bright*1.13f,
+            pow(saturate(0.5f+0.5f*sin(optical*0.93f+0.35f)),18.0f),
+            pow(saturate(0.5f+0.5f*sin(optical*0.88f-0.48f)),17.0f));
+        float wetEdge = saturate(fracture*0.74f+cut*0.21f);
+        col = mix(A,B,smoothstep(0.24f,0.79f,opticBand)*0.74f);
+        col = mix(col,C,wetEdge*(0.20f+0.52f*bass));
+        col += spectrum*mix(C,B,0.3f)*bright*(0.18f+0.53f*treble);
+        col += B*cut*0.16f*(0.33f+voice);
     } else if (look == 3) { // Bubble chamber: collision tracks and calibration
         float spiral = angle*1.8f + log(max(r, 0.035f)) *
                        (7.0f + 2.0f*voice) + t*0.17f;
@@ -191,39 +205,73 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
                   fivePoint*shot*(0.55f+0.37f*treble));
         col = mix(col,A,sheetTear*0.44f);
         col *= 0.84f+0.16f*universeNoise(paper*37.0f+seed*0.005f);
-    } else if (look == 9) { // Tectonic: mineral canyon + braided tensile filaments
-        float fault = p.x-0.18f*sin(p.y*3.7f+t*0.09f+themeTilt);
-        float opening = 0.12f+0.19f*bass+0.04f*sin(t*0.12f);
-        float fissure = 1.0f-smoothstep(opening*0.65f,opening*1.35f,abs(fault));
-        float2 ridges = p+float2(fault*0.22f,0.14f*sin(p.x*3.0f+t*0.12f));
-        float contours = universeLine(
-            (ridges.y*18.0f+3.8f*sin(ridges.x*4.0f+themeTilt)+
-             universeNoise(ridges*6.0f)*2.0f-t*0.16f)*3.14159f,0.11f);
-        float filament = universeLine(p.y*29.0f+
-                         sin(p.x*4.0f+themeShift)*6.0f-t*0.4f,0.065f);
-        float tension = universeLine(p.x*15.0f-p.y*7.0f+themeTilt,0.08f);
-        float trace = filament*tension;
-        float mineral = universeNoise(ridges*13.0f+float2(seed*0.001f,0));
-        col = mix(A*(0.42f+mineral*0.24f),B*(0.40f+0.37f*bass),
-                  contours*(0.22f+0.35f*voice));
-        col = mix(col,C,fissure*(0.27f+0.40f*bass)+
-                        trace*fissure*(0.32f+0.35f*treble));
-    } else if (look == 10) { // Vector Drift: parallax perspective + continuous flight
-        float2 focus = p + 0.05f*float2(sin(t*0.29f+themeTilt),
-                                          cos(t*0.25f-themeTilt));
-        float distanceToCenter = max(length(focus),0.018f);
+    } else if (look == 9) { // Tectonic: folded strata and tensile silk cables
+        float2 stone = universeAdvection(p*float2(0.82f,1.08f),
+                                    t*0.048f,0.02f);
+        float ground = universeFbm(stone*2.7f+float2(seed*0.002f,0));
+        float displaced = stone.x-
+            0.20f*sin(stone.y*3.7f+ground*3.0f+themeTilt);
+        float opening = 0.075f+0.25f*bass+0.04f*voice;
+        float chasm = 1.0f-smoothstep(opening*0.60f,
+                                     opening*1.35f,abs(displaced));
+        float mountain = 9.0f*ground+stone.y*17.0f+
+            sin(stone.x*4.0f+ground*4.0f)*5.0f;
+        float strata = universeContour(mountain,1.0f,0.050f);
+        float microStrata = universeContour(mountain*2.1f,1.0f,0.034f);
+        // Cables cross the opening, with local tension changing curvature.
+        float cableCoordinate = stone.y*(20.0f+themeShift*8.0f)+
+            stone.x*stone.x*(6.0f+13.0f*bass)+
+            0.60f*sin(stone.x*5.0f+t*0.31f);
+        float cable = universeLine(cableCoordinate*3.1415926f,0.065f);
+        float silk = universeLine(cableCoordinate*6.283185f+
+                                  displaced*3.4f,0.11f);
+        float porous = universeNoise(stone*26.0f+seed*0.01f);
+        col = mix(A*0.38f,B*0.74f,
+                  strata*(0.34f+0.28f*voice)+ground*0.19f);
+        col += C*microStrata*(0.10f+0.17f*treble);
+        col = mix(col,A*0.10f,chasm*0.78f);
+        col += C*cable*chasm*(0.32f+0.45f*bass);
+        col += B*silk*chasm*(0.06f+0.24f*treble);
+        col *= 0.87f+0.13f*porous;
+    } else if (look == 10) { // Vector Drift: actual cylindrical depth / hollow 3D cage
+        float2 focus = p+float2(0.03f*sin(t*0.19f+themeTilt),
+                                0.04f*cos(t*0.17f-themeTilt));
+        float viewRadius = max(length(focus),0.015f);
         float theta = atan2(focus.y,focus.x);
-        float speed = 1.6f+3.7f*bass+1.1f*voice;
-        float depth = -log2(distanceToCenter+0.035f)*3.2f - t*speed;
-        float layers = universeLine(depth*3.14159f,0.11f);
-        float vanishing = exp(-distanceToCenter*7.0f);
-        float rails = universeLine(theta*(12.0f+floor(themeShift*6.0f))+
-                     sin(depth*0.21f+themeTilt)*1.8f,0.042f);
-        float neon = universeLine(depth*3.14159f+theta*2.0f,0.06f);
-        float warp = 0.5f+0.5f*sin(depth*0.67f+themeTilt);
-        col = mix(A,B,rails*(0.23f+0.48f*warp));
-        col += C*(layers*(0.17f+0.52f*bass)+
-                  rails*neon*(0.12f+0.5f*treble)+vanishing*0.23f);
+        // Cylindrical tunnel: perspective depth increases towards center,
+        // opposite to a flat 2D radial line animation.
+        float distanceZ = min(30.0f,0.95f/viewRadius);
+        float forward = t*(0.76f+1.48f*bass+0.48f*voice);
+        float traveling = distanceZ+forward;
+        float wrappedAngle = theta*1.591549f; // 10 sectors around 2π
+        float2 frameUV = float2(wrappedAngle+themeShift*0.28f,
+                                traveling*0.86f);
+        float2 panel = fract(frameUV)-0.5f;
+        float flowBend = 0.12f*sin(traveling*0.52f+
+                                      theta*3.0f+themeTilt);
+        panel.x += flowBend;
+        float tunnelRib = 1.0f-smoothstep(0.055f,0.16f,
+                                           abs(panel.y));
+        float extrusion = 1.0f-smoothstep(0.07f,0.22f,
+                                           abs(panel.x));
+        float voidCell = smoothstep(0.19f,0.36f,
+                         length(panel*float2(0.86f,1.20f)));
+        float structure = saturate(tunnelRib+extrusion*0.68f);
+        // Metallic light follows the surface normal of longitudinal rails.
+        float brushed = universeNoise(float2(
+                    theta*14.0f,traveling*7.0f));
+        float gleam = pow(saturate(0.5f+0.5f*
+               cos(theta*3.0f+traveling*0.13f+t*0.31f)),24.0f);
+        float farFade = smoothstep(0.0f,5.0f,distanceZ);
+        float aperture = 1.0f-smoothstep(0.03f,0.26f,viewRadius);
+        float3 metal = mix(B,C,
+                   structure*(0.33f+0.43f*brushed));
+        col = mix(A*0.08f,metal,
+              structure*(0.64f+0.34f*farFade));
+        col = mix(col,A*0.04f,(1.0f-voidCell)*0.38f);
+        col += C*gleam*structure*(0.08f+0.42f*treble);
+        col += B*aperture*(0.05f+0.24f*bass);
+        col *= 0.84f+0.16f*farFade;
     } else if (look == 11) { // Liquid: advected enamel with viscous folded membranes
         float2 field = universeAdvection(p*float2(1.04f,0.85f),
                                         t*(0.17f+0.18f*voice),
@@ -276,21 +324,30 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
         col = mix(ink,stone,relief);
         col = mix(col,B,acid*0.17f+0.10f*worn);
         col += C*contour*bass*0.12f;
-    } else if (look == 13) { // Strata: folded abyssal erosion, not horizontal bands
-        float2 abyss = p-float2(0.10f*sin(t*0.09f),0.04f*cos(t*0.08f));
-        float depth = length(abyss);
-        float angleField = atan2(abyss.y,abyss.x);
-        float sediment = depth*(22.0f+12.0f*phase)+
-                         3.6f*sin(angleField*4.0f+t*0.06f)+
-                         2.5f*universeNoise(abyss*4.0f+float2(seed*0.001f,0));
-        float contour = universeLine(sediment*3.14159f,0.072f);
-        float sink = exp(-depth*(3.9f+2.0f*bass));
-        float scar = universeLine(angleField*5.0f+
-                     depth*9.0f+t*0.08f,0.065f);
-        float sedimentAge = smoothstep(0.05f,1.0f,phase);
-        col = mix(A,B,contour*(0.35f+0.35f*voice));
-        col = mix(col,C,scar*sedimentAge*(0.28f+0.44f*bass));
-        col += B*sink*(0.10f+0.26f*bass);
+    } else if (look == 13) { // Strata: erosion memory expressed as music-age topography
+        float age = smoothstep(0.0f,1.0f,phase);
+        float2 bed = universeAdvection(p,t*0.055f,
+                                0.02f+0.04f*bass);
+        float2 sink = bed-float2(
+                     0.16f*sin(t*0.047f),0.10f*cos(t*0.064f));
+        float rock = universeFbm(sink*2.3f+seed*0.003f);
+        float depth = length(sink*float2(1.12f,0.78f));
+        float theta = atan2(sink.y,sink.x);
+        float sediment = depth*(19.0f+9.0f*age)+
+               5.0f*rock+2.8f*sin(theta*3.0f)+
+               1.7f*sin(sink.y*7.0f+rock*3.0f);
+        float contour = universeContour(sediment,1.0f,0.056f);
+        float hairline = universeContour(sediment*2.3f,
+                                      1.0f,0.047f);
+        float scar = universeLine(theta*(6.0f+age*5.0f)+
+                                   depth*(8.0f+9.0f*bass),0.063f);
+        float oxidation = universeFbm(sink*8.0f+float2(age*6.0f,0));
+        float chasm = exp(-depth*(3.4f+1.4f*bass));
+        col = mix(A*0.24f,B*0.69f,contour*(0.51f+0.23f*voice));
+        col += C*hairline*(0.10f+0.20f*treble);
+        col = mix(col,B*0.2f,chasm*(0.52f+age*0.2f));
+        col = mix(col,C,scar*age*(0.19f+0.34f*bass));
+        col *= 0.8f+0.20f*oxidation;
     } else if (look == 14) { // Kinematic Compiler: deterministic force lattice
         float swirl = angle + 0.18f*sin(r*8.0f-t*0.17f);
         float flow = r*(17.0f+voice*8.0f) + 6.0f*sin(swirl*4.0f+t*0.24f);
