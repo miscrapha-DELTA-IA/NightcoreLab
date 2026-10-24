@@ -404,6 +404,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @State private var liveUniforms = CreativeLiveUniforms()
     @State private var sectionTracker = SongSectionTracker()
     @State private var creatorRoute = CreatorStudioRoute()
+    @State private var showingVisualChoice = false
+    @State private var visualChoiceApplied = false
+    @State private var visualChoiceSnapshot: VisualSelectionSnapshot?
     @State private var creatorControls = CreatorControls()
     @State private var suggestedSongProfile: SongCreativeProfile?
     @State private var activeSongProfile: SongCreativeProfile?
@@ -427,6 +430,32 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
+
+    private func openVisualChoice() {
+        visualChoiceSnapshot = VisualSelectionSnapshot(
+            theme: appTheme, experienceID: creativePresetID,
+            reaction: reactionMode, background: backgroundStyle,
+            personalPhotoWasActive: personalBackground.activeSnapshot != nil)
+        visualChoiceApplied = false
+        showingVisualChoice = true
+    }
+
+    private func closeVisualChoice(applied: Bool) {
+        visualChoiceApplied = applied
+        showingVisualChoice = false
+    }
+
+    private func finishVisualChoice() {
+        if !visualChoiceApplied, let original = visualChoiceSnapshot {
+            appTheme = original.theme
+            creativePresetID = original.experienceID
+            reactionMode = original.reaction
+            backgroundStyle = original.background
+            if original.personalPhotoWasActive { personalBackground.enable() }
+            else { personalBackground.disable() }
+        }
+        visualChoiceSnapshot = nil
+    }
     private var selectedVisualMaterial: VisualMaterial {
         CreativePresetCatalog.material(selection: creativePresetID)
     }
@@ -531,6 +560,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         .transition(.lyricsReveal)
                     if KaraokeCleanLayout.showsQuickThemeBar(cleanMode: lyricsCleanMode) {
                         KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle,
+                                         experienceID: $creativePresetID,
+                                         onChooseVisual: openVisualChoice,
                                          microphoneActive: audio.karaokeMicrophoneActive)
                             .padding(.bottom, 12)
                             .hideablePanel(.themes, edge: .bottom)
@@ -600,17 +631,27 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
         .overlay(alignment: .top) {
             if isTrackLoaded {
-                Button {
-                    creatorRoute.toggle()
-                } label: {
-                    Label("Criar", systemImage: "wand.and.stars")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 14).frame(height: 36)
-                        .foregroundStyle(.white)
-                        .background(.regularMaterial, in: Capsule())
+                HStack(spacing: 9) {
+                    Button(action: openVisualChoice) {
+                        Label("Visual", systemImage: "circle.hexagongrid.fill")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14).frame(height: 36)
+                            .foregroundStyle(.white)
+                            .background(appTheme.accent.opacity(0.48), in: Capsule())
+                    }
+                    .accessibilityIdentifier("visual.openPicker")
+                    Button {
+                        creatorRoute.toggle()
+                    } label: {
+                        Label("Criar", systemImage: "wand.and.stars")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14).frame(height: 36)
+                            .foregroundStyle(.white)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                    .accessibilityIdentifier("creator.openStudio")
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("creator.openStudio")
                 .padding(.top, 18)
             }
         }
@@ -618,6 +659,13 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             HStack(spacing: 8) {
                 EnvironmentBar(theme: $appTheme,
                                panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels,
+                               onChooseVisual: openVisualChoice,
+                               onSelectStandaloneTheme: { option in
+                                   creativePresetID = CreativePresetCatalog.defaultID
+                                   appTheme = option
+                                   personalBackground.disable()
+                                   backgroundStyle = .marble
+                               },
                                microphoneActive: audio.karaokeMicrophoneActive)
                 Menu {
                     Button("Tema visual", systemImage: "sparkles") {
@@ -707,6 +755,17 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             PersonalBackgroundAdjustmentSheet(store: personalBackground)
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingVisualChoice, onDismiss: finishVisualChoice) {
+            VisualChoiceSheet(
+                theme: $appTheme, experienceID: $creativePresetID,
+                reaction: $reactionMode, background: $backgroundStyle,
+                previewMaterial: { personalBackground.disable() },
+                cancel: { closeVisualChoice(applied: false) },
+                apply: { closeVisualChoice(applied: true) })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .interactiveDismissDisabled()
         }
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
@@ -1594,6 +1653,8 @@ private struct BlurredCover: View {
 private struct KaraokeBottomBar: View {
     @Binding var theme: AppTheme
     @Binding var background: BackgroundStyle
+    @Binding var experienceID: String
+    let onChooseVisual: () -> Void
     var microphoneActive = false
     @AppStorage("karaokeTypography") private var typography: TypographyStyle = .neon
     @Namespace private var ns
@@ -1607,7 +1668,10 @@ private struct KaraokeBottomBar: View {
                         ForEach(CreativeVisualTaxonomy.selectableThemes) { t in
                             Button {
                                 CreativeHaptics.selection(microphoneActive: microphoneActive)
-                                withAnimation(.snappy(duration: 0.35)) { theme = t }
+                                withAnimation(.snappy(duration: 0.35)) {
+                                    theme = t
+                                    experienceID = CreativePresetCatalog.defaultID
+                                }
                             } label: { swatch(t) }
                             .buttonStyle(.plain)
                             .accessibilityLabel(t.displayName)
@@ -1631,7 +1695,10 @@ private struct KaraokeBottomBar: View {
                 ForEach(CreativeVisualTaxonomy.gnarlyModes) { mode in
                     Button {
                         CreativeHaptics.selection(microphoneActive: microphoneActive)
-                        withAnimation(.snappy(duration: 0.35)) { theme = mode }
+                        withAnimation(.snappy(duration: 0.35)) {
+                            theme = mode
+                            experienceID = CreativePresetCatalog.defaultID
+                        }
                     } label: {
                         Label(mode.displayName,
                               systemImage: theme == mode ? "checkmark.circle.fill" : "circle")
@@ -1647,6 +1714,15 @@ private struct KaraokeBottomBar: View {
             .accessibilityLabel("Modos GNARLY")
             .accessibilityValue(CreativeVisualTaxonomy.gnarlyModes.contains(theme)
                                  ? theme.displayName : "Inativo")
+
+            Button(action: onChooseVisual) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 36, height: 40)
+                    .foregroundStyle(.white)
+            }
+            .accessibilityLabel("Escolher visual e combinar experiências")
+            .accessibilityIdentifier("visual.openPicker.karaoke")
 
             Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 26)
 
