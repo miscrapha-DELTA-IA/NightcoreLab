@@ -51,9 +51,11 @@ static inline float universeContour(float elevation, float frequency, float widt
 // Stage 72: bounded signed-distance vocabulary. No frame history or
 // derivative-only instructions: the exact functions run in SwiftUI and Story.
 // A light-weight two-pass Voronoi cell edge, limited to 3×3 neighbors.
-static inline float2 universePlateMetric(float2 p, float seed) {
+static inline float2 universePlateMetric(float2 p, float seed,
+                                         float quality) {
     float2 base = floor(p);
     float best = 1.0e6f;
+    float second = 1.0e6f;
     float2 owner = float2(0);
     float2 ownerCell = base;
     for (int y=-1; y<=1; ++y) {
@@ -63,11 +65,18 @@ static inline float2 universePlateMetric(float2 p, float seed) {
                 universeHash(cell+float2(seed,5.3f)),
                 universeHash(cell+float2(17.7f,seed)));
             float d = dot(center-p,center-p);
-            if (d<best) { best=d; owner=center; ownerCell=cell; }
+            if (d<best) {
+                second=best;
+                best=d; owner=center; ownerCell=cell;
+            } else { second=min(second,d); }
         }
     }
-    float edge=2.0f;
-    for (int y=-1; y<=1; ++y) {
+    // Low thermal quality: 9 candidate visits and second-best heuristic,
+    // no bisector pass. High quality: precise clipped plate edges below.
+    float edge=max(0.0f,0.5f*(sqrt(second)-sqrt(best)));
+    if (quality>0.61f) {
+      edge=2.0f;
+      for (int y=-1; y<=1; ++y) {
         for (int x=-1; x<=1; ++x) {
             float2 cell=base+float2(x,y);
             if (all(cell==ownerCell)) continue;
@@ -79,6 +88,7 @@ static inline float2 universePlateMetric(float2 p, float seed) {
             if (len>0.001f) edge=min(edge,
                 dot((owner+center)*0.5f-p,v)/len);
         }
+      }
     }
     return float2(max(0.0f,edge),universeHash(ownerCell+seed));
 }
@@ -252,7 +262,7 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
         warped += 0.21f*float2(
             sin(p.y*3.4f+t*0.09f+themeTilt),
             cos(p.x*3.0f-t*0.055f));
-        float2 metric = universePlateMetric(warped,seed*0.001f+7.0f);
+        float2 metric = universePlateMetric(warped,seed*0.001f+7.0f,q);
         float pressure = saturate(0.59f*bass+0.23f*voice+0.18f*treble);
         float aperture = 0.042f+0.102f*pressure;
         float jagged = 0.022f*universeNoise(warped*10.0f+
