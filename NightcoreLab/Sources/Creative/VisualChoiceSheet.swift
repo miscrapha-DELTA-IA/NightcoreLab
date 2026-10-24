@@ -47,6 +47,7 @@ struct VisualChoiceSheet: View {
     let apply: () -> Void
 
     @State private var selectedTab = 0
+    @State private var visualCategory = 0
 
     private func chooseTheme(_ option: AppTheme) {
         previewMaterial()
@@ -142,8 +143,18 @@ struct VisualChoiceSheet: View {
                             chooseTheme(.cyber)
                         }
                         .accessibilityIdentifier("visual.choose.cyber")
-                        Text("TEMAS · MATERIAIS E CORES")
+                        Text("EXPLORAR VISUAIS")
                             .font(.caption2.bold()).foregroundStyle(.secondary)
+                        Picker("Categoria", selection: $visualCategory) {
+                            Text("Temas").tag(0)
+                            Text("Experiências").tag(1)
+                            Text("GNARLY").tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("visual.category")
+                        if visualCategory == 0 {
+                            Text("MATERIAIS E CORES · SEM EXPERIÊNCIA POR CIMA")
+                                .font(.caption2.bold()).foregroundStyle(.secondary)
                         ForEach(CreativeVisualTaxonomy.selectableThemes) { option in
                             choiceRow(option.displayName,
                                       subtitle: "Ver este tema sozinho, sem outra experiência por cima",
@@ -154,6 +165,7 @@ struct VisualChoiceSheet: View {
                             }
                             .accessibilityIdentifier("visual.choose.theme.\(option.id)")
                         }
+                        } else if visualCategory == 1 {
                         Text("EXPERIÊNCIAS · FORMAS E MOVIMENTO")
                             .font(.caption2.bold()).foregroundStyle(.secondary)
                         ForEach(CreativePresetCatalog.selectableExperiences) { option in
@@ -165,6 +177,7 @@ struct VisualChoiceSheet: View {
                             }
                             .accessibilityIdentifier("visual.choose.experience.\(option.id)")
                         }
+                        } else {
                         Text("MODOS GNARLY · SISTEMAS AUTÔNOMOS")
                             .font(.caption2.bold()).foregroundStyle(.secondary)
                         ForEach(CreativeVisualTaxonomy.gnarlyModes.filter { $0 != .gnarly }) { option in
@@ -175,6 +188,7 @@ struct VisualChoiceSheet: View {
                                 chooseGnarly(option)
                             }
                             .accessibilityIdentifier("visual.choose.gnarlyMode.\(option.id)")
+                        }
                         }
                     } else {
                         Text("MIXAR · COMBINAÇÕES AVANÇADAS")
