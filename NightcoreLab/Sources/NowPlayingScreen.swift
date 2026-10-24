@@ -132,7 +132,8 @@ struct CreatorStudioRoute: Equatable {
 /// package store rather than a new preset catalogue.
 private struct CreatorStudioPanel: View {
     let track: TrackInfo
-    let theme: AppTheme
+    @Binding var theme: AppTheme
+    let onVisualChange: () -> Void
     let store: CreativePresetPackageStore
     let audio: AudioEngineManager
     @Binding var selectedPresetID: String
@@ -149,10 +150,16 @@ private struct CreatorStudioPanel: View {
         CreativePresetCatalog.selectableExperiences
     @Environment(\.dismiss) private var dismiss
 
+    private func selectExperience(_ id: String) {
+        onVisualChange()
+        theme = VisualChoiceResolver.baseThemeForExperience(current: theme)
+        selectedPresetID = id
+    }
+
     @ViewBuilder
     private func experienceOption(_ experience: CreativeExperiencePreset) -> some View {
         Button {
-            selectedPresetID = experience.id
+            selectExperience(experience.id)
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -191,16 +198,26 @@ private struct CreatorStudioPanel: View {
                             .foregroundStyle(theme.accent)
                         Text(CreativeVisualTaxonomy.roleExplanation)
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("Escolha um tema no raio para mudar materiais e cores. Aqui você escolhe como eles se movimentam. Os modos GNARLY assumem o visual enquanto ativos, sem apagar a experiência escolhida.")
+                        Text("O botão Visual no player mostra as opções de forma simples. Aqui você pode combinar experiências e ajustar outros recursos de criação.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     .padding(12)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityIdentifier("creator.visualTaxonomy")
+                    if selectedPresetID != CreativePresetCatalog.defaultID {
+                        Button {
+                            onVisualChange()
+                            selectedPresetID = CreativePresetCatalog.defaultID
+                        } label: {
+                            Label("Voltar ao visual puro de \(theme.displayName)",
+                                  systemImage: "arrow.uturn.backward.circle")
+                        }
+                        .accessibilityIdentifier("creator.clearExperience")
+                    }
                     if let suggestedPresetID,
                        CreativePresetCatalog.isLiveExperience(suggestedPresetID) {
                         Button("Aplicar sugestão: \(suggestedPresetID)") {
-                            selectedPresetID = suggestedPresetID
+                            selectExperience(suggestedPresetID)
                         }
                         .accessibilityIdentifier("creator.suggested")
                     }
@@ -285,13 +302,15 @@ private struct CreatorStudioPanel: View {
                         set: { controls.vocalFX = $0 }),
                         monitoringSafe: audio.vocalMonitoringEnabled)
                     Divider()
-                    Picker("Ritmo visual", selection: $reactionMode) {
-                        Text("Desligado").tag(CreativePreset.AudioReaction.off)
-                        Text("Fluido").tag(CreativePreset.AudioReaction.subtle)
-                        Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
+                    Picker("Reação à música", selection: $reactionMode) {
+                        Text("Contínuo").tag(CreativePreset.AudioReaction.off)
+                        Text("Suave").tag(CreativePreset.AudioReaction.subtle)
+                        Text("Intenso").tag(CreativePreset.AudioReaction.responsive)
                     }
                     .pickerStyle(.segmented)
-                    Text("Desligado = sem resposta ao áudio · Fluido = suave · Reativo = intenso.")
+                    Text("Contínuo mantém a animação, Suave acompanha a energia, Intenso enfatiza batidas. Não troca o visual.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text("Troque o desenho em Visual; use estas opções só para a intensidade da reação.")
                         .font(.caption2).foregroundStyle(.secondary)
                     if reactionMode == .off {
                         Button("Ativar reação ao áudio nesta experiência") {
@@ -769,7 +788,11 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         }
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
-                track: track, theme: appTheme,
+                track: track, theme: $appTheme,
+                onVisualChange: {
+                    personalBackground.disable()
+                    backgroundStyle = .marble
+                },
                 store: songProfileStore, audio: audio,
                 selectedPresetID: $creativePresetID,
                 reactionMode: $reactionMode,
