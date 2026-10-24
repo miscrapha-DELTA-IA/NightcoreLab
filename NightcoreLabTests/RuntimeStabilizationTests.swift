@@ -1459,7 +1459,7 @@ final class Stage38UnifiedIntegrationTests: XCTestCase {
         XCTAssertTrue(content.contains("MusicControlPage.stems"))
         XCTAssertTrue(content.contains("StemMixerControls(audio: audio)"))
         XCTAssertTrue(content.contains("NightcoreBrandLockup(theme: currentTheme)"))
-        XCTAssertTrue(content.contains("v72 · "))
+        XCTAssertTrue(content.contains("v73 · "))
         XCTAssertTrue(share.contains("thumbnailSize: 76"))
         XCTAssertTrue(share.contains("Movimento do Fundo"))
         XCTAssertTrue(share.contains("Text(\"Desligado\")"))
