@@ -8,11 +8,15 @@ private final class OmniboxStubServer {
         let status: Int
         let data: Data
         let delay: TimeInterval
+        // Test-only ordering gate: avoids relying on simulator wall-clock delays.
+        let gate: DispatchSemaphore?
 
-        init(_ status: Int = 200, _ data: Data, delay: TimeInterval = 0) {
+        init(_ status: Int = 200, _ data: Data, delay: TimeInterval = 0,
+             gate: DispatchSemaphore? = nil) {
             self.status = status
             self.data = data
             self.delay = delay
+            self.gate = gate
         }
     }
 
@@ -46,6 +50,11 @@ private final class OmniboxStubProtocol: URLProtocol {
         let reply = OmniboxStubServer.shared.get(request)
         // Asynchronous delivery makes out-of-order responses reproducible.
         DispatchQueue.global().asyncAfter(deadline: .now() + reply.delay) { [weak self] in
+            // Only the explicitly gated test waits, on a background queue.
+            // The timeout prevents an XCTest failure from hanging the worker.
+            if let gate = reply.gate {
+                _ = gate.wait(timeout: .now() + 15)
+            }
             guard let self, let url = self.request.url,
                   let response = HTTPURLResponse(url: url, statusCode: reply.status,
                                                  httpVersion: nil, headerFields: nil) else { return }
@@ -77,9 +86,9 @@ final class OmniboxRobustnessTests: XCTestCase {
         try JSONEncoder().encode(values)
     }
 
-    private func wait(_ state: @escaping () -> Bool,
+    private func wait(_ state: @escaping () -> Bool, attempts: Int = 100,
                       file: StaticString = #filePath, line: UInt = #line) async {
-        for _ in 0..<100 {
+        for _ in 0..<attempts {
             if state() { return }
             try? await Task.sleep(for: .milliseconds(20))
         }
@@ -136,15 +145,22 @@ final class OmniboxRobustnessTests: XCTestCase {
     }
 
     func testPartialResultsArriveBeforeSuggestionsThenBecomeReady() async throws {
+        // The suggestion cannot beat the results, even on a heavily loaded CI
+        // simulator. This verifies the intermediate state without a timing race.
+        let suggestionGate = DispatchSemaphore(value: 0)
+        defer { suggestionGate.signal() }
         OmniboxStubServer.shared.set([
-            "/v1/search|track": .init(200, try hits([hit("aaaaaaaaaaa", name: "Track")]), delay: 0.01),
-            "/v1/suggest|track": .init(200, Data("[\"Track suggestion\"]".utf8), delay: 0.3)
+            "/v1/search|track": .init(200, try hits([hit("aaaaaaaaaaa", name: "Track")])),
+            "/v1/suggest|track": .init(200, Data("[\"Track suggestion\"]".utf8),
+                                      gate: suggestionGate)
         ])
         let engine = client()
         engine.submit("track")
-        await wait { engine.loadState == .partial && engine.results.first?.id == "aaaaaaaaaaa" }
+        await wait({ engine.loadState == .partial &&
+                     engine.results.first?.id == "aaaaaaaaaaa" }, attempts: 300)
         XCTAssertTrue(engine.isSearching)
-        await wait { engine.loadState == .ready && !engine.isSearching }
+        suggestionGate.signal()
+        await wait({ engine.loadState == .ready && !engine.isSearching }, attempts: 300)
         XCTAssertEqual(engine.suggestions, ["Track suggestion"])
     }
 

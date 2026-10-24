@@ -68,8 +68,16 @@ final class Stage73VisualChoiceTests: XCTestCase {
                                 encoding: .utf8)
         XCTAssertFalse(player.contains("creator.openStudio"),
                        "No redundant Criar button should collide with top-right Share")
-        XCTAssertFalse(player.contains(".overlay(alignment: .top) {"),
-                       "No separate centered top overlay can collide with Share")
+        // Scope the overlap check to the player's outer chrome only.
+        // The player card itself intentionally has its own top-aligned overlay.
+        let chromeStart = try XCTUnwrap(player.range(of: ".environment(liveUniforms)"))
+        let leadingBar = try XCTUnwrap(player.range(
+            of: ".overlay(alignment: .topLeading) {",
+            range: chromeStart.upperBound..<player.endIndex))
+        let chromeBeforeLeading = player[chromeStart.upperBound..<leadingBar.lowerBound]
+        XCTAssertFalse(chromeBeforeLeading.contains(".overlay(alignment: .top) {"),
+                       "No extra centered toolbar can cover the share controls")
+        XCTAssertTrue(player.contains(".overlay(alignment: .topTrailing) {"))
         XCTAssertTrue(player.contains("ShareButton("))
         XCTAssertTrue(player.contains("onChooseVisual: openVisualChoice"))
         XCTAssertTrue(chrome.contains("Text(\"Visual\")"))
