@@ -4,12 +4,17 @@ import SwiftUI
 struct EnvironmentBar: View {
     @Binding var theme: AppTheme
     let panels: [PanelID]
+    var onChooseVisual: (() -> Void)? = nil
+    var onSelectStandaloneTheme: ((AppTheme) -> Void)? = nil
     var microphoneActive = false
 
     var body: some View {
         HStack(spacing: 8) {
             PanelsMenuButton(panels: panels)
-            ThemeBoltButton(theme: $theme, microphoneActive: microphoneActive)
+            ThemeBoltButton(theme: $theme,
+                            onChooseVisual: onChooseVisual,
+                            onSelectStandaloneTheme: onSelectStandaloneTheme,
+                            microphoneActive: microphoneActive)
         }
     }
 }
@@ -24,16 +29,22 @@ extension View {
 
 struct ThemeBoltButton: View {
     @Binding var theme: AppTheme
+    var onChooseVisual: (() -> Void)? = nil
+    var onSelectStandaloneTheme: ((AppTheme) -> Void)? = nil
     var microphoneActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func select(_ next: AppTheme) {
         CreativeHaptics.selection(microphoneActive: microphoneActive)
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.45)) { theme = next }
+        if let onSelectStandaloneTheme { onSelectStandaloneTheme(next) }
+        else { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.45)) { theme = next } }
     }
 
     var body: some View {
-        Button { select(CreativeVisualTaxonomy.nextTheme(after: theme)) } label: {
+        Button {
+            if let onChooseVisual { onChooseVisual() }
+            else { select(CreativeVisualTaxonomy.nextTheme(after: theme)) }
+        } label: {
             Image(systemName: "bolt.fill")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(theme.accent)
@@ -66,8 +77,8 @@ struct ThemeBoltButton: View {
                 }
             }
         }
-        .accessibilityLabel("Trocar tema")
+        .accessibilityLabel(onChooseVisual == nil ? "Trocar tema" : "Escolher visual")
         .accessibilityValue("\(theme.displayName), \(theme.dominantColorName)")
-        .accessibilityHint("Toque para trocar tema. Toque e segure para escolher temas ou modos GNARLY.")
+        .accessibilityHint("Toque para escolher o visual; toque e segure para selecionar diretamente um tema e limpar experiências.")
     }
 }
