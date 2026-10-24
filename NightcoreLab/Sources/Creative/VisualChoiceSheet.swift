@@ -111,6 +111,18 @@ struct VisualChoiceSheet: View {
                                                          experienceID: experienceID))
                             .font(.subheadline.weight(.semibold))
                             .accessibilityIdentifier("visual.currentCombination")
+                        if isMixed {
+                            Button {
+                                previewMaterial()
+                                background = .marble
+                                experienceID = CreativePresetCatalog.defaultID
+                            } label: {
+                                Label("Voltar só ao tema \(theme.displayName)",
+                                      systemImage: "arrow.uturn.backward.circle")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .accessibilityIdentifier("visual.returnToTheme")
+                        }
                         Text("Toque para testar no fundo do player. Aplicar mantém a escolha; Cancelar restaura a anterior.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
