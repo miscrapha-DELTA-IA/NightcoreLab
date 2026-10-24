@@ -48,7 +48,7 @@ final class Stage71MaterialVisualTests: XCTestCase {
             "float terracing=17.0f+19.0f*age;",
             "return saturate(col);"
         ] {
-            XCTAssertTrue(source.contains(signature), "Missing Stage 72 material: \\(signature)")
+            XCTAssertTrue(source.contains(signature), "Missing Stage 72 material: \(signature)")
         }
         // Keep both entry points bound to ONE core: no duplicated live/export
         // geometry algorithms, no per-frame mutable simulation state.
