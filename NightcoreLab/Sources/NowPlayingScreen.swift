@@ -121,8 +121,8 @@ private struct VocalFXMacroBar: View {
     }
 }
 
-/// View-navigation state used directly by the centered Criar button.
-/// Opening Studio never mutates theme, preset, transport, or audio effects.
+/// Route for advanced tools opened from the Visual chooser.
+/// Opening tools never mutates the theme, transport, or audio effects.
 struct CreatorStudioRoute: Equatable {
     var isPresented = false
     mutating func toggle() { isPresented.toggle() }
@@ -335,7 +335,7 @@ private struct CreatorStudioPanel: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("Criar · Studio")
+            .navigationTitle("Ferramentas avançadas")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Concluído") { dismiss() }
