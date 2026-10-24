@@ -289,7 +289,10 @@ static inline float3 universeEval(float2 pos, float2 size, float time,
         float radius=max(0.023f,length(focus));
         float theta=atan2(focus.y,focus.x);
         float depth=min(34.0f,1.1f/radius);
-        float propulsion=t*(0.92f+1.42f*bass+0.36f*voice);
+        // Do NOT multiply the entire elapsed song time by live bass: that
+        // makes a kick at minute 3 teleport the tunnel hundreds of units.
+        // Baseline travel is source-time linear; reactive displacement bounded.
+        float propulsion=t*0.92f+1.42f*bass+0.36f*voice;
         // Advancing z is independent from redraw count; seeking reproduces
         // the same cell and the central vanishing point.
         float z=depth+propulsion;
