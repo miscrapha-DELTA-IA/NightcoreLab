@@ -125,6 +125,8 @@ struct ContentView: View {
     @State private var relatedRequestID = UUID()
     @State private var autoplayWhenRadioReady = false
     @State private var showServerSettings = false
+    @AppStorage("gnarly.hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @State private var showOnboarding = false
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
     @AppStorage("selectedTheme") private var currentTheme: AppTheme = .acid
@@ -220,6 +222,7 @@ struct ContentView: View {
     private var playerLifecycle: some View {
         playerCanvas
         .onAppear {
+            if !hasCompletedOnboarding { showOnboarding = true }
             restoreDiscoverExpansionPreference()
             if lyricsPrefetcher == nil { lyricsPrefetcher = LyricsPrefetcher(store: lyricsStore) }
             restoreLastSession()
@@ -324,6 +327,11 @@ struct ContentView: View {
 
     private var playerPresentations: some View {
         playerLifecycle
+        .fullScreenCover(isPresented: $showOnboarding, onDismiss: {
+            hasCompletedOnboarding = true
+        }) {
+            GnarlyOnboardingView(isPresented: $showOnboarding)
+        }
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
@@ -377,6 +385,9 @@ struct ContentView: View {
                     }
                     headerButton("heart.fill", label: "Apoiar o projeto") {
                         openURL(donationURL)
+                    }
+                    headerButton("questionmark.circle", label: "Rever o tutorial do Gnarly") {
+                        showOnboarding = true
                     }
 
                     // Mostra o ícone do modo para o qual o botão vai trocar
