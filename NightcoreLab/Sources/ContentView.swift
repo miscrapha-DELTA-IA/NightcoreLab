@@ -166,6 +166,8 @@ struct ContentView: View {
     @State private var relatedRequestID = UUID()
     @State private var autoplayWhenRadioReady = false
     @State private var showServerSettings = false
+    @AppStorage("gnarly.hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @State private var showOnboarding = false
 
     @AppStorage(TelemetryManager.enabledKey) private var telemetryEnabled = false
     @AppStorage("selectedTheme") private var currentTheme: AppTheme = .acid
@@ -305,6 +307,7 @@ struct ContentView: View {
     private var playerLifecycle: some View {
         offlineAwareCanvas
         .onAppear {
+            if !hasCompletedOnboarding { showOnboarding = true }
             let saved = CreativeSessionPreferences.load()
             currentTheme = saved.theme
             creativeReactionMode = saved.reactionMode
@@ -446,6 +449,11 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: drawerToast)
+        .fullScreenCover(isPresented: $showOnboarding, onDismiss: {
+            hasCompletedOnboarding = true
+        }) {
+            GnarlyOnboardingView(isPresented: $showOnboarding)
+        }
         .sheet(isPresented: $showServerSettings) {
             ServerSettingsView(downloader: downloader, accent: currentTheme.accent)
                 .presentationDetents([.medium])
@@ -502,6 +510,9 @@ struct ContentView: View {
                         headerButton("heart.fill", label: "Apoiar o projeto") {
                             openURL(donationURL)
                         }
+                        headerButton("questionmark.circle", label: "Rever o tutorial do Gnarly") {
+                            showOnboarding = true
+                        }
                         headerButton(isVertical ? "slider.horizontal.3" : "slider.vertical.3",
                                      label: isVertical ? "Sliders horizontais" : "Sliders verticais (mesa de som)") {
                             withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
@@ -518,6 +529,9 @@ struct ContentView: View {
                     }
                     Button("Apoiar o projeto", systemImage: "heart.fill") {
                         openURL(donationURL)
+                    }
+                    Button("Rever o tutorial do Gnarly", systemImage: "questionmark.circle") {
+                        showOnboarding = true
                     }
                     Button(isVertical ? "Sliders horizontais" : "Sliders verticais",
                            systemImage: "slider.vertical.3") {
