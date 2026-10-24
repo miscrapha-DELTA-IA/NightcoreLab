@@ -423,6 +423,7 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @State private var liveUniforms = CreativeLiveUniforms()
     @State private var sectionTracker = SongSectionTracker()
     @State private var creatorRoute = CreatorStudioRoute()
+    @State private var openAdvancedAfterVisualChoice = false
     @State private var showingVisualChoice = false
     @State private var visualChoiceApplied = false
     @State private var visualChoiceSnapshot: VisualSelectionSnapshot?
@@ -464,6 +465,12 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
         showingVisualChoice = false
     }
 
+    private func openAdvancedVisualTools() {
+        // Preserve access to pads, loops and sliders without another top-bar button.
+        openAdvancedAfterVisualChoice = true
+        closeVisualChoice(applied: true)
+    }
+
     private func finishVisualChoice() {
         if !visualChoiceApplied, let original = visualChoiceSnapshot {
             appTheme = original.theme
@@ -474,6 +481,10 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
             else { personalBackground.disable() }
         }
         visualChoiceSnapshot = nil
+        if openAdvancedAfterVisualChoice {
+            openAdvancedAfterVisualChoice = false
+            creatorRoute.isPresented = true
+        }
     }
     private var selectedVisualMaterial: VisualMaterial {
         CreativePresetCatalog.material(selection: creativePresetID)
@@ -648,32 +659,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                     .onTapGesture { panels.setZen(false) }
             }
         }
-        .overlay(alignment: .top) {
-            if isTrackLoaded {
-                HStack(spacing: 9) {
-                    Button(action: openVisualChoice) {
-                        Label("Visual", systemImage: "circle.hexagongrid.fill")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 14).frame(height: 36)
-                            .foregroundStyle(.white)
-                            .background(appTheme.accent.opacity(0.48), in: Capsule())
-                    }
-                    .accessibilityIdentifier("visual.openPicker")
-                    Button {
-                        creatorRoute.toggle()
-                    } label: {
-                        Label("Criar", systemImage: "wand.and.stars")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 14).frame(height: 36)
-                            .foregroundStyle(.white)
-                            .background(.regularMaterial, in: Capsule())
-                    }
-                    .accessibilityIdentifier("creator.openStudio")
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 18)
-            }
-        }
         .overlay(alignment: .topLeading) {
             HStack(spacing: 8) {
                 EnvironmentBar(theme: $appTheme,
@@ -781,7 +766,8 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 reaction: $reactionMode, background: $backgroundStyle,
                 previewMaterial: { personalBackground.disable() },
                 cancel: { closeVisualChoice(applied: false) },
-                apply: { closeVisualChoice(applied: true) })
+                apply: { closeVisualChoice(applied: true) },
+                openAdvanced: openAdvancedVisualTools)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
