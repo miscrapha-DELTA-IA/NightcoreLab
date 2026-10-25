@@ -152,7 +152,7 @@ struct LyricsView: View {
         transcriptionMessage = nil
         Task {
             let outcome = await lyricStore.transcribeCurrentAudio(
-                sourceURL: audio.visualAnalysisURL, duration: audio.duration)
+                sourceURL: audio.lyricsTranscriptionSourceURL, duration: audio.duration)
             transcriptionMessage = outcome.message
             transcribingAudio = false
         }
