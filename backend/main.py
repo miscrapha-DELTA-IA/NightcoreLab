@@ -55,7 +55,8 @@ import yt_dlp
 import audio_sources
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse
+from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field, HttpUrl
 
 from lyrics_alignment import AlignmentError, generate_enhanced_lrc
@@ -515,11 +516,12 @@ def search(query: str = Query(min_length=1, max_length=200)):
 
 
 @app.get("/download")
-async def background_download(url: HttpUrl, background_tasks: BackgroundTasks,
+async def background_download(url: HttpUrl, background_tasks: BackgroundTasks, request: Request,
                               delivery: str = "audio"):
     """Background URLSession compatible GET, sharing the POST extraction."""
     _youtube_video_id(str(url))
-    return await download(DownloadRequest(url=url), background_tasks, delivery=delivery)
+    return await download(DownloadRequest(url=url), background_tasks, delivery=delivery,
+                          browser_range=request.headers.get("range"))
 
 
 @app.head("/download")
@@ -743,7 +745,38 @@ async def _release_response(video_id: str, entry: InFlightDownload) -> None:
     await _release_download(video_id, entry)
 
 
-async def _try_r2(video_id: str, delivery: str, method: str = "GET"):
+
+async def _r2_browser_stream(signed_url: str, requested_range: str | None) -> StreamingResponse:
+    """Stream a private R2 cache hit through the existing Render audio origin.
+
+    Native iOS clients keep their zero-copy R2 redirect. Browser playback uses
+    this opt-in path to avoid a second cross-origin hop in Safari/Web Audio.
+    Never buffer the complete M4A file in RAM.
+    """
+    assert r2_cache is not None
+    headers = {}
+    if requested_range and re.fullmatch(r"bytes=\\d+-\\d*", requested_range):
+        headers["Range"] = requested_range
+    request = r2_cache.client.build_request("GET", signed_url, headers=headers)
+    upstream = await r2_cache.client.send(request, stream=True)
+    if upstream.status_code not in (200, 206):
+        status = upstream.status_code
+        await upstream.aclose()
+        raise ValueError(f"R2 upstream playback status {status}")
+    forwarded = {
+        name: upstream.headers[name]
+        for name in ("Content-Length", "Content-Range", "Accept-Ranges", "ETag")
+        if name in upstream.headers
+    }
+    forwarded.update({"Cache-Control": "no-store", "Content-Type": "audio/mp4",
+                      "X-Gnarly-Playback-Source": "r2-stream"})
+    return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code,
+                             media_type="audio/mp4", headers=forwarded,
+                             background=BackgroundTask(upstream.aclose))
+
+
+async def _try_r2(video_id: str, delivery: str, method: str = "GET",
+                  browser_range: str | None = None):
     if not r2_cache:
         return None
     try:
@@ -753,6 +786,8 @@ async def _try_r2(video_id: str, delivery: str, method: str = "GET"):
         signed = (r2_cache.presigned_head(f"{video_id}/audio.m4a") if method == "HEAD"
                   else r2_cache.presigned_get(f"{video_id}/audio.m4a"))
         _counters["cache_r2_hits"] += 1
+        if delivery == "browser" and method == "GET":
+            return await _r2_browser_stream(signed, browser_range)
         if delivery == "url":
             return JSONResponse({"url": signed, "expires_in": SIGNED_URL_SECONDS},
                                 headers={"Cache-Control": "no-store"})
@@ -792,13 +827,14 @@ def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | 
 
 @app.post("/download")
 async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
-                   redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET"):
+                   redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET",
+                   browser_range: str | None = None):
     url = str(request.url)
     video_id = _youtube_video_id(url)
-    if delivery not in {"audio", "url"}:
+    if delivery not in {"audio", "url", "browser"}:
         raise HTTPException(status_code=400, detail="Modo de entrega inválido.")
     if redirect_cache:
-        remote = await _try_r2(video_id, delivery, r2_method)
+        remote = await _try_r2(video_id, delivery, r2_method, browser_range=browser_range)
         if remote is not None:
             return remote
     entry = in_flight_downloads.get(video_id)
