@@ -64,7 +64,7 @@ final class KaraokeExperienceTests: XCTestCase {
             $0.provenance == .autoTranscribed || $0.provenance == .rhythmicCue
         })
         let cached = await AutoLyricsCache.shared.load(trackID: trackID,
-            fingerprint: AutoLyricsTranscriber.fingerprint(source: url) + "|")
+            fingerprint: AutoLyricsTranscriber.fingerprint(source: url) + "|speech:" + AutoLyricsTranscriber.selectedLocaleIdentifier)
         XCTAssertEqual(cached, store.lines)
     }
 
