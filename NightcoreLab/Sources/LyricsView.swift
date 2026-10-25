@@ -109,6 +109,8 @@ struct LyricsView: View {
     @State private var manualQuery = ""
     @State private var manualSearchID = UUID()
     @State private var manualSearching = false
+    @State private var transcribingAudio = false
+    @State private var transcriptionMessage: String?
     @State private var pickerError: String?
     @State private var loading = true
     @State private var errorMessage: String?
@@ -142,6 +144,18 @@ struct LyricsView: View {
             Task { await prefetcher.pin(choice, for: track.id) }
         }
         errorMessage = nil
+    }
+
+    private func generateAudioLyrics() {
+        guard !transcribingAudio else { return }
+        transcribingAudio = true
+        transcriptionMessage = nil
+        Task {
+            let outcome = await lyricStore.transcribeCurrentAudio(
+                sourceURL: audio.visualAnalysisURL, duration: audio.duration)
+            transcriptionMessage = outcome.message
+            transcribingAudio = false
+        }
     }
 
     private func colorModeButton(_ mode: LyricsColorMode) -> some View {
@@ -309,6 +323,38 @@ struct LyricsView: View {
                     .padding(.horizontal, 22)
                 }
 
+                if lyricStore.lines.contains(where: {
+                    $0.provenance == .rhythmicCue
+                }) && !lyricStore.lines.contains(where: {
+                    $0.provenance == .autoTranscribed
+                }) {
+                    HStack(spacing: 8) {
+                        Text("Guia rítmico disponível · sem palavras confirmadas")
+                            .font(.caption2).foregroundStyle(.white.opacity(0.72))
+                        Spacer(minLength: 6)
+                        Button("Gerar letra", action: generateAudioLyrics)
+                            .font(.caption.weight(.bold))
+                            .disabled(transcribingAudio)
+                            .accessibilityIdentifier("lyrics.generateFromRhythmicGuide")
+                    }
+                    .padding(.horizontal, 22)
+                } else if lyricStore.lines.contains(where: {
+                    $0.provenance == .autoTranscribed
+                }) {
+                    Text("Letra gerada automaticamente · sincronização estimada")
+                        .font(.caption2).foregroundStyle(.white.opacity(0.72))
+                        .padding(.horizontal, 22)
+                }
+                if transcribingAudio {
+                    ProgressView("Transcrevendo áudio local…")
+                        .tint(theme.accent)
+                }
+                if let transcriptionMessage {
+                    Text(transcriptionMessage)
+                        .font(.caption).foregroundStyle(.white.opacity(0.78))
+                        .padding(.horizontal, 22)
+                }
+
                 if !inline && !lyricStore.lines.isEmpty {
                     HStack(spacing: 10) {
                         Text("SINCRONIA")
@@ -380,6 +426,15 @@ struct LyricsView: View {
                     Button("Escolher letra manualmente") { isChoosingLyrics = true }
                         .buttonStyle(.borderedProminent)
                         .tint(theme.accent)
+                    Button(action: generateAudioLyrics) {
+                        Label("Gerar letra do áudio", systemImage: "waveform")
+                    }
+                    .disabled(transcribingAudio)
+                    .accessibilityIdentifier("lyrics.generateFromAudio")
+                    if transcribingAudio { ProgressView("Transcrevendo no iPhone…") }
+                    if let transcriptionMessage {
+                        Text(transcriptionMessage).font(.footnote).foregroundStyle(.white.opacity(0.75))
+                    }
                     Spacer()
                 }
             }
@@ -404,6 +459,7 @@ struct LyricsView: View {
         .task(id: track.id) {
             loading = true
             errorMessage = nil
+            transcriptionMessage = nil
             record = nil
             candidates = []
             manualCandidates = []
