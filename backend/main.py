@@ -53,6 +53,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 import audio_sources
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
@@ -252,6 +253,25 @@ async def _search_http_cache(request: Request, call_next):
         headers["Content-Encoding"] = "gzip"
     return Response(content=body, status_code=200, headers=headers)
 
+
+# GNARLY WEB: allow its exact browser origin to consume the same M4A response
+# that the native iOS AudioDownloadManager receives from /download.
+# This is a browser CORS policy, NOT user authentication or content permission.
+# Keep /download's existing rate limiting, token policy, host validation,
+# duration limits, extraction concurrency and cache rules unchanged.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://gnarlyweb.netlify.app",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "HEAD", "OPTIONS"],
+    allow_headers=["Range", "Accept", "Content-Type"],
+    expose_headers=["Content-Length", "Content-Range", "Accept-Ranges", "X-Cover-Url"],
+    max_age=3600,
+)
 
 @app.exception_handler(HTTPException)
 async def _structured_http_error(_request: Request, error: HTTPException):
