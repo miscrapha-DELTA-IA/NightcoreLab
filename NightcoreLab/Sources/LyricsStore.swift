@@ -22,6 +22,25 @@ extension PlaybackClock {
 
 enum LyricsStatus: Equatable, Sendable { case idle, searching, ready, unavailable }
 
+enum AudioLyricsGenerationOutcome: Equatable {
+    case generatedWords, rhythmicOnly, permissionDenied, missingAudio, trackChanged
+
+    var message: String {
+        switch self {
+        case .generatedWords:
+            return "Letra transcrita do áudio. Confira as palavras e a sincronização: o resultado é estimado."
+        case .rhythmicOnly:
+            return "Não foi possível reconhecer palavras com segurança. O guia rítmico continua disponível; tente outro idioma ou escolha uma letra."
+        case .permissionDenied:
+            return "Autorize Reconhecimento de Fala nos Ajustes do iPhone para gerar letras localmente."
+        case .missingAudio:
+            return "Reproduza ou baixe a música primeiro para gerar a letra a partir do áudio local."
+        case .trackChanged:
+            return "A faixa mudou durante a transcrição. Nenhuma letra de outra música foi aplicada."
+        }
+    }
+}
+
 /// Vive no root do app (@State no App) e é injetado via .environment.
 /// A sheet de karaokê só LÊ; fechar a sheet não destrói nada.
 ///
@@ -163,7 +182,8 @@ final class LyricsStore {
         let bars = latestDNA?.barTimestamps ?? []
         let generateFallback = fallbackGenerator
         let fingerprint = AutoLyricsTranscriber.fingerprint(source: sourceURL) +
-            "|" + (plainText ?? "")
+            "|" + (plainText ?? "") +
+            (plainText == nil ? "|speech:\(AutoLyricsTranscriber.selectedLocaleIdentifier)" : "")
         loadTask = Task.detached(priority: .utility) { [weak self] in
             if let cached = await AutoLyricsCache.shared.load(trackID: trackID,
                                                                fingerprint: fingerprint),
@@ -191,6 +211,24 @@ final class LyricsStore {
                                               fingerprint: fingerprint)
         }
         return loadTask
+    }
+
+    /// Explicit local transcription: never starts recognition without the user's consent.
+    /// The fallback generation remains utility-priority and does not pause playback.
+    func transcribeCurrentAudio(sourceURL: URL?, duration: TimeInterval) async -> AudioLyricsGenerationOutcome {
+        guard let originalTrackID = trackID, let sourceURL, sourceURL.isFileURL,
+              FileManager.default.fileExists(atPath: sourceURL.path), duration > 0 else {
+            return .missingAudio
+        }
+        guard await AutoLyricsTranscriber.requestPermission() else { return .permissionDenied }
+        guard trackID == originalTrackID else { return .trackChanged }
+        let work = loadFallback(trackID: originalTrackID, plainText: nil,
+                                sourceURL: sourceURL, duration: duration,
+                                force: true, retryRecognition: true)
+        await work?.value
+        guard trackID == originalTrackID else { return .trackChanged }
+        return lines.contains(where: { $0.provenance == .autoTranscribed })
+            ? .generatedWords : .rhythmicOnly
     }
 
     private func installFallback(_ generated: [TimedLyricLine], trackID: String, generation: UUID) {

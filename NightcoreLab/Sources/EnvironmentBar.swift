@@ -4,17 +4,12 @@ import SwiftUI
 struct EnvironmentBar: View {
     @Binding var theme: AppTheme
     let panels: [PanelID]
-    var onChooseVisual: (() -> Void)? = nil
-    var onSelectStandaloneTheme: ((AppTheme) -> Void)? = nil
     var microphoneActive = false
 
     var body: some View {
         HStack(spacing: 8) {
             PanelsMenuButton(panels: panels)
-            ThemeBoltButton(theme: $theme,
-                            onChooseVisual: onChooseVisual,
-                            onSelectStandaloneTheme: onSelectStandaloneTheme,
-                            microphoneActive: microphoneActive)
+            ThemeBoltButton(theme: $theme, microphoneActive: microphoneActive)
         }
     }
 }
@@ -29,37 +24,20 @@ extension View {
 
 struct ThemeBoltButton: View {
     @Binding var theme: AppTheme
-    var onChooseVisual: (() -> Void)? = nil
-    var onSelectStandaloneTheme: ((AppTheme) -> Void)? = nil
     var microphoneActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func select(_ next: AppTheme) {
         CreativeHaptics.selection(microphoneActive: microphoneActive)
-        if let onSelectStandaloneTheme { onSelectStandaloneTheme(next) }
-        else { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.45)) { theme = next } }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.45)) { theme = next }
     }
 
     var body: some View {
-        Button {
-            if let onChooseVisual { onChooseVisual() }
-            else { select(CreativeVisualTaxonomy.nextTheme(after: theme)) }
-        } label: {
-            Group {
-                if onChooseVisual != nil {
-                    VStack(spacing: 0) {
-                        Image(systemName: "circle.hexagongrid.fill")
-                            .font(.system(size: 15, weight: .semibold))
-                        Text("Visual")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                } else {
-                    Image(systemName: "bolt.fill")
-                        .font(.system(size: 18, weight: .bold))
-                }
-            }
-            .foregroundStyle(theme.accent)
-            .environmentButtonSurface()
+        Button { select(CreativeVisualTaxonomy.nextTheme(after: theme)) } label: {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(theme.accent)
+                .environmentButtonSurface()
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -88,9 +66,8 @@ struct ThemeBoltButton: View {
                 }
             }
         }
-        .accessibilityLabel(onChooseVisual == nil ? "Trocar tema" : "Escolher visual")
-        .accessibilityIdentifier(onChooseVisual == nil ? "theme.next" : "visual.openPicker")
+        .accessibilityLabel("Trocar tema")
         .accessibilityValue("\(theme.displayName), \(theme.dominantColorName)")
-        .accessibilityHint("Toque para escolher o visual; toque e segure para selecionar diretamente um tema e limpar experiências.")
+        .accessibilityHint("Toque para trocar tema. Toque e segure para escolher temas ou modos GNARLY.")
     }
 }

@@ -158,7 +158,6 @@ struct TurbulentMarbleView: View {
     @State private var start = Date()
     @State private var motion = MarbleMotionState()
     @State private var organic = OrganicReactiveMotionState()
-    @State private var creativeAudio = CreativeVisualEnvelope()
     @Environment(\.energyBudget) private var energyBudget
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -191,17 +190,10 @@ struct TurbulentMarbleView: View {
                             ? 1 : sectionCadence.flowSpeed))
                     let responsiveEnergy = reactionMode == .responsive
                         ? organic.advance(date: context.date, levels: levels) : 0
-                    // PCM snapshots arrive at 30Hz. Directly feeding the latest
-                    // value to a material's geometry at 60Hz makes the geometry
-                    // jump every other frame. Smooth only creative-look inputs;
-                    // preserve the excellent original Gnarly/Marble response.
-                    let smoothLevels = creativeAudio.advance(
-                        date: context.date, levels: levels, mode: reactionMode)
                     marbleFrame(
                         time: now,
                         resolved: resolvedFrame(live: true, levels: levels,
-                                                responsiveEnergy: responsiveEnergy),
-                        creativeLevels: smoothLevels)
+                                                responsiveEnergy: responsiveEnergy))
                 }
             }
         }
@@ -269,28 +261,24 @@ struct TurbulentMarbleView: View {
         return authored?.map { Color(materialHex: $0) }
     }
 
-    private func marbleFrame(time: Float, resolved: MaterialFrame,
-                             creativeLevels: LiveAudioLevels = .silence) -> some View {
+    private func marbleFrame(time: Float, resolved: MaterialFrame) -> some View {
         let scale = frozenTime == nil ? energyBudget.liveShaderScale : 1
         return GeometryReader { geometry in
             if scale < 1 {
-                marbleSurface(time: time, resolved: resolved,
-                              creativeLevels: creativeLevels)
+                marbleSurface(time: time, resolved: resolved)
                     .frame(width: geometry.size.width * scale, height: geometry.size.height * scale)
                     // Rasterize at the smaller size BEFORE magnification;
                     // otherwise a vector transform can still shade every pixel.
                     .drawingGroup(opaque: true)
                     .scaleEffect(1 / scale, anchor: .topLeading)
             } else {
-                marbleSurface(time: time, resolved: resolved,
-                              creativeLevels: creativeLevels)
+                marbleSurface(time: time, resolved: resolved)
             }
         }
         .clipped()
     }
 
-    private func marbleSurface(time: Float, resolved: MaterialFrame,
-                               creativeLevels: LiveAudioLevels) -> some View {
+    private func marbleSurface(time: Float, resolved: MaterialFrame) -> some View {
         let gnarly = theme == .gnarly
             ? GnarlyThemeEngine.sample(sourceTime: sourceClock?.lyricTime ?? sourceTime,
                                        duration: sourceDuration,
@@ -317,25 +305,19 @@ struct TurbulentMarbleView: View {
                 duration: sourceDuration, artworkHue: artworkHue,
                 theme: theme)
         } ?? []
-        // The live 30Hz meter is smoothed at shader cadence. Do not bypass
-        // its envelope by max-ing direct unsmoothed material signals over it.
-        // Frozen Story frames continue using their precomputed audio envelope.
-        let isReacting = reactionMode != .off
-        let isExport = frozenTime != nil
-        let creativeLow: Double = !isReacting ? 0 :
-            (isExport ? max(output.signals.bass, output.parameters.beatPulse) :
-                        creativeLevels.bass)
-        let creativeMid: Double = !isReacting ? 0 :
-            (isExport ? output.signals.energy : creativeLevels.mid)
-        let creativeHigh: Double = !isReacting ? 0 :
-            (isExport ? output.signals.brightness : creativeLevels.onset)
-        // The mineral/terrace variants can shade 18 neighboring sites or
-        // three extra fBm gradients per pixel. Protect live frame cadence:
-        // use the existing low-cost shader branches; Story stays at full detail.
-        let normalQuality = energyBudget.secondaryShaderQuality
-        let detailQuality: Float = isExport ? 1 :
-            ((creativeLook == 9 || creativeLook == 13)
-                ? min(0.60, normalQuality) : normalQuality)
+        let creativeLevels = frozenTime == nil && reactionMode != .off
+            ? (liveMeter?.snapshot() ?? .silence) : .silence
+        let creativeLow = reactionMode == .off ? 0 :
+            max(creativeLevels.bass, output.signals.bass, output.parameters.beatPulse)
+        let creativeMid = reactionMode == .off ? 0 :
+            max(creativeLevels.mid, output.signals.energy)
+        let creativeHigh = reactionMode == .off ? 0 :
+            max(creativeLevels.onset, output.signals.brightness)
+        // Secondary details are gated under thermal pressure; main flow,
+        // palette and timestamp stay identical and never allocate bitmaps.
+        // Export paths are frozen and never inherit live thermal degradation.
+        let detailQuality: Float = frozenTime == nil
+            ? energyBudget.secondaryShaderQuality : 1
         return Rectangle()
             .fill(.black)
             .visualEffect { content, proxy in
@@ -548,47 +530,6 @@ private final class OrganicReactiveMotionState {
     }
 }
 
-
-/// Stage 73: small, display-cadence envelope for heavy procedural looks.
-/// Mutated only by TimelineView's leaf; no @Published changes and no FFT work.
-@MainActor
-final class CreativeVisualEnvelope {
-    private var lastDate: Date?
-    private var bass = 0.0
-    private var mids = 0.0
-    private var highs = 0.0
-
-    func advance(date: Date, levels: LiveAudioLevels,
-                 mode: CreativePreset.AudioReaction) -> LiveAudioLevels {
-        defer { lastDate = date }
-        guard mode != .off else {
-            bass = 0; mids = 0; highs = 0
-            return .silence
-        }
-        let dt = min(0.1, max(0, lastDate.map { date.timeIntervalSince($0) } ?? 0))
-        // Relative to audio captures, "Suave" is lower amplitude and slower
-        // release, not an independently slowed or stepped animation timeline.
-        let subtle = mode == .subtle
-        let targetBass = min(1, max(0, subtle
-            ? levels.songEnergy * 0.20 + levels.bass * 0.14
-            : levels.bass * 0.68 + levels.beatPulse * 0.32))
-        let targetMid = min(1, max(0, subtle
-            ? levels.songEnergy * 0.28
-            : levels.mid * 0.78 + levels.songEnergy * 0.22))
-        let targetHigh = min(1, max(0, subtle
-            ? levels.songEnergy * 0.08
-            : levels.onset * 0.46 + levels.beatPulse * 0.25))
-        func filter(_ current: Double, _ target: Double) -> Double {
-            let tau = subtle ? 0.34 : (target > current ? 0.11 : 0.23)
-            return current + (target - current) * (1 - exp(-dt / tau))
-        }
-        bass = filter(bass, targetBass)
-        mids = filter(mids, targetMid)
-        highs = filter(highs, targetHigh)
-        return LiveAudioLevels(rms: 0, bass: bass, mid: mids,
-                               onset: highs, beatPulse: 0, songEnergy: 0)
-    }
-}
 
 /// Real Creator sliders are projected into the same GPU uniforms consumed by
 /// the visible background. Identity sliders preserve existing pixels.

@@ -121,8 +121,8 @@ private struct VocalFXMacroBar: View {
     }
 }
 
-/// Route for advanced tools opened from the Visual chooser.
-/// Opening tools never mutates the theme, transport, or audio effects.
+/// View-navigation state used directly by the centered Criar button.
+/// Opening Studio never mutates theme, preset, transport, or audio effects.
 struct CreatorStudioRoute: Equatable {
     var isPresented = false
     mutating func toggle() { isPresented.toggle() }
@@ -132,8 +132,7 @@ struct CreatorStudioRoute: Equatable {
 /// package store rather than a new preset catalogue.
 private struct CreatorStudioPanel: View {
     let track: TrackInfo
-    @Binding var theme: AppTheme
-    let onVisualChange: () -> Void
+    let theme: AppTheme
     let store: CreativePresetPackageStore
     let audio: AudioEngineManager
     @Binding var selectedPresetID: String
@@ -150,16 +149,10 @@ private struct CreatorStudioPanel: View {
         CreativePresetCatalog.selectableExperiences
     @Environment(\.dismiss) private var dismiss
 
-    private func selectExperience(_ id: String) {
-        onVisualChange()
-        theme = VisualChoiceResolver.baseThemeForExperience(current: theme)
-        selectedPresetID = id
-    }
-
     @ViewBuilder
     private func experienceOption(_ experience: CreativeExperiencePreset) -> some View {
         Button {
-            selectExperience(experience.id)
+            selectedPresetID = experience.id
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -198,26 +191,16 @@ private struct CreatorStudioPanel: View {
                             .foregroundStyle(theme.accent)
                         Text(CreativeVisualTaxonomy.roleExplanation)
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("O botão Visual no player mostra as opções de forma simples. Aqui você pode combinar experiências e ajustar outros recursos de criação.")
+                        Text("Escolha um tema no raio para mudar materiais e cores. Aqui você escolhe como eles se movimentam. Os modos GNARLY assumem o visual enquanto ativos, sem apagar a experiência escolhida.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     .padding(12)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityIdentifier("creator.visualTaxonomy")
-                    if selectedPresetID != CreativePresetCatalog.defaultID {
-                        Button {
-                            onVisualChange()
-                            selectedPresetID = CreativePresetCatalog.defaultID
-                        } label: {
-                            Label("Voltar ao visual puro de \(theme.displayName)",
-                                  systemImage: "arrow.uturn.backward.circle")
-                        }
-                        .accessibilityIdentifier("creator.clearExperience")
-                    }
                     if let suggestedPresetID,
                        CreativePresetCatalog.isLiveExperience(suggestedPresetID) {
                         Button("Aplicar sugestão: \(suggestedPresetID)") {
-                            selectExperience(suggestedPresetID)
+                            selectedPresetID = suggestedPresetID
                         }
                         .accessibilityIdentifier("creator.suggested")
                     }
@@ -302,15 +285,13 @@ private struct CreatorStudioPanel: View {
                         set: { controls.vocalFX = $0 }),
                         monitoringSafe: audio.vocalMonitoringEnabled)
                     Divider()
-                    Picker("Reação à música", selection: $reactionMode) {
-                        Text("Contínuo").tag(CreativePreset.AudioReaction.off)
-                        Text("Suave").tag(CreativePreset.AudioReaction.subtle)
-                        Text("Intenso").tag(CreativePreset.AudioReaction.responsive)
+                    Picker("Ritmo visual", selection: $reactionMode) {
+                        Text("Desligado").tag(CreativePreset.AudioReaction.off)
+                        Text("Fluido").tag(CreativePreset.AudioReaction.subtle)
+                        Text("Reativo").tag(CreativePreset.AudioReaction.responsive)
                     }
                     .pickerStyle(.segmented)
-                    Text("Contínuo mantém a animação, Suave acompanha a energia, Intenso enfatiza batidas. Não troca o visual.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Text("Troque o desenho em Visual; use estas opções só para a intensidade da reação.")
+                    Text("Desligado = sem resposta ao áudio · Fluido = suave · Reativo = intenso.")
                         .font(.caption2).foregroundStyle(.secondary)
                     if reactionMode == .off {
                         Button("Ativar reação ao áudio nesta experiência") {
@@ -335,7 +316,7 @@ private struct CreatorStudioPanel: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("Ferramentas avançadas")
+            .navigationTitle("Criar · Studio")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Concluído") { dismiss() }
@@ -423,10 +404,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @State private var liveUniforms = CreativeLiveUniforms()
     @State private var sectionTracker = SongSectionTracker()
     @State private var creatorRoute = CreatorStudioRoute()
-    @State private var openAdvancedAfterVisualChoice = false
-    @State private var showingVisualChoice = false
-    @State private var visualChoiceApplied = false
-    @State private var visualChoiceSnapshot: VisualSelectionSnapshot?
     @State private var creatorControls = CreatorControls()
     @State private var suggestedSongProfile: SongCreativeProfile?
     @State private var activeSongProfile: SongCreativeProfile?
@@ -450,42 +427,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
     @AppStorage("story.lyricTypography") private var storyTypography: TypographyFont = .classic
 
     private var showsKaraoke: Bool { isTrackLoaded && canShowKaraoke && isKaraokeMode }
-
-    private func openVisualChoice() {
-        visualChoiceSnapshot = VisualSelectionSnapshot(
-            theme: appTheme, experienceID: creativePresetID,
-            reaction: reactionMode, background: backgroundStyle,
-            personalPhotoWasActive: personalBackground.activeSnapshot != nil)
-        visualChoiceApplied = false
-        showingVisualChoice = true
-    }
-
-    private func closeVisualChoice(applied: Bool) {
-        visualChoiceApplied = applied
-        showingVisualChoice = false
-    }
-
-    private func openAdvancedVisualTools() {
-        // Preserve access to pads, loops and sliders without another top-bar button.
-        openAdvancedAfterVisualChoice = true
-        closeVisualChoice(applied: true)
-    }
-
-    private func finishVisualChoice() {
-        if !visualChoiceApplied, let original = visualChoiceSnapshot {
-            appTheme = original.theme
-            creativePresetID = original.experienceID
-            reactionMode = original.reaction
-            backgroundStyle = original.background
-            if original.personalPhotoWasActive { personalBackground.enable() }
-            else { personalBackground.disable() }
-        }
-        visualChoiceSnapshot = nil
-        if openAdvancedAfterVisualChoice {
-            openAdvancedAfterVisualChoice = false
-            creatorRoute.isPresented = true
-        }
-    }
     private var selectedVisualMaterial: VisualMaterial {
         CreativePresetCatalog.material(selection: creativePresetID)
     }
@@ -590,8 +531,6 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                         .transition(.lyricsReveal)
                     if KaraokeCleanLayout.showsQuickThemeBar(cleanMode: lyricsCleanMode) {
                         KaraokeBottomBar(theme: $appTheme, background: $backgroundStyle,
-                                         experienceID: $creativePresetID,
-                                         onChooseVisual: openVisualChoice,
                                          microphoneActive: audio.karaokeMicrophoneActive)
                             .padding(.bottom, 12)
                             .hideablePanel(.themes, edge: .bottom)
@@ -659,17 +598,26 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                     .onTapGesture { panels.setZen(false) }
             }
         }
+        .overlay(alignment: .top) {
+            if isTrackLoaded {
+                Button {
+                    creatorRoute.toggle()
+                } label: {
+                    Label("Criar", systemImage: "wand.and.stars")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 14).frame(height: 36)
+                        .foregroundStyle(.white)
+                        .background(.regularMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("creator.openStudio")
+                .padding(.top, 18)
+            }
+        }
         .overlay(alignment: .topLeading) {
             HStack(spacing: 8) {
                 EnvironmentBar(theme: $appTheme,
                                panels: showsKaraoke ? PanelID.karaokePanels : PanelID.mainPanels,
-                               onChooseVisual: openVisualChoice,
-                               onSelectStandaloneTheme: { option in
-                                   creativePresetID = CreativePresetCatalog.defaultID
-                                   appTheme = option
-                                   personalBackground.disable()
-                                   backgroundStyle = .marble
-                               },
                                microphoneActive: audio.karaokeMicrophoneActive)
                 Menu {
                     Button("Tema visual", systemImage: "sparkles") {
@@ -760,25 +708,9 @@ struct NowPlayingScreen<Header: View, PlayerDetails: View, DrawerContent: View, 
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showingVisualChoice, onDismiss: finishVisualChoice) {
-            VisualChoiceSheet(
-                theme: $appTheme, experienceID: $creativePresetID,
-                reaction: $reactionMode, background: $backgroundStyle,
-                previewMaterial: { personalBackground.disable() },
-                cancel: { closeVisualChoice(applied: false) },
-                apply: { closeVisualChoice(applied: true) },
-                openAdvanced: openAdvancedVisualTools)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .interactiveDismissDisabled()
-        }
         .sheet(isPresented: $creatorRoute.isPresented) {
             CreatorStudioPanel(
-                track: track, theme: $appTheme,
-                onVisualChange: {
-                    personalBackground.disable()
-                    backgroundStyle = .marble
-                },
+                track: track, theme: appTheme,
                 store: songProfileStore, audio: audio,
                 selectedPresetID: $creativePresetID,
                 reactionMode: $reactionMode,
@@ -1662,8 +1594,6 @@ private struct BlurredCover: View {
 private struct KaraokeBottomBar: View {
     @Binding var theme: AppTheme
     @Binding var background: BackgroundStyle
-    @Binding var experienceID: String
-    let onChooseVisual: () -> Void
     var microphoneActive = false
     @AppStorage("karaokeTypography") private var typography: TypographyStyle = .neon
     @Namespace private var ns
@@ -1677,10 +1607,7 @@ private struct KaraokeBottomBar: View {
                         ForEach(CreativeVisualTaxonomy.selectableThemes) { t in
                             Button {
                                 CreativeHaptics.selection(microphoneActive: microphoneActive)
-                                withAnimation(.snappy(duration: 0.35)) {
-                                    theme = t
-                                    experienceID = CreativePresetCatalog.defaultID
-                                }
+                                withAnimation(.snappy(duration: 0.35)) { theme = t }
                             } label: { swatch(t) }
                             .buttonStyle(.plain)
                             .accessibilityLabel(t.displayName)
@@ -1704,10 +1631,7 @@ private struct KaraokeBottomBar: View {
                 ForEach(CreativeVisualTaxonomy.gnarlyModes) { mode in
                     Button {
                         CreativeHaptics.selection(microphoneActive: microphoneActive)
-                        withAnimation(.snappy(duration: 0.35)) {
-                            theme = mode
-                            experienceID = CreativePresetCatalog.defaultID
-                        }
+                        withAnimation(.snappy(duration: 0.35)) { theme = mode }
                     } label: {
                         Label(mode.displayName,
                               systemImage: theme == mode ? "checkmark.circle.fill" : "circle")
@@ -1723,15 +1647,6 @@ private struct KaraokeBottomBar: View {
             .accessibilityLabel("Modos GNARLY")
             .accessibilityValue(CreativeVisualTaxonomy.gnarlyModes.contains(theme)
                                  ? theme.displayName : "Inativo")
-
-            Button(action: onChooseVisual) {
-                Image(systemName: "square.stack.3d.up.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 36, height: 40)
-                    .foregroundStyle(.white)
-            }
-            .accessibilityLabel("Escolher visual e combinar experiências")
-            .accessibilityIdentifier("visual.openPicker.karaoke")
 
             Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 26)
 

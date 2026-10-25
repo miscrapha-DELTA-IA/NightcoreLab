@@ -236,6 +236,16 @@ final class AudioEngineManager {
     /// Read-only source for offline visual evidence. Live RMS/bass are
     /// independently obtained from the existing mixer through liveVisualMeter.
     var visualAnalysisURL: URL? { sourceURL }
+
+    /// Use a full-length already-prepared vocal stem for clearer local speech
+    /// recognition. Never launch separation just to generate lyrics.
+    var lyricsTranscriptionSourceURL: URL? {
+        if stemsAvailable, let vocal = neuralStems.asset?.vocalURL,
+           vocal.isFileURL, FileManager.default.fileExists(atPath: vocal.path) {
+            return vocal
+        }
+        return sourceURL
+    }
     @ObservationIgnored private var needsScheduling = true
     @ObservationIgnored private(set) var scheduleGeneration = 0
     private(set) var isReconfiguringGraph = false

@@ -57,34 +57,26 @@ final class Stage73VisualChoiceTests: XCTestCase {
             levels: loud, mode: .off), .silence)
     }
 
-    func testStage74NoCreateShortcutOverlapAndAdvancedControlsRemainAccessible() throws {
+    func testRestoreBuild72ClassicVisualChooserAndDirectCreatorStudio() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("NightcoreLab/Sources")
         let player = try String(contentsOf: root.appendingPathComponent("NowPlayingScreen.swift"),
                                 encoding: .utf8)
         let chrome = try String(contentsOf: root.appendingPathComponent("EnvironmentBar.swift"),
                                 encoding: .utf8)
-        let picker = try String(contentsOf: root.appendingPathComponent("Creative/VisualChoiceSheet.swift"),
-                                encoding: .utf8)
-        XCTAssertFalse(player.contains("creator.openStudio"),
-                       "No redundant Criar button should collide with top-right Share")
-        // Scope the overlap check to the player's outer chrome only.
-        // The player card itself intentionally has its own top-aligned overlay.
-        let chromeStart = try XCTUnwrap(player.range(of: ".environment(liveUniforms)"))
-        let leadingBar = try XCTUnwrap(player.range(
-            of: ".overlay(alignment: .topLeading) {",
-            range: chromeStart.upperBound..<player.endIndex))
-        let chromeBeforeLeading = player[chromeStart.upperBound..<leadingBar.lowerBound]
-        XCTAssertFalse(chromeBeforeLeading.contains(".overlay(alignment: .top) {"),
-                       "No extra centered toolbar can cover the share controls")
-        XCTAssertTrue(player.contains(".overlay(alignment: .topTrailing) {"))
-        XCTAssertTrue(player.contains("ShareButton("))
-        XCTAssertTrue(player.contains("onChooseVisual: openVisualChoice"))
-        XCTAssertTrue(chrome.contains("Text(\"Visual\")"))
-        XCTAssertTrue(chrome.contains("visual.openPicker"))
-        XCTAssertTrue(picker.contains("visual.openAdvanced"))
-        XCTAssertTrue(player.contains("creatorRoute.isPresented = true"),
-                      "Pads, loops and fine controls remain accessible through Visual")
+        let content = try String(contentsOf: root.appendingPathComponent("ContentView.swift"),
+                                 encoding: .utf8)
+        XCTAssertTrue(player.contains("creator.openStudio"),
+                      "Build 72's explicit Criar studio action must remain discoverable")
+        XCTAssertTrue(player.contains("Picker(\"Ritmo visual\""))
+        XCTAssertFalse(player.contains("onChooseVisual: openVisualChoice"),
+                       "Build 73 unified chooser must not replace the Build 72 selector")
+        XCTAssertTrue(chrome.contains("ThemeBoltButton(theme: $theme, microphoneActive: microphoneActive)"))
+        XCTAssertTrue(chrome.contains("CreativeVisualTaxonomy.classicThemes"))
+        XCTAssertTrue(chrome.contains("CreativeVisualTaxonomy.materialThemes"))
+        XCTAssertTrue(chrome.contains("CreativeVisualTaxonomy.gnarlyModes"))
+        XCTAssertTrue(content.contains("MusicControlPage.stems"))
+        XCTAssertTrue(content.contains("StemMixerControls(audio: audio)"))
     }
 
     func testSubtleReactionCannotCreateBiggerSpikeThanIntenseMode() {
