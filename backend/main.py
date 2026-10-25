@@ -265,6 +265,7 @@ app.add_middleware(
     allow_origins=[
         "https://gnarlyweb.netlify.app",
         "https://gnarly-web.pages.dev",
+        "https://gnarly-web.miscrapha.workers.dev",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
     ],
