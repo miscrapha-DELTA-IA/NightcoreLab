@@ -24,6 +24,9 @@ struct LyricsControlCenter: View {
     @AppStorage(KaraokeGuidePreference.nextVerse) private var nextVersePreview = true
     @AppStorage("karaokeChordMode") private var chordMode = false
     @AppStorage("karaoke.showScoreHUD") private var showScoreHUD = true
+    @AppStorage(AutoLyricsTranscriber.languagePreferenceKey) private var recognitionLanguage = "system"
+    @State private var isTranscribing = false
+    @State private var transcriptionResult: String?
     @AppStorage(CreativeHaptics.enabledKey) private var hapticsEnabled = true
 
     var body: some View {
@@ -87,19 +90,34 @@ struct LyricsControlCenter: View {
                     Toggle("🎸 Modo Cifras (Padrão Cifra Club)", isOn: $chordMode)
                     Text("Cifras medidas do áudio local aparecem sobre as palavras. Tom, capo e batida ficam no topo da letra.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Button("Autorizar transcrição local") {
-                        Task {
-                            guard await AutoLyricsTranscriber.requestPermission(),
-                                  let trackID = lyricsStore.trackID,
-                                  let url = audio?.visualAnalysisURL,
-                                  lyricsStore.lines.contains(where: {
-                                      $0.provenance == .rhythmicCue }) else { return }
-                            lyricsStore.loadFallback(trackID: trackID, plainText: nil,
-                                sourceURL: url, duration: audio?.duration ?? 0,
-                                force: true, retryRecognition: true)
-                        }
+                    Picker("Idioma cantado", selection: $recognitionLanguage) {
+                        Text("Idioma do iPhone").tag("system")
+                        Text("Português").tag("pt-BR")
+                        Text("English").tag("en-US")
+                        Text("Español").tag("es-ES")
                     }
-                    .font(.footnote)
+                    Button {
+                        guard !isTranscribing else { return }
+                        isTranscribing = true
+                        transcriptionResult = nil
+                        Task {
+                            let outcome = await lyricsStore.transcribeCurrentAudio(
+                                sourceURL: audio?.visualAnalysisURL, duration: audio?.duration ?? 0)
+                            transcriptionResult = outcome.message
+                            isTranscribing = false
+                        }
+                    } label: {
+                        Label("Gerar letra a partir do áudio", systemImage: "waveform")
+                    }
+                    .disabled(isTranscribing)
+                    .accessibilityIdentifier("lyrics.controls.generateFromAudio")
+                    if isTranscribing { ProgressView("Transcrevendo localmente…") }
+                    if let transcriptionResult {
+                        Text(transcriptionResult).font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Funciona melhor com voz clara. A letra é uma estimativa; nunca substitui automaticamente uma escolha manual.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 } header: {
                     Label("Cifras e letra automática", systemImage: "guitars.fill")
                 }
