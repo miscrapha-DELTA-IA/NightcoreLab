@@ -102,7 +102,7 @@ struct LyricsControlCenter: View {
                         transcriptionResult = nil
                         Task {
                             let outcome = await lyricsStore.transcribeCurrentAudio(
-                                sourceURL: audio?.visualAnalysisURL, duration: audio?.duration ?? 0)
+                                sourceURL: audio?.lyricsTranscriptionSourceURL, duration: audio?.duration ?? 0)
                             transcriptionResult = outcome.message
                             isTranscribing = false
                         }
