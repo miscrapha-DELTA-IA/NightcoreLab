@@ -101,6 +101,8 @@ struct LyricsView: View {
     @Environment(LyricsStore.self) private var lyricStore
     @State private var record: LyricsRecord?
     @State private var candidates: [LyricsRecord] = []
+    @State private var manualCandidates: [LyricsRecord] = []
+    @State private var manualHasSearched = false
     @State private var isChoosingLyrics = false
     @State private var showLyricsControlCenter = false
     @State private var queuedManualPicker = false
@@ -404,6 +406,9 @@ struct LyricsView: View {
             errorMessage = nil
             record = nil
             candidates = []
+            manualCandidates = []
+            manualHasSearched = false
+            manualQuery = ""
             if let prefetcher {
                 // Reutiliza a busca que começou durante a reprodução.
                 let cached = await prefetcher.awaitChoice(for: track.id)
@@ -507,7 +512,7 @@ struct LyricsView: View {
                     if let pickerError {
                         Text(pickerError).font(.caption).foregroundStyle(.secondary)
                     }
-                    List(candidates.prefix(20)) { candidate in
+                    List((manualHasSearched ? manualCandidates : candidates).prefix(20)) { candidate in
                         Button {
                             apply(candidate, pin: true)
                             isChoosingLyrics = false
@@ -533,20 +538,32 @@ struct LyricsView: View {
                     }
                 }
                 .task(id: manualSearchID) {
+                    let requestID = manualSearchID
                     let query = manualQuery.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !query.isEmpty else { return }
                     manualSearching = true
+                    manualHasSearched = true
+                    manualCandidates = []
                     pickerError = nil
                     do {
                         let fetched = try await LyricsService.searchManually(query)
                         try Task.checkCancellation()
-                        candidates = fetched
-                        if fetched.isEmpty { pickerError = "Nenhuma letra encontrada para esta pesquisa." }
+                        guard manualSearchID == requestID else { return }
+                        manualCandidates = fetched
+                        if fetched.isEmpty {
+                            pickerError = "Nenhuma letra encontrada para esta pesquisa."
+                        }
                     } catch {
-                        guard !Task.isCancelled else { return }
-                        pickerError = "A pesquisa falhou. Tente novamente."
+                        guard !Task.isCancelled, manualSearchID == requestID else { return }
+                        if let serverError = error as? LRCLIBRequestError {
+                            pickerError = serverError.errorDescription
+                        } else if let urlError = error as? URLError, urlError.code == .timedOut {
+                            pickerError = "A busca demorou demais. Verifique a conexão e tente novamente."
+                        } else {
+                            pickerError = "A pesquisa falhou. Verifique a conexão e tente novamente."
+                        }
                     }
-                    manualSearching = false
+                    if manualSearchID == requestID { manualSearching = false }
                 }
                 .presentationDetents([.medium, .large])
             }
