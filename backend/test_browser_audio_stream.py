@@ -9,10 +9,17 @@ from starlette.responses import StreamingResponse
 class R2BrowserPlaybackTests(unittest.IsolatedAsyncioTestCase):
     async def test_cached_range_is_internal_stream(self):
         seen = []
+        class AudioStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"abcd"
+
+            async def aclose(self):
+                pass
+
         def handler(request):
             seen.append(request)
             self.assertEqual(request.headers.get("range"), "bytes=0-3")
-            return httpx.Response(206, content=b"abcd",
+            return httpx.Response(206, stream=AudioStream(),
                                   headers={"content-range": "bytes 0-3/100",
                                            "accept-ranges": "bytes",
                                            "content-length": "4"})
