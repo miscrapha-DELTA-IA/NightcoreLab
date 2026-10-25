@@ -755,7 +755,7 @@ async def _r2_browser_stream(signed_url: str, requested_range: str | None) -> St
     """
     assert r2_cache is not None
     headers = {}
-    if requested_range and re.fullmatch(r"bytes=\\d+-\\d*", requested_range):
+    if requested_range and re.fullmatch(r"bytes=\d+-\d*", requested_range):
         headers["Range"] = requested_range
     request = r2_cache.client.build_request("GET", signed_url, headers=headers)
     upstream = await r2_cache.client.send(request, stream=True)
