@@ -157,10 +157,12 @@ enum LyricsService {
         return LyricsLookup(suggestions: sorted, automatic: choice)
     }
 
-    static func searchManually(_ query: String) async throws -> [LyricsRecord] {
+    static func searchManually(_ query: String,
+                               client: LRCLIBClient = LRCLIBClient()) async throws -> [LyricsRecord] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        return try await request(queryItems: [URLQueryItem(name: "q", value: trimmed)])
+        // Manual and background lyrics now use the same identified LRCLIB client.
+        return try await client.search(q: trimmed).map(\.asLegacyRecord)
             .filter(\.hasLyrics)
     }
 
@@ -171,7 +173,7 @@ enum LyricsService {
         components.queryItems = queryItems
         guard let url = components.url else { throw URLError(.badURL) }
         var request = URLRequest(url: url, timeoutInterval: 12)
-        request.setValue("NightcoreLab/1.0 (SwiftUI lyrics)", forHTTPHeaderField: "User-Agent")
+        request.setValue(LRCLIBClient.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
         try Task.checkCancellation()
