@@ -54,6 +54,19 @@ actor AutoLyricsCache {
 }
 
 enum AutoLyricsTranscriber {
+    static let languagePreferenceKey = "karaoke.autoLyricsLanguage"
+    /// "system" uses the current iPhone language; explicit choices help multilingual tracks.
+    static var selectedLocaleIdentifier: String {
+        UserDefaults.standard.string(forKey: languagePreferenceKey) ?? "system"
+    }
+
+    static func recognitionLocale(preference: String, system: Locale = .current) -> Locale {
+        switch preference {
+        case "pt-BR", "en-US", "es-ES": return Locale(identifier: preference)
+        default: return system
+        }
+    }
+
     struct TimedWord: Sendable {
         let text: String
         let start: TimeInterval
@@ -68,10 +81,15 @@ enum AutoLyricsTranscriber {
     static func generate(vocalURL: URL, duration: TimeInterval,
                          bars: [TimeInterval], allowSpeechRecognition: Bool = true) async -> [TimedLyricLine] {
         var recognized: [TimedWord]?
-        if allowSpeechRecognition, SFSpeechRecognizer.authorizationStatus() == .authorized,
-           let recognizer = SFSpeechRecognizer(locale: .current),
-           recognizer.supportsOnDeviceRecognition {
-            recognized = await recognizeFullTrack(vocalURL, recognizer: recognizer)
+        if allowSpeechRecognition, SFSpeechRecognizer.authorizationStatus() == .authorized {
+            let preferred = recognitionLocale(preference: selectedLocaleIdentifier)
+            // Stay strictly on-device. If the chosen language is unavailable,
+            // try a supported device locale rather than invoking a cloud recognizer.
+            let locales = [preferred, Locale(identifier: "en-US"), Locale(identifier: "pt-BR")]
+            if let recognizer = locales.lazy.compactMap({ SFSpeechRecognizer(locale: $0) })
+                .first(where: { $0.supportsOnDeviceRecognition }) {
+                recognized = await recognizeFullTrack(vocalURL, recognizer: recognizer)
+            }
         }
         return guide(recognizedWords: recognized, vocalURL: vocalURL, duration: duration, bars: bars)
     }
