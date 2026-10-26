@@ -498,7 +498,13 @@ def _music_search_entries(items: list[dict]) -> str:
         artists = ", ".join(a["name"] for a in (item.get("artists") or [])
                             if isinstance(a, dict) and isinstance(a.get("name"), str))
         audio_sources.remember(video_id, title, artists, duration, artwork)
+        # Additive metadata fields: existing iOS Swift decoders may ignore them.
+        # Web Omnibox should never invent generic "YouTube Music" artist credits.
+        album_info = item.get("album")
+        album = album_info.get("name") if isinstance(album_info, dict) else ""
         accepted.append(json.dumps({"id": video_id, "title": title.strip(),
+                                    "artist": artists[:240],
+                                    "album": album[:240] if isinstance(album, str) else "",
                                     "duration": duration, "thumbnail": artwork,
                                     "is_live": False}, ensure_ascii=False))
         if len(accepted) >= 15:
