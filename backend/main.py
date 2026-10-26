@@ -591,7 +591,7 @@ def playback_status():
     Cached tracks may still play while upstream extraction is rate-limited.
     """
     with _youtube_cooldown_lock:
-        remaining = max(0, math.ceil(_youtube_cooldown_until - time.monotonic()))
+        remaining = max(0, int(_youtube_cooldown_until - time.monotonic() + 0.999))
     status = "upstream_rate_limited" if remaining else "ready"
     headers = {"Cache-Control": "no-store"}
     if remaining:
