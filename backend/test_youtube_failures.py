@@ -34,6 +34,28 @@ class YouTubeFailureTests(unittest.TestCase):
         # is still allowed to start an explicitly requested download.
         main._check_youtube_cooldown()
 
+    def test_read_only_browser_status_explains_429_without_extraction(self):
+        import json
+        import time
+        with patch.object(main, "_youtube_cooldown_until", time.monotonic() + 98), \
+             patch.object(main, "_extract_m4a", side_effect=AssertionError("no extraction")), \
+             patch.object(main, "_try_r2", side_effect=AssertionError("no R2 probe")):
+            response = main.playback_status()
+        payload = json.loads(response.body)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "upstream_rate_limited")
+        self.assertGreaterEqual(payload["retry_after"], 97)
+        self.assertEqual(response.headers["retry-after"], str(payload["retry_after"]))
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertTrue(payload["cached_tracks_may_play"])
+
+    def test_read_only_browser_status_returns_ready_after_cooldown(self):
+        import json
+        with patch.object(main, "_youtube_cooldown_until", 0):
+            response = main.playback_status()
+        self.assertEqual(json.loads(response.body)["status"], "ready")
+        self.assertNotIn("retry-after", response.headers)
+
     def test_real_audio_client_429_still_protects_backend(self):
         main._YtdlpLog("logado/web").warning("HTTP Error 429: Too Many Requests")
         with self.assertRaises(HTTPException) as raised:
