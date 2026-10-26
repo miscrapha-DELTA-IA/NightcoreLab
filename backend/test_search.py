@@ -21,7 +21,8 @@ class SearchTests(unittest.TestCase):
         client = MagicMock()
         client.search.return_value = [
             {"resultType": "song", "videoId": "abcdefghijk", "title": "Song",
-             "duration_seconds": 180, "thumbnails": [{"url": "https://example.com/a.jpg"}]},
+             "duration_seconds": 180, "thumbnails": [{"url": "https://example.com/a.jpg"}],
+             "artists": [{"name": "Real Artist"}], "album": {"name": "Real Album"}},
         ]
         with patch("ytmusicapi.YTMusic", return_value=client):
             response = self.client.get("/search", params={"query": "music"})
@@ -29,6 +30,12 @@ class SearchTests(unittest.TestCase):
         self.assertIn("application/x-ndjson", response.headers["content-type"])
         self.assertEqual(response.json() if False else len(response.text.splitlines()), 1)
         self.assertIn('"id": "abcdefghijk"', response.text)
+        import json
+        song = json.loads(response.text.splitlines()[0])
+        self.assertEqual(song["artist"], "Real Artist")
+        self.assertEqual(song["album"], "Real Album")
+        self.assertEqual(song["title"], "Song")
+        self.assertEqual(song["duration"], 180)
         client.search.assert_called_once_with("music", filter="songs", limit=20)
 
     def test_search_filters_long_and_missing_duration(self):
