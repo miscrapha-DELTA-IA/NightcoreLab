@@ -580,6 +580,28 @@ async def warm():
     return {"status": "ok", "r2_enabled": r2_cache is not None}
 
 
+@app.get("/playback-status")
+def playback_status():
+    """Read-only, cheap status for HTMLAudioElement failures.
+
+    Safari MediaError.code 4 hides HTTP 429 from its caller. An explicit GET
+    lets the Web player explain the *known global upstream cooldown* without
+    issuing another /download or inspecting the user's track. This endpoint
+    never probes YouTube, R2, local files, cookies or private user metadata.
+    Cached tracks may still play while upstream extraction is rate-limited.
+    """
+    with _youtube_cooldown_lock:
+        remaining = max(0, math.ceil(_youtube_cooldown_until - time.monotonic()))
+    status = "upstream_rate_limited" if remaining else "ready"
+    headers = {"Cache-Control": "no-store"}
+    if remaining:
+        headers["Retry-After"] = str(remaining)
+    return JSONResponse({
+        "status": status, "retry_after": remaining,
+        "cached_tracks_may_play": True
+    }, headers=headers)
+
+
 def _rss_bytes() -> int:
     global _peak_rss_bytes
     try:
