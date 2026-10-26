@@ -265,10 +265,20 @@ app.add_middleware(
     allow_origins=[
         "https://gnarlyweb.netlify.app",
         "https://gnarly-web.pages.dev",
+        "https://gnarly-web-pages.pages.dev",
+        "https://gnarly-web-stage72.pages.dev",
         "https://gnarly-web.miscrapha.workers.dev",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
     ],
+    # Preview aliases are unique subdomains of the two GNARLY-owned Pages
+    # projects (plus Netlify's specific deploy-preview host). Do NOT permit
+    # *.pages.dev or *.netlify.app generally: those include unrelated tenants.
+    allow_origin_regex=(
+        r"^https://(?:[a-z0-9-]+\.)?"
+        r"(?:gnarly-web-pages|gnarly-web-stage72)\.pages\.dev$"
+        r"|^https://deploy-preview-[0-9]+--gnarlyweb\.netlify\.app$"
+    ),
     allow_credentials=False,
     allow_methods=["GET", "HEAD", "OPTIONS"],
     allow_headers=["Range", "Accept", "Content-Type"],
