@@ -620,6 +620,67 @@ async def progressive_audio(url: HttpUrl, request: Request, background_tasks: Ba
                              background=BackgroundTask(_close_progressive_audio, upstream, client))
 
 
+_preparing_watchers: set[str] = set()
+
+
+def _watch_prepared_track(video_id: str, entry: InFlightDownload) -> None:
+    """Keep the extraction alive after the client disconnects. Upload R2 once
+    the complete file is ready. Shared /download consumers use this same task.
+    """
+    if video_id in _preparing_watchers:
+        return
+    _preparing_watchers.add(video_id)
+
+    async def finish():
+        try:
+            path, title, thumbnail, _ = await asyncio.shield(entry.task)
+            if path.parent == CACHE_DIR:
+                _schedule_r2_upload(video_id, path, title, thumbnail)
+        except Exception:
+            log.info("GNARLY prewarm did not complete id=%s", video_id)
+        finally:
+            _preparing_watchers.discard(video_id)
+            await _cleanup_orphan(video_id, entry)
+
+    asyncio.create_task(finish())
+
+
+@app.post("/prepare")
+async def prepare_next_track(request: DownloadRequest):
+    """Explicit background prewarm, independent of the HTTP response lifetime.
+    This is NOT a batch extractor: one canonical track, shared in-flight job,
+    existing resource bounds, auth/rate control and 7-day R2 retention.
+    """
+    url = str(request.url)
+    video_id = _youtube_video_id(url)
+    if r2_cache:
+        try:
+            if await r2_cache.find(f"{video_id}/audio.m4a") is not None:
+                return JSONResponse({"status":"cached"},headers={"Cache-Control":"no-store"})
+        except Exception:
+            pass
+    local = await asyncio.to_thread(_pin_cached_audio, video_id)
+    if local:
+        path,title,thumbnail,_ = local
+        _schedule_r2_upload(video_id,path,title,thumbnail)
+        _release_cached_reader(video_id)
+        return JSONResponse({"status":"cached_local"},headers={"Cache-Control":"no-store"})
+    entry = in_flight_downloads.get(video_id)
+    if entry is not None:
+        _watch_prepared_track(video_id,entry)
+        return JSONResponse({"status":"already_preparing"},status_code=202)
+    if not audio_sources.can_recover(video_id):
+        _check_youtube_cooldown()
+    if _rss_bytes() >= MAX_RSS_BYTES or len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
+        raise HTTPException(status_code=429,detail="Preparação ocupada",
+                            headers={"Retry-After":"30","X-Download-Error":"queue_full"})
+    entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
+    in_flight_downloads[video_id] = entry
+    _watch_prepared_track(video_id, entry)
+    return JSONResponse({"status":"preparing"},status_code=202,
+                        headers={"Cache-Control":"no-store"})
+
+
 @app.get("/download")
 async def background_download(url: HttpUrl, background_tasks: BackgroundTasks, request: Request,
                               delivery: str = "audio"):
