@@ -1,0 +1,17 @@
+{
+  "fixture": "20 simultaneous requests; 40ms metadata; two worker slots; no network",
+  "before": {
+    "requests": 20,
+    "metadata_calls": 20,
+    "p50_ms": 221.6,
+    "p95_ms": 402.4,
+    "p99_ms": 402.8
+  },
+  "after": {
+    "requests": 20,
+    "metadata_calls": 1,
+    "p50_ms": 40.8,
+    "p95_ms": 40.9,
+    "p99_ms": 40.9
+  }
+}
