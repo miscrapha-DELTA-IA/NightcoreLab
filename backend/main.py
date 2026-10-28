@@ -476,7 +476,7 @@ def related(url: HttpUrl):
         _related_slots.release()
 
 
-def _music_search_entries(items: list[dict]) -> str:
+def _music_search_entries(items: list[dict], max_results: int = 15) -> str:
     """Return the existing Swift-compatible NDJSON contract using YT Music songs."""
     accepted = []
     seen = set()
@@ -509,14 +509,22 @@ def _music_search_entries(items: list[dict]) -> str:
                                     "album": album[:240] if isinstance(album, str) else "",
                                     "duration": duration, "thumbnail": artwork,
                                     "is_live": False}, ensure_ascii=False))
-        if len(accepted) >= 15:
+        if len(accepted) >= max_results:
             break
     return "\n".join(accepted) + ("\n" if accepted else "")
 
 
 @app.get("/search")
-def search(query: str = Query(min_length=1, max_length=200)):
-    """Search YouTube Music songs without invoking yt-dlp or extracting audio."""
+def search(
+    query: str = Query(min_length=1, max_length=200),
+    offset: int = Query(default=0, ge=0, le=80),
+    limit: int = Query(default=15, ge=1, le=20),
+):
+    """Paginated YT Music metadata, backwards-compatible with native iOS clients.
+
+    Pagination counts validated songs, rather than raw YT Music search entries,
+    so filtering invalid IDs, unavailable tracks or long videos does not skip songs.
+    """
     query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Digite uma busca.")
@@ -524,8 +532,13 @@ def search(query: str = Query(min_length=1, max_length=200)):
         raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.")
     try:
         from ytmusicapi import YTMusic
-        results = YTMusic().search(query, filter="songs", limit=20)
-        return Response(content=_music_search_entries(results),
+        needed = offset + limit
+        # Only additional web pages spend the larger YT Music continuation budget.
+        fetch_limit = 20 if offset == 0 and limit == 15 else min(120, needed + 12)
+        results = YTMusic().search(query, filter="songs", limit=fetch_limit)
+        entries = _music_search_entries(results, max_results=needed).splitlines()
+        page = entries[offset:needed]
+        return Response(content="\n".join(page) + ("\n" if page else ""),
                         media_type="application/x-ndjson",
                         headers={"Cache-Control": "no-store"})
     except Exception:
