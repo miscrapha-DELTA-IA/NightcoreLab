@@ -53,6 +53,8 @@ from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 import audio_sources
+import fast_stream
+import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse, StreamingResponse
@@ -224,7 +226,7 @@ app = FastAPI(
 
 @app.middleware("http")
 async def _limit_heavy_requests(request: Request, call_next):
-    if request.url.path in {"/download", "/align-lyrics"}:
+    if request.url.path in {"/download", "/stream", "/prepare", "/align-lyrics"}:
         token = request.headers.get("X-Gnarly-Token") or request.query_params.get("access_token")
         failure = _access_control.check(token, request.client.host if request.client else "unknown")
         if failure:
@@ -280,7 +282,7 @@ app.add_middleware(
         r"|^https://deploy-preview-[0-9]+--gnarlyweb\.netlify\.app$"
     ),
     allow_credentials=False,
-    allow_methods=["GET", "HEAD", "OPTIONS"],
+    allow_methods=["GET", "HEAD", "POST", "OPTIONS"],
     allow_headers=["Range", "Accept", "Content-Type"],
     expose_headers=["Content-Length", "Content-Range", "Accept-Ranges", "X-Cover-Url"],
     max_age=3600,
@@ -531,6 +533,91 @@ def search(query: str = Query(min_length=1, max_length=200)):
         raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.")
     finally:
         _search_slots.release()
+
+
+def _discover_progressive_aac(url: str):
+    """Metadata only: no file download, no ffmpeg, no credentials forwarded.
+    Heavy yt-dlp work stays under the existing two-operation process gate.
+    """
+    with _heavy_ytdlp_slots:
+        with yt_dlp.YoutubeDL({
+            "format": "bestaudio[ext=m4a]",
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "cachedir": str(CACHE_DIR / "yt_dlp"),
+            "socket_timeout": 7,
+            "retries": 0,
+            "extractor_retries": 0,
+            "skip_download": True,
+            "extractor_args": {"youtube": {"player_client": ["web"]}},
+        }) as ydl:
+            info = ydl.extract_info(url, download=False)
+    return fast_stream.choose_progressive_source(info)
+
+
+async def _close_progressive_audio(upstream, client):
+    await upstream.aclose()
+    await client.aclose()
+
+
+@app.get("/stream")
+async def progressive_audio(url: HttpUrl, request: Request, background_tasks: BackgroundTasks):
+    """Experimental direct AAC proxy. Starts streaming after metadata lookup,
+    instead of waiting for a full downloaded/converted .m4a. Pages falls back
+    to /download if this track cannot be delivered progressively.
+    """
+    canonical = str(url)
+    video_id = _youtube_video_id(canonical)
+    try:
+        requested_range = fast_stream.safe_range(request.headers.get("range"))
+    except ValueError:
+        raise HTTPException(status_code=416, detail="Intervalo de áudio inválido")
+    # Cache hits still take the normal durable /download route; the Cloudflare
+    # Pages edge already checks private R2 directly without Render.
+    local = await asyncio.to_thread(_pin_cached_audio, video_id)
+    if local:
+        path, title, thumbnail, _ = local
+        background_tasks.add_task(_release_cached_reader, video_id)
+        return _audio_response(path, title, thumbnail, background_tasks)
+    if not audio_sources.can_recover(video_id):
+        _check_youtube_cooldown()
+    if _rss_bytes() >= MAX_RSS_BYTES:
+        raise HTTPException(status_code=503, detail="Serviço de áudio ocupado")
+    try:
+        source = await asyncio.wait_for(
+            asyncio.to_thread(_discover_progressive_aac, canonical), timeout=13)
+    except (asyncio.TimeoutError, yt_dlp.utils.DownloadError, ValueError):
+        raise HTTPException(status_code=422, detail="Fluxo progressivo indisponível para esta música")
+    except Exception:
+        log.info("progressive AAC discovery unavailable id=%s", video_id)
+        raise HTTPException(status_code=422, detail="Fluxo progressivo indisponível")
+    if not source:
+        raise HTTPException(status_code=415, detail="Esta fonte exige preparação de áudio")
+    client = httpx.AsyncClient(timeout=httpx.Timeout(connect=6, read=18, write=6, pool=6),
+                               follow_redirects=False, trust_env=False)
+    try:
+        upstream = await client.send(
+            client.build_request("GET", source.url,
+                headers={"Range": requested_range} if requested_range else {}),
+            stream=True)
+        if upstream.status_code not in (200, 206):
+            await upstream.aclose()
+            raise ValueError("Upstream audio status")
+        content_type = (upstream.headers.get("content-type") or "").split(";")[0].lower()
+        if content_type not in {"audio/mp4", "application/octet-stream", "video/mp4"}:
+            await upstream.aclose()
+            raise ValueError("Upstream audio content type")
+        if int(upstream.headers.get("content-length") or 0) > fast_stream.MAX_AUDIO_BYTES:
+            await upstream.aclose()
+            raise ValueError("Upstream audio exceeds bound")
+        headers = fast_stream.forwarded_audio_headers(upstream)
+    except (httpx.HTTPError, ValueError, OverflowError):
+        await client.aclose()
+        raise HTTPException(status_code=422, detail="Fluxo de origem indisponível")
+    return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code,
+                             headers=headers, media_type="audio/mp4",
+                             background=BackgroundTask(_close_progressive_audio, upstream, client))
 
 
 @app.get("/download")
