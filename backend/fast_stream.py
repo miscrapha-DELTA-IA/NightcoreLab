@@ -87,3 +87,75 @@ def safe_range(raw: str | None) -> str | None:
     if len(raw) > 48 or RANGE_PATTERN.fullmatch(raw) is None:
         raise ValueError("Unsupported Range")
     return raw
+
+
+class ProgressiveDiscovery:
+    """Process-local, bounded metadata single-flight. Signed URLs never leave
+    the backend. A timed-out HTTP waiter cannot cancel a running yt-dlp thread
+    or free its slot early; repeated Range requests join that same work.
+    """
+    def __init__(self, *, capacity=64, concurrency=2, timeout=2.5,
+                 ttl=180, negative_ttl=8, clock=None):
+        import time
+        from collections import OrderedDict
+        self.cache = OrderedDict()
+        self.pending = {}
+        self.capacity = capacity
+        self.concurrency = concurrency
+        self.timeout = timeout
+        self.ttl = ttl
+        self.negative_ttl = negative_ttl
+        self.clock = clock or time.monotonic
+        self.hits = self.joins = self.started = self.timeouts = 0
+        self.duration_ms = 0
+
+    async def get(self, key, loader):
+        import asyncio
+        cached = self.cache.get(key)
+        if cached and cached[0] > self.clock():
+            self.hits += 1
+            self.cache.move_to_end(key)
+            return cached[1]
+        self.cache.pop(key, None)
+        task = self.pending.get(key)
+        if task is None:
+            if len(self.pending) >= self.concurrency:
+                # Foreground download fallback should not queue behind probes.
+                return None
+            self.started += 1
+            task = asyncio.create_task(self._resolve(key, loader))
+            self.pending[key] = task
+            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+        else:
+            self.joins += 1
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), self.timeout)
+        except asyncio.TimeoutError:
+            self.timeouts += 1
+            return None
+
+    async def _resolve(self, key, loader):
+        import asyncio
+        started = self.clock()
+        try:
+            source = await asyncio.to_thread(loader)
+            self.cache[key] = (self.clock() + (self.ttl if source else self.negative_ttl), source)
+            while len(self.cache) > self.capacity:
+                self.cache.popitem(last=False)
+            return source
+        except Exception:
+            self.cache[key] = (self.clock() + self.negative_ttl, None)
+            while len(self.cache) > self.capacity:
+                self.cache.popitem(last=False)
+            raise
+        finally:
+            self.duration_ms += max(0, (self.clock() - started) * 1000)
+            self.pending.pop(key, None)
+
+    def invalidate(self, key):
+        self.cache.pop(key, None)
+
+    def snapshot(self):
+        return {"started": self.started, "hits": self.hits, "joins": self.joins,
+                "timeouts": self.timeouts, "active": len(self.pending),
+                "discovery_ms_total": round(self.duration_ms)}

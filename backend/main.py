@@ -552,7 +552,9 @@ def _discover_progressive_aac(url: str):
     """Metadata only: no file download, no ffmpeg, no credentials forwarded.
     Heavy yt-dlp work stays under the existing two-operation process gate.
     """
-    with _heavy_ytdlp_slots:
+    if not _heavy_ytdlp_slots.acquire(blocking=False):
+        return None
+    try:
         with yt_dlp.YoutubeDL({
             "format": "bestaudio[ext=m4a]",
             "quiet": True,
@@ -566,8 +568,12 @@ def _discover_progressive_aac(url: str):
             "extractor_args": {"youtube": {"player_client": ["web"]}},
         }) as ydl:
             info = ydl.extract_info(url, download=False)
-    return fast_stream.choose_progressive_source(info)
+        return fast_stream.choose_progressive_source(info)
+    finally:
+        _heavy_ytdlp_slots.release()
 
+
+_progressive_discovery = fast_stream.ProgressiveDiscovery()
 
 async def _close_progressive_audio(upstream, client):
     await upstream.aclose()
@@ -593,13 +599,19 @@ async def progressive_audio(url: HttpUrl, request: Request, background_tasks: Ba
         path, title, thumbnail, _ = local
         background_tasks.add_task(_release_cached_reader, video_id)
         return _audio_response(path, title, thumbnail, background_tasks)
+    # Preparation already owns this exact extraction. Reuse it instead of
+    # launching metadata discovery beside a full download of the same song.
+    if video_id in in_flight_downloads:
+        return await download(DownloadRequest(url=url), background_tasks,
+                              redirect_cache=False, delivery="browser",
+                              browser_range=requested_range)
     if not audio_sources.can_recover(video_id):
         _check_youtube_cooldown()
     if _rss_bytes() >= MAX_RSS_BYTES:
         raise HTTPException(status_code=503, detail="Serviço de áudio ocupado")
     try:
-        source = await asyncio.wait_for(
-            asyncio.to_thread(_discover_progressive_aac, canonical), timeout=13)
+        source = await _progressive_discovery.get(
+            video_id, lambda: _discover_progressive_aac(canonical))
     except (asyncio.TimeoutError, yt_dlp.utils.DownloadError, ValueError):
         raise HTTPException(status_code=422, detail="Fluxo progressivo indisponível para esta música")
     except Exception:
@@ -626,6 +638,9 @@ async def progressive_audio(url: HttpUrl, request: Request, background_tasks: Ba
             raise ValueError("Upstream audio exceeds bound")
         headers = fast_stream.forwarded_audio_headers(upstream)
     except (httpx.HTTPError, ValueError, OverflowError):
+        _progressive_discovery.invalidate(video_id)
+        if "upstream" in locals():
+            await upstream.aclose()
         await client.aclose()
         raise HTTPException(status_code=422, detail="Fluxo de origem indisponível")
     return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code,
@@ -678,13 +693,17 @@ async def prepare_next_track(request: DownloadRequest):
         _schedule_r2_upload(video_id,path,title,thumbnail)
         _release_cached_reader(video_id)
         return JSONResponse({"status":"cached_local"},headers={"Cache-Control":"no-store"})
+    # Lookup follows async cache checks: another caller may have won meanwhile.
     entry = in_flight_downloads.get(video_id)
     if entry is not None:
         _watch_prepared_track(video_id,entry)
         return JSONResponse({"status":"already_preparing"},status_code=202)
     if not audio_sources.can_recover(video_id):
         _check_youtube_cooldown()
-    if _rss_bytes() >= MAX_RSS_BYTES or len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
+    # Speculative work never queues behind foreground jobs; at most one
+    # distinct prewarm may occupy this process at a time.
+    if (_preparing_watchers or download_semaphore.locked() or
+            _rss_bytes() >= MAX_RSS_BYTES or len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS):
         raise HTTPException(status_code=429,detail="Preparação ocupada",
                             headers={"Retry-After":"30","X-Download-Error":"queue_full"})
     entry = InFlightDownload(task=asyncio.create_task(_shared_extraction(url)))
@@ -814,7 +833,7 @@ def metrics():
             "r2_enabled": r2_cache is not None,
             "r2_uploading": len(_r2_uploading), "cookie_status": cookie_status,
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
-            **_counters}
+            "progressive": _progressive_discovery.snapshot(), **_counters}
 
 
 @app.get("/queue")
@@ -904,6 +923,8 @@ async def _shared_extraction(url: str):
     # The outer semaphore bounds scheduled extractions. The thread-level gate
     # remains held even if a client disconnects while a worker is still running.
     async with download_semaphore:
+        started = time.monotonic()
+        _counters["extractions_started"] = _counters.get("extractions_started", 0) + 1
         entry = in_flight_downloads.get(_youtube_video_id(url))
         if entry:
             entry.waiting = False
@@ -911,7 +932,13 @@ async def _shared_extraction(url: str):
         try:
             result = await loop.run_in_executor(executor, _run_extraction, url)
             return await asyncio.to_thread(_cache_extracted_audio, _youtube_video_id(url), result)
+        except Exception:
+            _counters["extractions_failed"] = _counters.get("extractions_failed", 0) + 1
+            raise
         finally:
+            elapsed = round((time.monotonic() - started) * 1000)
+            _counters["extraction_ms_total"] = _counters.get("extraction_ms_total", 0) + elapsed
+            _counters["extraction_ms_max"] = max(_counters.get("extraction_ms_max", 0), elapsed)
             log.debug("yt-dlp extraction settled for %s", _youtube_video_id(url))
 
 
@@ -927,7 +954,8 @@ async def _release_download(video_id: str, entry: InFlightDownload,
     if decrement:
         entry.consumers -= 1
     # Queued work can be cancelled without touching a running yt-dlp thread.
-    if entry.consumers == 0 and entry.waiting and not entry.task.done():
+    if (entry.consumers == 0 and entry.waiting and not entry.task.done()
+            and video_id not in _preparing_watchers):
         entry.task.cancel()
     if entry.consumers == 0 and entry.task.done():
         if in_flight_downloads.get(video_id) is entry:
