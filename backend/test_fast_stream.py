@@ -3,6 +3,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 import fast_stream
+import httpx
 
 def audio_info(**override):
     base={
@@ -46,10 +47,10 @@ class ProgressiveSourceTests(unittest.TestCase):
             self.assertEqual(fast_stream.safe_range(value),value)
         for value in ("bytes=0-2,3-4","bytes=1-0\nCookie:a","other","bytes=garbage"):
             with self.assertRaises(ValueError): fast_stream.safe_range(value)
-        upstream=MagicMock(status_code=206,headers={
+        upstream=MagicMock(status_code=206,headers=httpx.Headers({
          "Content-Length":"512","Content-Range":"bytes 0-511/4096",
          "Accept-Ranges":"bytes","Set-Cookie":"private",
-         "Location":"https://private.googlevideo.com/stream"})
+         "Location":"https://private.googlevideo.com/stream"}))
         forwarded=fast_stream.forwarded_audio_headers(upstream)
         self.assertNotIn("Set-Cookie",forwarded)
         self.assertNotIn("Location",forwarded)
