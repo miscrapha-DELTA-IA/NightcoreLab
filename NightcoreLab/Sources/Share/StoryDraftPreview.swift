@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// All audio/export inputs are frozen before the editor opens.
 struct StoryVideoDraft: Identifiable {
@@ -29,6 +30,12 @@ struct StoryDraftPreview: View {
     @State private var frozenRequest: StoryVideoRequest
     @State private var frozenTimeline: StoryRenderTimeline
     @State private var presetSaveMessage: String?
+    @State private var packageName = "Minha experiência"
+    @State private var packageAuthor = ""
+    @State private var shareFileURL: URL?
+    @State private var isImportingFile = false
+    @State private var pendingImport: CreatorPresetImportResult?
+    @State private var importedSelectionPreset: CreatorPreset?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var artwork: UIImage?
@@ -105,7 +112,26 @@ struct StoryDraftPreview: View {
         frozenTimeline = StoryRenderTimeline(
             request: resolved, profile: preset.exportProfile.encodingProfile(for: resolved.mode))
         elapsed = min(elapsed, frozenTimeline.lastFrameElapsed)
+        shareFileURL = nil
         presetSaveMessage = nil
+    }
+
+    private func applyImportedPreset(_ preset: CreatorPreset,
+                                     name: String, author: String) {
+        importedSelectionPreset = preset
+        selectedAspect = preset.exportProfile.aspectRatio
+        selectedQuality = preset.exportProfile.quality
+        selectedCrop = preset.exportProfile.cropPolicy
+        selectedExperienceID = preset.experienceID
+        selectedMaterialID = preset.materialID
+        selectedTypography = preset.typography.style
+        selectedTypographyPreset = preset.typography
+        controls = preset.controls
+        packageName = name
+        packageAuthor = author == "Anônimo" ? "" : author
+        pendingImport = nil
+        freezeSession(preset)
+        presetSaveMessage = "Preset importado. Salve para manter neste dispositivo."
     }
 
     var body: some View {
@@ -254,6 +280,51 @@ struct StoryDraftPreview: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(!artworkIsLoaded || !visualIsReady)
                     }
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("Compartilhar experiência")
+                            .font(.subheadline.bold())
+                        TextField("Nome do preset", text: $packageName)
+                            .textInputAutocapitalization(.words)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Autor (opcional)", text: $packageAuthor)
+                            .textInputAutocapitalization(.words)
+                            .textFieldStyle(.roundedBorder)
+                        HStack {
+                            Button {
+                                do {
+                                    let package = try CreatorPresetPackage(
+                                        name: packageName,
+                                        author: packageAuthor.isEmpty ? "Anônimo" : packageAuthor,
+                                        preset: selectedPreset)
+                                    shareFileURL = try CreatorPresetSharing.export(package)
+                                    presetSaveMessage = "JSON pronto para compartilhar"
+                                } catch {
+                                    shareFileURL = nil
+                                    presetSaveMessage = error.localizedDescription
+                                }
+                            } label: {
+                                Label("Exportar JSON", systemImage: "doc")
+                            }
+                            .buttonStyle(.bordered)
+                            Button {
+                                isImportingFile = true
+                            } label: {
+                                Label("Importar", systemImage: "square.and.arrow.down")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        if let shareFileURL {
+                            ShareLink(item: shareFileURL) {
+                                Label("Compartilhar via AirDrop, Arquivos, Mail…",
+                                      systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .padding(12)
+                    .background(.white.opacity(0.07),
+                                in: RoundedRectangle(cornerRadius: 12))
+
                     if let presetSaveMessage {
                         Text(presetSaveMessage)
                             .font(.caption)
@@ -278,6 +349,8 @@ struct StoryDraftPreview: View {
                 }
             }
             .onChange(of: selectedExperienceID) { _, selection in
+                if importedSelectionPreset?.experienceID == selection { return }
+                importedSelectionPreset = nil
                 selectedMaterialID = CreativePresetCatalog.material(selection: selection).id
                 let style = CreativePresetCatalog.typographyStyle(
                     afterSelecting: selection, current: selectedTypography)
@@ -288,6 +361,8 @@ struct StoryDraftPreview: View {
                     reacts: draft.request.reactiveProgram != nil)
             }
             .onChange(of: selectedTypography) { _, style in
+                if importedSelectionPreset?.typography.style == style { return }
+                importedSelectionPreset = nil
                 selectedTypographyPreset = CreativePresetCatalog.typographyPreset(
                     selection: selectedExperienceID, style: style,
                     font: draft.request.typographyPreset.font,
@@ -295,6 +370,26 @@ struct StoryDraftPreview: View {
             }
             .onChange(of: selectedPreset) { _, preset in
                 freezeSession(preset)
+            }
+            .fileImporter(isPresented: $isImportingFile, allowedContentTypes: [.json]) {
+                result in
+                do {
+                    pendingImport = try CreatorPresetSharing.importFile(at: result.get())
+                } catch {
+                    presetSaveMessage = error.localizedDescription
+                }
+            }
+            .sheet(item: $pendingImport) { imported in
+                CreatorPresetImportPreview(
+                    imported: imported, source: frozenRequest,
+                    artwork: artwork, visualTimeline: visualTimeline,
+                    visualRhythm: visualRhythm,
+                    onApply: { preset in
+                        applyImportedPreset(preset,
+                                            name: imported.package.name,
+                                            author: imported.package.author)
+                    },
+                    onCancel: { pendingImport = nil })
             }
             .task(id: draft.id) {
                 let loaded = await ShareRenderer.loadArtwork(draft.request.artworkURL)
