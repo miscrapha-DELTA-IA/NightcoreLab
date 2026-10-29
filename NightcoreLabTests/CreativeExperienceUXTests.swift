@@ -67,7 +67,7 @@ final class CreativeExperienceUXTests: XCTestCase {
         let selectable: [String] = CreativePresetCatalog.selectableExperiences.map { $0.id }
         XCTAssertEqual(selectable.count, 13, "The visual gallery must keep every curated style")
         XCTAssertTrue(selectable.contains("liquid-dream"), "Magazine Cutout must stay available")
-        XCTAssertEqual(TypographyStyle.allCases.count, 5)
+        XCTAssertEqual(TypographyStyle.allCases.count, 8)
         XCTAssertEqual(Array(selectable.prefix(experienceIDs.count)), experienceIDs)
         XCTAssertEqual(Set(selectable).count, selectable.count)
         XCTAssertEqual(selectable, CreativePresetCatalog.experiencePresets.map { $0.id },

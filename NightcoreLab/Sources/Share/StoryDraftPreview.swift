@@ -112,6 +112,37 @@ struct StoryDraftPreview: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 13) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "waveform")
+                            .foregroundStyle(frozenRequest.theme.accent)
+                        Text("NIGHTCORELAB")
+                            .font(.headline.weight(.heavy))
+                            .tracking(1.4)
+                        Spacer()
+                        Text("EXPORTAR")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 12) {
+                        if let artwork {
+                            Image(uiImage: artwork)
+                                .resizable().scaledToFill()
+                                .frame(width: 58, height: 58)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(frozenRequest.title)
+                                .font(.headline)
+                                .lineLimit(2)
+                            Text(frozenRequest.artist)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                     GeometryReader { proxy in
                         let canvas = StoryExportCanvas(
                             request: frozenRequest, artwork: artwork,
@@ -140,6 +171,38 @@ struct StoryDraftPreview: View {
                                 .padding(12)
                                 .background(.regularMaterial, in: Capsule())
                         }
+                    }
+
+                    if frozenRequest.mode == .lyrics {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Estilo das letras")
+                                .font(.headline)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(TypographyStyle.storyObjectModels) { style in
+                                        Button {
+                                            selectedTypography = style
+                                        } label: {
+                                            Text(style.shortObjectTitle)
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 12)
+                                                .frame(minHeight: 38)
+                                                .foregroundStyle(selectedTypography == style
+                                                    ? frozenRequest.theme.accent : .white)
+                                                .background(selectedTypography == style
+                                                    ? frozenRequest.theme.accent.opacity(0.18)
+                                                    : .white.opacity(0.08), in: Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityIdentifier("share.typography.\(style.rawValue)")
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.white.opacity(0.07),
+                                    in: RoundedRectangle(cornerRadius: 13))
                     }
 
                     HStack(spacing: 10) {
@@ -248,8 +311,8 @@ struct StoryDraftPreview: View {
                             onExport(selectedPreset, frozenRequest, artwork,
                                      visualTimeline, visualRhythm)
                         } label: {
-                            Label("Gerar MP4", systemImage: "film")
-                                .frame(maxWidth: .infinity)
+                            Label("Exportar vídeo (.mp4)", systemImage: "film")
+                                .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(!artworkIsLoaded || !visualIsReady)
@@ -270,7 +333,7 @@ struct StoryDraftPreview: View {
                 .padding()
             }
             .background(Color.black.ignoresSafeArea())
-            .navigationTitle("Creator Studio")
+            .navigationTitle("Compartilhar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
