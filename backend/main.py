@@ -563,7 +563,9 @@ def _discover_progressive_aac(url: str):
             "retries": 0,
             "extractor_retries": 0,
             "skip_download": True,
-            "extractor_args": {"youtube": {"player_client": ["web"]}},
+            # Use yt-dlp's maintained default player clients (2026.10.26
+            # includes tv_samsung). Forcing 'web' here causes the same
+            # 429/403-prone player request on every fast-start attempt.
         }) as ydl:
             info = ydl.extract_info(url, download=False)
     return fast_stream.choose_progressive_source(info)
@@ -1183,11 +1185,15 @@ class _YtdlpLog:
 # quais clientes exigem PO token num IP de datacenter; ter alternativas evita o app quebrar.
 #   (rótulo, usa cookies?, clientes do player — None = padrão do yt-dlp)
 _STRATEGIES: list[tuple[str, bool, list[str] | None]] = [
-    ("logado/web", True, ["web"]),                      # evita clientes que retornam 403 neste servidor
-    ("logado/padrão", True, None),                          # web_embedded, tv_downgraded, web
-    ("logado/tv", True, ["tv", "web_embedded", "mweb"]),    # tv e web_embedded dispensam PO token
-    ("anônimo/visionos", False, ["visionos", "android_vr"]),
+    # Let the maintained yt-dlp default (including current tv_samsung)
+    # attempt the requested recording FIRST. The old forced web client was
+    # the first observed 429 in production and opened a global cooldown
+    # before any other strategy could try a working player.
+    ("logado/padrão", True, None),
+    ("logado/web", True, ["web"]),
+    ("logado/tv", True, ["tv", "web_embedded", "mweb"]),
     ("anônimo/padrão", False, None),
+    ("anônimo/visionos", False, ["visionos", "android_vr"]),
 ]
 
 # Erros em que vale tentar a próxima estratégia (os demais são definitivos: vídeo privado etc.).
@@ -1270,13 +1276,13 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
             _strategy_outcome(label, False, any(marker in message.lower() for marker in _RETRYABLE))
             _check_youtube_cooldown()
             log.warning("estratégia %s falhou: %s", label, _redact_media_urls(message)[:300])
-            if "private video" in message.lower() or (label != "logado/web" and
+            if "private video" in message.lower() or (index > 0 and
                     not any(marker in message.lower() for marker in _RETRYABLE)):
                 raise
         except HTTPException as error:
             # The single-client shortcut may find no usable m4a. Keep the
             # original multi-client strategy for that video.
-            if label != "logado/web" or error.status_code != 422 or error.detail != "Não foi possível obter o áudio em formato .m4a.":
+            if error.status_code != 422 or error.detail != "Não foi possível obter o áudio em formato .m4a.":
                 raise
             _strategy_outcome(label, False, True)
             log.warning("estratégia %s sem áudio m4a; tentando clientes padrão", label)
