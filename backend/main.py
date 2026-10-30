@@ -581,13 +581,16 @@ def search(
             raise HTTPException(status_code=503, detail="Busca ocupada neste servidor. Tente novamente.",
                                 headers={"Retry-After": "1", "X-Search-Error": "search_busy"})
         try:
-            remaining_search_cooldown = upstream_health.remaining("ytmusic_search")
+            remaining_search_cooldown, reason = upstream_health.cooldown("ytmusic_search")
             if remaining_search_cooldown:
+                limited = reason in {"rate_limited", "bot_verification"}
                 raise HTTPException(
-                    status_code=429,
-                    detail="O catálogo YouTube Music limitou temporariamente este servidor.",
+                    status_code=429 if limited else 503,
+                    detail=("O catálogo YouTube Music limitou temporariamente este servidor."
+                            if limited else "O catálogo YouTube Music recusou temporariamente a conexão."),
                     headers={"Retry-After": str(remaining_search_cooldown),
-                             "X-Search-Error": "upstream_rate_limited"},
+                             "X-Search-Error": "upstream_rate_limited" if limited
+                                               else "upstream_access_denied"},
                 )
             started = time.monotonic()
             needed = offset + limit
