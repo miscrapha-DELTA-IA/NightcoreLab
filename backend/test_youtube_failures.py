@@ -56,8 +56,66 @@ class YouTubeFailureTests(unittest.TestCase):
         self.assertEqual(json.loads(response.body)["status"], "ready")
         self.assertNotIn("retry-after", response.headers)
 
-    def test_real_audio_client_429_still_protects_backend(self):
-        main._YtdlpLog("logado/web").warning("HTTP Error 429: Too Many Requests")
+    def test_transient_warning_429_does_not_block_all_following_songs(self):
+        # Production: 2026-10-29 00:39:09Z emitted a yt-dlp 429 warning,
+        # then 00:39:30Z the same player successfully completed the song.
+        logger = main._YtdlpLog("logado/web")
+        logger.warning("HTTP Error 429: Too Many Requests")
+        self.assertTrue(logger.saw_rate_limit)
+        self.assertEqual(main._youtube_cooldown_until, 0)
+        main._check_youtube_cooldown()
+
+    def test_warning_then_successful_audio_does_not_trip_global_circuit(self):
+        class RecoveredYDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def extract_info(self, url, download=False):
+                self.options["logger"].warning("HTTP Error 429: Too Many Requests")
+                return {"id": "abcdefghijk", "title": "Requested Song",
+                        "duration": 165, "thumbnail": None}
+
+            def process_ie_result(self, info, download=True):
+                pattern = self.options["outtmpl"]
+                Path(pattern.replace("%(id)s", "abcdefghijk").replace("%(ext)s", "m4a")).write_bytes(b"audio")
+
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(main.yt_dlp, "YoutubeDL", RecoveredYDL):
+            path, title, cover = main._extract_with(
+                "https://www.youtube.com/watch?v=abcdefghijk", folder,
+                "logado/web", False, ["web"])
+            self.assertEqual(path.name, "abcdefghijk.m4a")
+            self.assertEqual(title, "Requested Song")
+            self.assertIsNone(cover)
+        self.assertEqual(main._youtube_cooldown_until, 0)
+        main._check_youtube_cooldown()
+
+    def test_fatal_429_after_internal_retry_does_protect_backend(self):
+        class FailedYDL:
+            def __init__(self, options):
+                self.logger = options["logger"]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def extract_info(self, url, download=False):
+                self.logger.warning("HTTP Error 429: Too Many Requests")
+                raise main.yt_dlp.utils.DownloadError("Failed to extract any player response")
+
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(main.yt_dlp, "YoutubeDL", FailedYDL):
+            with self.assertRaises(main.yt_dlp.utils.DownloadError):
+                main._extract_with("https://www.youtube.com/watch?v=abcdefghijk",
+                                   folder, "logado/web", False, ["web"])
         with self.assertRaises(HTTPException) as raised:
             main._check_youtube_cooldown()
         self.assertEqual(raised.exception.status_code, 429)
@@ -67,7 +125,7 @@ class YouTubeFailureTests(unittest.TestCase):
     def test_429_does_not_try_more_clients_and_returns_retry_after(self):
         def blocked(*args):
             main._YtdlpLog("test").warning("HTTP Error 429: Too Many Requests")
-            raise main.yt_dlp.utils.DownloadError("Failed to extract any player response")
+            raise main.yt_dlp.utils.DownloadError("HTTP Error 429: Too Many Requests")
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(main, "_extract_with", side_effect=blocked) as extract:
             with self.assertRaises(HTTPException) as raised:
