@@ -709,7 +709,19 @@ async def progressive_audio(url: HttpUrl, request: Request, background_tasks: Ba
     try:
         source = await asyncio.wait_for(
             asyncio.to_thread(_discover_progressive_aac, canonical), timeout=13)
-    except (asyncio.TimeoutError, yt_dlp.utils.DownloadError, ValueError):
+    except yt_dlp.utils.DownloadError as error:
+        # A true upstream rate limit must NOT be swallowed into generic 422.
+        # The edge must avoid starting a second, equally blocked extraction.
+        category = upstream_health.record_failure("youtube_audio", error)
+        if category in {"rate_limited", "bot_verification"}:
+            _pause_youtube_requests()
+            raise HTTPException(
+                status_code=429,
+                detail="O YouTube limitou a obtenção de áudio deste servidor.",
+                headers={"Retry-After": "300", "X-Download-Error": "upstream_rate_limited"},
+            ) from error
+        raise HTTPException(status_code=422, detail="Fluxo progressivo indisponível para esta música") from error
+    except (asyncio.TimeoutError, ValueError):
         raise HTTPException(status_code=422, detail="Fluxo progressivo indisponível para esta música")
     except Exception:
         log.info("progressive AAC discovery unavailable id=%s", video_id)
@@ -805,11 +817,11 @@ async def prepare_next_track(request: DownloadRequest):
 
 @app.get("/download")
 async def background_download(url: HttpUrl, background_tasks: BackgroundTasks, request: Request,
-                              delivery: str = "audio"):
+                              delivery: str = "audio", cache_only: bool = False):
     """Background URLSession compatible GET, sharing the POST extraction."""
     _youtube_video_id(str(url))
     return await download(DownloadRequest(url=url), background_tasks, delivery=delivery,
-                          browser_range=request.headers.get("range"))
+                          browser_range=request.headers.get("range"), cache_only=cache_only)
 
 
 @app.head("/download")
@@ -1144,7 +1156,7 @@ def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | 
 @app.post("/download")
 async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
                    redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET",
-                   browser_range: str | None = None):
+                   browser_range: str | None = None, cache_only: bool = False):
     url = str(request.url)
     video_id = _youtube_video_id(url)
     if delivery not in {"audio", "url", "browser"}:
@@ -1153,6 +1165,21 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
         remote = await _try_r2(video_id, delivery, r2_method, browser_range=browser_range)
         if remote is not None:
             return remote
+    if cache_only:
+        # Cache-only is a read-only escape hatch when the upstream audio IP is
+        # rate-limited. It must NEVER join or create yt-dlp extraction tasks.
+        hit = await asyncio.to_thread(_pin_cached_audio, video_id)
+        if hit is not None:
+            audio_path, title, thumbnail, _ = hit
+            _counters["cache_local_hits"] += 1
+            background_tasks.add_task(_release_cached_reader, video_id)
+            _schedule_r2_upload(video_id, audio_path, title, thumbnail)
+            return _audio_response(audio_path, title, thumbnail, background_tasks)
+        raise HTTPException(
+            status_code=404,
+            detail="Esta gravação não está no cache local nem no R2.",
+            headers={"X-Download-Error": "cache_miss", "Cache-Control": "no-store"},
+        )
     entry = in_flight_downloads.get(video_id)
     if entry is None:
         # Pin the cache entry atomically with lookup: pruning runs under the same lock.
