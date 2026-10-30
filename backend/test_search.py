@@ -15,6 +15,8 @@ class SearchTests(unittest.TestCase):
         slots = patch.object(main, "_search_slots", threading.BoundedSemaphore(1))
         slots.start()
         self.addCleanup(slots.stop)
+        with main._search_results_lock:
+            main._search_results_cache.clear()
 
     def test_ndjson_and_song_filter(self):
         from unittest.mock import MagicMock
@@ -68,9 +70,46 @@ class SearchTests(unittest.TestCase):
     def test_search_does_not_consume_audio_slots(self):
         main._search_slots.acquire()
         with patch("ytmusicapi.YTMusic") as factory:
-            self.assertEqual(self.client.get('/search', params={'query': 'music'}).status_code, 429)
+            response = self.client.get('/search', params={'query': 'music'})
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()['code'], 'http_503')
+            self.assertEqual(response.headers['X-Search-Error'], 'search_busy')
+            self.assertEqual(response.headers['Retry-After'], '1')
             factory.assert_not_called()
         self.assertEqual(main.download_semaphore._value, min(main.MAX_CONCURRENT_DOWNLOADS, 2))
+
+    def test_cached_song_search_does_not_acquire_busy_slot_again(self):
+        songs = [
+            {"resultType": "song", "videoId": "abcdefghijk", "title": "Real Song",
+             "duration_seconds": 180, "artists": [{"name": "Real Artist"}]}
+        ]
+        with patch("ytmusicapi.YTMusic") as factory:
+            factory.return_value.search.return_value = songs
+            first = self.client.get("/search", params={"query": "Real Artist"})
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.headers["X-Search-Cache"], "MISS")
+            self.assertEqual(factory.return_value.search.call_count, 1)
+            self.assertTrue(main._search_slots.acquire(blocking=False))
+            try:
+                second = self.client.get("/search", params={"query": "Real Artist"})
+                self.assertEqual(second.status_code, 200)
+                self.assertEqual(second.headers["X-Search-Cache"], "HIT")
+                self.assertEqual(second.text, first.text)
+            finally:
+                main._search_slots.release()
+            self.assertEqual(factory.return_value.search.call_count, 1)
+
+    def test_busy_search_does_not_report_upstream_rate_limit(self):
+        main._search_slots.acquire()
+        try:
+            with patch("ytmusicapi.YTMusic") as factory:
+                blocked = self.client.get("/search", params={"query": "Fresh artist"})
+                self.assertEqual(blocked.status_code, 503)
+                self.assertEqual(blocked.headers["X-Search-Error"], "search_busy")
+                self.assertNotIn("upstream_rate_limited", blocked.text)
+                factory.assert_not_called()
+        finally:
+            main._search_slots.release()
 
     def test_get_download_reuses_existing_audio_bridge(self):
         url = 'https://www.youtube.com/watch?v=abcdefghijk'
