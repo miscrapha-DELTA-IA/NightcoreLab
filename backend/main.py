@@ -54,6 +54,7 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 import audio_sources
 import fast_stream
+import ytm_client
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -209,7 +210,21 @@ class InFlightDownload:
 
 in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
-_search_slots = threading.BoundedSemaphore(1)
+def _search_concurrency() -> int:
+    # Metadata searches are I/O-bound and use exclusive session leases.
+    try:
+        value = int(os.getenv("SEARCH_CONCURRENCY", "2"))
+    except ValueError:
+        value = 2
+    return min(max(value, 1), 3)
+
+
+_search_slots = threading.BoundedSemaphore(_search_concurrency())
+# Identical concurrent searches share one upstream request rather than queueing.
+_search_inflight: dict[tuple[str, int, int], concurrent.futures.Future] = {}
+_SEARCH_FOLLOWER_WAIT = 10.0
+_search_stats = {"hit": 0, "miss": 0, "coalesced": 0, "busy": 0,
+                 "errors": 0, "upstream_ms_last": 0, "upstream_ms_max": 0}
 # Search is metadata-only: keep a small per-process positive cache, separate
 # from yt-dlp playback. One busy search must not claim YouTube is rate-limited.
 _search_results_cache: dict[tuple[str, int, int], tuple[float, str]] = {}
@@ -525,54 +540,84 @@ def search(
     offset: int = Query(default=0, ge=0, le=80),
     limit: int = Query(default=15, ge=1, le=20),
 ):
-    """Paginated YT Music metadata, backwards-compatible with native iOS clients.
+    """Swift-compatible NDJSON music search with pooled upstream sessions.
 
-    Pagination counts validated songs, rather than raw YT Music search entries,
-    so filtering invalid IDs, unavailable tracks or long videos does not skip songs.
+    Cached results never consume the upstream concurrency gate. Identical
+    in-flight searches coalesce. Local saturation is reported as HTTP 503,
+    never mislabeled as an upstream YouTube rate limit.
     """
     query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Digite uma busca.")
     key = (query.casefold(), offset, limit)
+
+    def ndjson(payload: str, state: str) -> Response:
+        return Response(content=payload, media_type="application/x-ndjson",
+                        headers={"Cache-Control": "public,max-age=120" if payload else "no-store",
+                                 "X-Search-Cache": state})
+
     with _search_results_lock:
         cached = _search_results_cache.get(key)
         if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL:
-            return Response(content=cached[1], media_type="application/x-ndjson",
-                            headers={"Cache-Control": "public,max-age=120", "X-Search-Cache": "HIT"})
-    # A busy search is LOCAL worker contention, not upstream YouTube 429.
-    # Wait briefly for the existing operation instead of breaking all browser
-    # searches with a fake upstream cooldown.
-    if not _search_slots.acquire(timeout=1.5):
-        with _search_results_lock:
-            cached = _search_results_cache.get(key)
-            if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL:
-                return Response(content=cached[1], media_type="application/x-ndjson",
-                                headers={"Cache-Control": "public,max-age=120", "X-Search-Cache": "HIT"})
-        raise HTTPException(status_code=503, detail="Busca ocupada neste servidor. Tente novamente.",
-                            headers={"Retry-After": "1", "X-Search-Error": "search_busy"})
+            _search_stats["hit"] += 1
+            return ndjson(cached[1], "HIT")
+        leader_future = _search_inflight.get(key)
+        is_leader = leader_future is None
+        if is_leader:
+            leader_future = _search_inflight[key] = concurrent.futures.Future()
+
+    if not is_leader:
+        _search_stats["coalesced"] += 1
+        try:
+            return ndjson(leader_future.result(timeout=_SEARCH_FOLLOWER_WAIT), "COALESCED")
+        except concurrent.futures.TimeoutError:
+            raise HTTPException(status_code=503, detail="Busca ocupada neste servidor. Tente novamente.",
+                                headers={"Retry-After": "1", "X-Search-Error": "search_busy"})
+
     try:
-        from ytmusicapi import YTMusic
-        needed = offset + limit
-        # Only additional web pages spend the larger YT Music continuation budget.
-        fetch_limit = 20 if offset == 0 and limit == 15 else min(120, needed + 12)
-        results = YTMusic().search(query, filter="songs", limit=fetch_limit)
-        entries = _music_search_entries(results, max_results=needed).splitlines()
-        page = entries[offset:needed]
-        payload = "\n".join(page) + ("\n" if page else "")
-        if page:
-            with _search_results_lock:
-                if len(_search_results_cache) >= 96:
-                    _search_results_cache.pop(next(iter(_search_results_cache)))
-                _search_results_cache[key] = (time.monotonic(), payload)
-        return Response(content=payload,
-                        media_type="application/x-ndjson",
-                        headers={"Cache-Control": "public,max-age=120" if page else "no-store",
-                                 "X-Search-Cache": "MISS"})
-    except Exception:
-        log.exception("YouTube Music search failed")
-        raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.")
+        if not _search_slots.acquire(timeout=1.5):
+            _search_stats["busy"] += 1
+            raise HTTPException(status_code=503, detail="Busca ocupada neste servidor. Tente novamente.",
+                                headers={"Retry-After": "1", "X-Search-Error": "search_busy"})
+        try:
+            started = time.monotonic()
+            needed = offset + limit
+            fetch_limit = 20 if offset == 0 and limit == 15 else min(120, needed + 12)
+            try:
+                with ytm_client.acquire() as client:
+                    try:
+                        results = client.search(query, filter="songs", limit=fetch_limit)
+                    except Exception:
+                        ytm_client.invalidate(client)
+                        raise
+                entries = _music_search_entries(results, max_results=needed).splitlines()
+                page = entries[offset:needed]
+                payload = "\n".join(page) + ("\n" if page else "")
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                _search_stats["miss"] += 1
+                _search_stats["upstream_ms_last"] = elapsed_ms
+                _search_stats["upstream_ms_max"] = max(_search_stats["upstream_ms_max"], elapsed_ms)
+                if page:
+                    with _search_results_lock:
+                        if len(_search_results_cache) >= 96:
+                            _search_results_cache.pop(next(iter(_search_results_cache)))
+                        _search_results_cache[key] = (time.monotonic(), payload)
+                leader_future.set_result(payload)
+                return ndjson(payload, "MISS")
+            except Exception as error:
+                _search_stats["errors"] += 1
+                log.warning("YouTube Music metadata search failed: %s", type(error).__name__)
+                raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.") from error
+        finally:
+            _search_slots.release()
+    except BaseException as exc:
+        if not leader_future.done():
+            leader_future.set_exception(exc)
+        raise
     finally:
-        _search_slots.release()
+        with _search_results_lock:
+            if _search_inflight.get(key) is leader_future:
+                _search_inflight.pop(key, None)
 
 
 def _discover_progressive_aac(url: str):
@@ -842,6 +887,8 @@ def metrics():
             "rss_bytes": _rss_bytes(), "peak_rss_bytes": _peak_rss_bytes,
             "r2_enabled": r2_cache is not None,
             "r2_uploading": len(_r2_uploading), "cookie_status": cookie_status,
+            "search": {**_search_stats, "client_builds": ytm_client.builds(),
+                       "inflight": len(_search_inflight)},
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
             **_counters}
 
