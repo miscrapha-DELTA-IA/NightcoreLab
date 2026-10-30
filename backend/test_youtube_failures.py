@@ -86,7 +86,7 @@ class YouTubeFailureTests(unittest.TestCase):
             self.assertEqual(main._extract_m4a("url", folder), result)
         self.assertEqual(extract.call_count, 2)
 
-    def test_web_shortcut_keeps_default_client_when_web_has_no_audio(self):
+    def test_default_client_can_fall_back_to_legacy_web_when_no_audio(self):
         result = (Path("song.m4a"), "song", None)
         with tempfile.TemporaryDirectory() as folder:
             cookies = Path(folder) / "cookies.txt"
@@ -97,8 +97,8 @@ class YouTubeFailureTests(unittest.TestCase):
                      result]) as extract:
                 self.assertEqual(main._extract_m4a("url", folder), result)
         self.assertEqual(extract.call_count, 2)
-        self.assertEqual(extract.call_args_list[0].args[-1], ["web"])
-        self.assertIsNone(extract.call_args_list[1].args[-1])
+        self.assertIsNone(extract.call_args_list[0].args[-1])
+        self.assertEqual(extract.call_args_list[1].args[-1], ["web"])
 
     def test_web_shortcut_keeps_default_client_on_upstream_error(self):
         result = (Path("song.m4a"), "song", None)
@@ -110,6 +110,22 @@ class YouTubeFailureTests(unittest.TestCase):
                      main.yt_dlp.utils.DownloadError("Web player unavailable"), result]) as extract:
                 self.assertEqual(main._extract_m4a("url", folder), result)
         self.assertEqual(extract.call_count, 2)
+
+    def test_upstream_default_is_first_with_or_without_cookies(self):
+        for with_cookies in (True, False):
+            with self.subTest(cookies=with_cookies), tempfile.TemporaryDirectory() as folder:
+                cookie_file = Path(folder) / "cookies.txt"
+                cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+                with patch.object(main, "COOKIES_FILE", str(cookie_file) if with_cookies else ""), \
+                     patch.object(main, "_extract_with", return_value=(Path("song.m4a"), "song", None)) as extract:
+                    main._extract_m4a("https://www.youtube.com/watch?v=abcdefghijk", folder)
+                    self.assertIsNone(extract.call_args_list[0].args[-1])
+
+    def test_progressive_discovery_uses_updated_client_defaults(self):
+        import inspect
+        source = inspect.getsource(main._discover_progressive_aac)
+        self.assertNotIn('"player_client": ["web"]', source)
+        self.assertIn('"skip_download": True', source)
 
     def test_private_video_does_not_retry(self):
         with tempfile.TemporaryDirectory() as folder, \
