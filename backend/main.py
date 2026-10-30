@@ -210,6 +210,11 @@ class InFlightDownload:
 in_flight_downloads: dict[str, InFlightDownload] = {}
 _related_slots = threading.BoundedSemaphore(1)
 _search_slots = threading.BoundedSemaphore(1)
+# Search is metadata-only: keep a small per-process positive cache, separate
+# from yt-dlp playback. One busy search must not claim YouTube is rate-limited.
+_search_results_cache: dict[tuple[str, int, int], tuple[float, str]] = {}
+_search_results_lock = threading.Lock()
+_SEARCH_CACHE_TTL = 300
 _alignment_slots = threading.BoundedSemaphore(1)
 RELATED_LIMIT = 10
 RELATED_SCAN_LIMIT = 20
@@ -528,8 +533,23 @@ def search(
     query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Digite uma busca.")
-    if not _search_slots.acquire(blocking=False):
-        raise HTTPException(status_code=429, detail="Busca ocupada. Tente novamente.")
+    key = (query.casefold(), offset, limit)
+    with _search_results_lock:
+        cached = _search_results_cache.get(key)
+        if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL:
+            return Response(content=cached[1], media_type="application/x-ndjson",
+                            headers={"Cache-Control": "public,max-age=120", "X-Search-Cache": "HIT"})
+    # A busy search is LOCAL worker contention, not upstream YouTube 429.
+    # Wait briefly for the existing operation instead of breaking all browser
+    # searches with a fake upstream cooldown.
+    if not _search_slots.acquire(timeout=1.5):
+        with _search_results_lock:
+            cached = _search_results_cache.get(key)
+            if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL:
+                return Response(content=cached[1], media_type="application/x-ndjson",
+                                headers={"Cache-Control": "public,max-age=120", "X-Search-Cache": "HIT"})
+        raise HTTPException(status_code=503, detail="Busca ocupada neste servidor. Tente novamente.",
+                            headers={"Retry-After": "1", "X-Search-Error": "search_busy"})
     try:
         from ytmusicapi import YTMusic
         needed = offset + limit
@@ -538,9 +558,16 @@ def search(
         results = YTMusic().search(query, filter="songs", limit=fetch_limit)
         entries = _music_search_entries(results, max_results=needed).splitlines()
         page = entries[offset:needed]
-        return Response(content="\n".join(page) + ("\n" if page else ""),
+        payload = "\n".join(page) + ("\n" if page else "")
+        if page:
+            with _search_results_lock:
+                if len(_search_results_cache) >= 96:
+                    _search_results_cache.pop(next(iter(_search_results_cache)))
+                _search_results_cache[key] = (time.monotonic(), payload)
+        return Response(content=payload,
                         media_type="application/x-ndjson",
-                        headers={"Cache-Control": "no-store"})
+                        headers={"Cache-Control": "public,max-age=120" if page else "no-store",
+                                 "X-Search-Cache": "MISS"})
     except Exception:
         log.exception("YouTube Music search failed")
         raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.")
