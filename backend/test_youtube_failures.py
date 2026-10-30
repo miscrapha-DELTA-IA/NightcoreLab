@@ -112,12 +112,11 @@ class YouTubeFailureTests(unittest.TestCase):
         self.assertEqual(extract.call_count, 2)
 
     def test_upstream_default_is_first_with_or_without_cookies(self):
-        with tempfile.TemporaryDirectory() as folder:
-            cookie_file = Path(folder) / "cookies.txt"
-            cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-            for configured in (str(cookie_file), ""):
-                with self.subTest(cookies=bool(configured)), \
-                     patch.object(main, "COOKIES_FILE", configured), \
+        for with_cookies in (True, False):
+            with self.subTest(cookies=with_cookies), tempfile.TemporaryDirectory() as folder:
+                cookie_file = Path(folder) / "cookies.txt"
+                cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+                with patch.object(main, "COOKIES_FILE", str(cookie_file) if with_cookies else ""), \
                      patch.object(main, "_extract_with", return_value=(Path("song.m4a"), "song", None)) as extract:
                     main._extract_m4a("https://www.youtube.com/watch?v=abcdefghijk", folder)
                     self.assertIsNone(extract.call_args_list[0].args[-1])
