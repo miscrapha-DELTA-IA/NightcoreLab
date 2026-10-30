@@ -107,9 +107,9 @@ class BackendEgressTests(unittest.TestCase):
 
     def test_download_uses_r2_before_any_youtube_cooldown(self):
         async_response = AsyncMock(return_value=Response(content=b"cached", media_type="audio/mp4"))
-        with patch.object(main, "_try_r2", async_response), \\
+        with (patch.object(main, "_try_r2", async_response),
              patch.object(main, "_check_youtube_cooldown",
-                          side_effect=AssertionError("No upstream lookup on cached song")):
+                          side_effect=AssertionError("No upstream lookup on cached song"))):
             response = self.client.post(
                 "/download", json={"url": "https://www.youtube.com/watch?v=abcdefghijk"})
         self.assertEqual(response.status_code, 200)
