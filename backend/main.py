@@ -1158,6 +1158,9 @@ class _YtdlpLog:
 
     def __init__(self, label: str) -> None:
         self.label = label
+        # yt-dlp may warn about one 429 and then successfully retry the
+        # *same* recording. Do not poison the server-wide circuit on a warning.
+        self.saw_rate_limit = False
 
     def debug(self, msg: str) -> None:
         # Keep only the player client names needed to diagnose slow 403 responses.
@@ -1169,16 +1172,17 @@ class _YtdlpLog:
         pass
 
     def warning(self, msg: str) -> None:
-        # A failure while loading an optional Mix /related must never switch
-        # OFF audio downloads. Only the downloader's own player client sees
-        # enough evidence to quarantine new YouTube extractions globally.
-        upstream_limited = "http error 429" in msg.lower() or "too many requests" in msg.lower()
-        if upstream_limited and self.label != "related":
-            _pause_youtube_requests()
+        # Logging is diagnostic, not proof of a failed extraction. yt-dlp
+        # internally retries metadata requests and may succeed moments later.
+        if self.label != "related" and ("http error 429" in msg.lower() or
+                                        "too many requests" in msg.lower()):
+            self.saw_rate_limit = True
         log.warning("yt-dlp [%s]: %s", self.label, _redact_media_urls(msg)[:500])
 
     def error(self, msg: str) -> None:   # o erro final já é registrado em download()
-        pass
+        if self.label != "related" and ("http error 429" in msg.lower() or
+                                        "too many requests" in msg.lower()):
+            self.saw_rate_limit = True
 
 
 # Estratégias tentadas em ordem até uma entregar áudio. O YouTube muda com frequência
@@ -1273,6 +1277,10 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         except yt_dlp.utils.DownloadError as error:
             last_error = error
             message = str(error)
+            # Final explicit provider 429 (including tests and external
+            # wrappers) is definitive; a yt-dlp warning alone is not.
+            if "http error 429" in message.lower() or "too many requests" in message.lower():
+                _pause_youtube_requests()
             _strategy_outcome(label, False, any(marker in message.lower() for marker in _RETRYABLE))
             _check_youtube_cooldown()
             log.warning("estratégia %s falhou: %s", label, _redact_media_urls(message)[:300])
@@ -1298,6 +1306,7 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
 def _extract_with(url: str, work_dir: str, label: str,
                   use_cookies: bool, clients: list[str] | None) -> tuple[Path, str, str | None]:
     has_ffmpeg = shutil.which("ffmpeg") is not None
+    ydl_logger = _YtdlpLog(label)
 
     ydl_opts = {
         # 1º o AAC/m4a nativo (sem conversão); depois qualquer áudio; por fim qualquer
@@ -1308,7 +1317,7 @@ def _extract_with(url: str, work_dir: str, label: str,
         "match_filter": yt_dlp.utils.match_filter_func("duration < 600"),
         "quiet": True,
         "no_warnings": False,
-        "logger": _YtdlpLog(label),
+        "logger": ydl_logger,
         "noprogress": True,
         # Reuse YouTube player signatures between songs while this free instance is awake.
         # The directory is ephemeral, like the audio cache, and stores no song files.
@@ -1330,25 +1339,32 @@ def _extract_with(url: str, work_dir: str, label: str,
     if use_cookies:
         ydl_opts["cookiefile"] = _prepare_cookies(work_dir)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        metadata_started = time.monotonic()
-        info = ydl.extract_info(url, download=False)
-        metadata_seconds = time.monotonic() - metadata_started
-
-        if info.get("is_live"):
-            raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
-        duration = info.get("duration")
-        if not isinstance(duration, (int, float)) or duration >= MAX_DURATION_SECONDS:
-            raise HTTPException(
-                status_code=413,
-                detail="Duração desconhecida ou faixa de 10 minutos ou mais. Download bloqueado.",
-            )
-
-        audio_started = time.monotonic()
-        ydl.process_ie_result(info, download=True)
-        log.info("yt-dlp [%s]: metadados %.1fs, download/conversão %.1fs",
-                 label, metadata_seconds, time.monotonic() - audio_started)
-
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            metadata_started = time.monotonic()
+            info = ydl.extract_info(url, download=False)
+            metadata_seconds = time.monotonic() - metadata_started
+    
+            if info.get("is_live"):
+                raise HTTPException(status_code=422, detail="Transmissões ao vivo não são suportadas.")
+            duration = info.get("duration")
+            if not isinstance(duration, (int, float)) or duration >= MAX_DURATION_SECONDS:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Duração desconhecida ou faixa de 10 minutos ou mais. Download bloqueado.",
+                )
+    
+            audio_started = time.monotonic()
+            ydl.process_ie_result(info, download=True)
+            log.info("yt-dlp [%s]: metadados %.1fs, download/conversão %.1fs",
+                     label, metadata_seconds, time.monotonic() - audio_started)
+    
+    except yt_dlp.utils.DownloadError:
+        # Only the final failure of an extraction that observed a provider
+        # 429 opens the five-minute circuit. A recovered warning does not.
+        if ydl_logger.saw_rate_limit:
+            _pause_youtube_requests()
+        raise
     files = sorted(Path(work_dir).glob("*.m4a"))
     if not files:
         raise HTTPException(status_code=422, detail="Não foi possível obter o áudio em formato .m4a.")
