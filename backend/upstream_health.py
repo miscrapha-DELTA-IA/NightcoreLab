@@ -79,10 +79,17 @@ def record_failure(provider: str, error: BaseException) -> str:
     return category
 
 
-def remaining(provider: str) -> int:
+def cooldown(provider: str) -> tuple[int, str]:
+    """Return provider cooldown and true reason, never infer IP blocking."""
     with _lock:
-        seconds = _state[provider]["cooldown_until"] - time.monotonic()
-    return max(0, int(seconds + 0.999))
+        state = _state[provider]
+        seconds = state["cooldown_until"] - time.monotonic()
+        category = state["last_category"]
+    return max(0, int(seconds + 0.999)), category
+
+
+def remaining(provider: str) -> int:
+    return cooldown(provider)[0]
 
 
 def snapshot() -> dict:
