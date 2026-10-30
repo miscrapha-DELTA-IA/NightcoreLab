@@ -55,6 +55,7 @@ import yt_dlp
 import audio_sources
 import fast_stream
 import ytm_client
+import upstream_health
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -580,6 +581,14 @@ def search(
             raise HTTPException(status_code=503, detail="Busca ocupada neste servidor. Tente novamente.",
                                 headers={"Retry-After": "1", "X-Search-Error": "search_busy"})
         try:
+            remaining_search_cooldown = upstream_health.remaining("ytmusic_search")
+            if remaining_search_cooldown:
+                raise HTTPException(
+                    status_code=429,
+                    detail="O catálogo YouTube Music limitou temporariamente este servidor.",
+                    headers={"Retry-After": str(remaining_search_cooldown),
+                             "X-Search-Error": "upstream_rate_limited"},
+                )
             started = time.monotonic()
             needed = offset + limit
             fetch_limit = 20 if offset == 0 and limit == 15 else min(120, needed + 12)
@@ -595,6 +604,7 @@ def search(
                 payload = "\n".join(page) + ("\n" if page else "")
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 _search_stats["miss"] += 1
+                upstream_health.record_success("ytmusic_search", elapsed_ms)
                 _search_stats["upstream_ms_last"] = elapsed_ms
                 _search_stats["upstream_ms_max"] = max(_search_stats["upstream_ms_max"], elapsed_ms)
                 if page:
@@ -604,9 +614,31 @@ def search(
                         _search_results_cache[key] = (time.monotonic(), payload)
                 leader_future.set_result(payload)
                 return ndjson(payload, "MISS")
+            except HTTPException:
+                raise
             except Exception as error:
+                category = upstream_health.record_failure("ytmusic_search", error)
                 _search_stats["errors"] += 1
-                log.warning("YouTube Music metadata search failed: %s", type(error).__name__)
+                log.warning("YouTube Music metadata search failed category=%s type=%s",
+                            category, type(error).__name__)
+                if category in {"rate_limited", "bot_verification"}:
+                    raise HTTPException(
+                        status_code=429,
+                        detail="O catálogo YouTube Music limitou temporariamente este servidor.",
+                        headers={"Retry-After": str(upstream_health.remaining("ytmusic_search")),
+                                 "X-Search-Error": "upstream_rate_limited"},
+                    ) from error
+                if category == "access_denied":
+                    raise HTTPException(
+                        status_code=503, detail="O catálogo YouTube Music recusou a conexão.",
+                        headers={"Retry-After": "15",
+                                 "X-Search-Error": "upstream_access_denied"},
+                    ) from error
+                if category == "timeout":
+                    raise HTTPException(
+                        status_code=504, detail="O catálogo YouTube Music não respondeu a tempo.",
+                        headers={"X-Search-Error": "upstream_timeout"},
+                    ) from error
                 raise HTTPException(status_code=502, detail="Busca musical temporariamente indisponível.") from error
         finally:
             _search_slots.release()
@@ -889,6 +921,8 @@ def metrics():
             "r2_uploading": len(_r2_uploading), "cookie_status": cookie_status,
             "search": {**_search_stats, "client_builds": ytm_client.builds(),
                        "inflight": len(_search_inflight)},
+            "upstream_health": upstream_health.snapshot(),
+            "egress": upstream_health.egress_profile(),
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
             **_counters}
 
@@ -1063,6 +1097,7 @@ async def _try_r2(video_id: str, delivery: str, method: str = "GET",
         signed = (r2_cache.presigned_head(f"{video_id}/audio.m4a") if method == "HEAD"
                   else r2_cache.presigned_get(f"{video_id}/audio.m4a"))
         _counters["cache_r2_hits"] += 1
+        upstream_health.record_success("r2_cache")
         if delivery == "browser" and method == "GET":
             return await _r2_browser_stream(signed, browser_range)
         if delivery == "url":
@@ -1074,6 +1109,7 @@ async def _try_r2(video_id: str, delivery: str, method: str = "GET",
         return RedirectResponse(signed, status_code=302, headers=headers)
     except Exception as error:
         _counters["r2_fallbacks"] += 1
+        upstream_health.record_failure("r2_cache", error)
         log.warning("R2 HEAD falhou (%s): %s", video_id, type(error).__name__)
         return None
 
@@ -1345,11 +1381,13 @@ def _extract_m4a(url: str, work_dir: str) -> tuple[Path, str, str | None]:
         os.makedirs(attempt_dir)
         try:
             result = _extract_with(url, attempt_dir, label, use_cookies, clients)
+            upstream_health.record_success("youtube_audio")
             _strategy_outcome(label, True)
             log.info("estratégia que funcionou: %s", label)
             return result
         except yt_dlp.utils.DownloadError as error:
             last_error = error
+            upstream_health.record_failure("youtube_audio", error)
             message = str(error)
             # Final explicit provider 429 (including tests and external
             # wrappers) is definitive; a yt-dlp warning alone is not.
