@@ -1197,6 +1197,27 @@ def _require_pc_node(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Nó de áudio não autorizado")
 
 
+@app.post("/pc-node/prepare/{video_id}")
+async def pc_node_prepare(video_id: str):
+    """Idempotently queue one exact recording for an already-connected PC.
+
+    Public playback already queues jobs via /stream and /download. This small
+    fast endpoint closes a startup race: the browser can request a job while
+    its HTMLMediaElement waits on a failed 503, without another origin probe.
+    It never accepts arbitrary URLs and never runs yt-dlp on Render.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(status_code=400, detail="ID inválido")
+    if not pc_audio_bridge.queue.online():
+        return JSONResponse({"state": "offline"}, status_code=503,
+                            headers={"Cache-Control": "no-store", "Retry-After": "5"})
+    job = pc_audio_bridge.queue.request(video_id)
+    if job is None:
+        return JSONResponse({"state": "busy"}, status_code=429,
+                            headers={"Cache-Control": "no-store", "Retry-After": "5"})
+    return JSONResponse({"state": job.state}, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/pc-node/status/{video_id}")
 async def pc_node_status(video_id: str):
     """Read-only browser status for one exact recording, never starts extraction.
