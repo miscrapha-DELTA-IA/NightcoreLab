@@ -148,6 +148,10 @@ class AudioNodeQueue:
             job.state = "ready" if success else "failed"
             job.reason = reason[:40]
             job.finished = self._now()
+            # A successful upload/failure report is also a recent authentic
+            # worker heartbeat. Avoid switching to Render IP in the instant
+            # before the Windows agent resumes its normal next-job polling.
+            self._last_seen = job.finished
             job.lease = ""
             job.event.set()
             return True
