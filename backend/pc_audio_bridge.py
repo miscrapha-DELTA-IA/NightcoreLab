@@ -77,7 +77,10 @@ class AudioNodeQueue:
             old = self._jobs.get(video_id)
             if old:
                 return old
-            if len(self._jobs) >= MAX_JOBS:
+            # Completed songs must not consume active queue capacity.
+            # Otherwise the ninth distinct song in five minutes gets rejected.
+            active = sum(j.state in ("pending", "leased") for j in self._jobs.values())
+            if active >= MAX_JOBS:
                 return None
             job = Job(video_id=video_id, created=self._now())
             self._jobs[video_id] = job
