@@ -60,7 +60,7 @@ class AlternateExtractionTests(unittest.TestCase):
         self.assertEqual(result[1], "Same Recording")
         args, kwargs = run.call_args
         self.assertNotIn("shell", kwargs)
-        self.assertEqual(kwargs["timeout"], 36)
+        self.assertEqual(kwargs["timeout"], 18)
         self.assertEqual(args[0][2], "alternate_extractor")
         self.assertEqual(args[0][4], ID)
         self.assertEqual(args[0][5], self.tmp)
