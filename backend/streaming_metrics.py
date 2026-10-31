@@ -72,7 +72,12 @@ class StreamingMetrics:
     def server(self, route, status, elapsed_ms):
         if route not in ROUTES:
             return
-        ms = self._elapsed(elapsed_ms)
+        # Observability must never interrupt live playback on a slow request,
+        # malformed upstream timing or clock anomaly.
+        try:
+            ms = self._elapsed(min(_MAX_MS, max(0, float(elapsed_ms))))
+        except (TypeError, ValueError, OverflowError):
+            return
         status_class = f"{int(status) // 100}xx"
         if status_class not in ("2xx", "3xx", "4xx", "5xx"):
             return
