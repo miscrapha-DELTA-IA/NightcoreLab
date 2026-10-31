@@ -58,6 +58,7 @@ import ytm_client
 import upstream_health
 import alternate_extractor
 import pc_audio_bridge
+from streaming_metrics import streaming_metrics
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -258,6 +259,28 @@ async def _limit_heavy_requests(request: Request, call_next):
             return JSONResponse({"detail": message, "code": "access_limited"},
                                 status_code=status, headers=headers)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _measure_streaming_headers(request: Request, call_next):
+    """Only timing until headers; streaming bodies remain untouched."""
+    path = request.url.path
+    route = ("/pc-node/status" if path.startswith("/pc-node/status/") else
+             "/pc-node/prepare" if path.startswith("/pc-node/prepare/") else
+             "/pc-node/upload" if path.startswith("/pc-node/upload/") else path)
+    if route not in {"/stream", "/download", "/prepare", "/pc-node/status",
+                     "/pc-node/prepare", "/pc-node/upload"}:
+        return await call_next(request)
+    began = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        streaming_metrics.server(route, 500, (time.monotonic() - began) * 1000)
+        raise
+    elapsed_ms = (time.monotonic() - began) * 1000
+    streaming_metrics.server(route, response.status_code, elapsed_ms)
+    response.headers.setdefault("Server-Timing", f"backend;dur={elapsed_ms:.0f}")
+    return response
 
 
 @app.middleware("http")
@@ -956,6 +979,27 @@ def _rss_bytes() -> int:
     return 0
 
 
+@app.post("/v1/playback-metric", status_code=204)
+async def ingest_playback_metric(request: Request):
+    """Aggregated timing ONLY: no account, recording, URL, IP or session IDs.
+
+    Strict JSON schema, tiny body and global per-process quota. Never starts a
+    download or interferes with native audio. Failures to report are optional.
+    """
+    if int(request.headers.get("content-length", "0") or "0") > 512:
+        raise HTTPException(status_code=413, detail="Metric too large")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 512:
+            raise HTTPException(status_code=413, detail="Metric too large")
+    try:
+        streaming_metrics.client(json.loads(raw))
+    except (TypeError, ValueError, UnicodeError):
+        raise HTTPException(status_code=400, detail="Invalid metric")
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/metrics")
 def metrics():
     cookie = _cookies_summary()
@@ -974,6 +1018,7 @@ def metrics():
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
             "alternate_extractor": alternate_extractor.snapshot(),
             "pc_audio_node": pc_audio_bridge.queue.snapshot(),
+            "streaming": streaming_metrics.snapshot(),
             **_counters}
 
 
