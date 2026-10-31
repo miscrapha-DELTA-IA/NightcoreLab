@@ -101,6 +101,23 @@ class PcNodeEndpointsTests(unittest.TestCase):
         self.patch_queue.stop()
         self.env.stop()
 
+    def test_browser_single_play_enqueues_same_song_once(self):
+        endpoint="/pc-node/prepare/"+ID
+        self.assertEqual(self.client.post(endpoint).status_code, 503)
+        self.client.get("/pc-node/next", headers=HEADERS)
+        first=self.client.post(endpoint)
+        self.assertEqual(first.status_code,200)
+        self.assertEqual(first.json()["state"],"pending")
+        same=self.client.post(endpoint)
+        self.assertEqual(same.json()["state"],"pending")
+        self.assertEqual(self.q.snapshot()["pending"],1)
+        self.assertEqual(self.client.post("/pc-node/prepare/invalid").status_code,400)
+        lease=self.client.get("/pc-node/next",headers=HEADERS).json()["lease"]
+        active=self.client.post(endpoint)
+        self.assertEqual(active.json()["state"],"leased")
+        self.assertTrue(self.q.finish(ID,lease,success=True))
+        self.assertEqual(self.client.post(endpoint).json()["state"],"ready")
+
     def test_browser_can_read_status_without_lease_or_token(self):
         self.assertEqual(self.client.get("/pc-node/status/unsafe").status_code,400)
         self.assertEqual(self.client.get("/pc-node/status/"+ID).json()["state"],"absent")
