@@ -1348,15 +1348,16 @@ class _YtdlpLog:
 # quais clientes exigem PO token num IP de datacenter; ter alternativas evita o app quebrar.
 #   (rótulo, usa cookies?, clientes do player — None = padrão do yt-dlp)
 _STRATEGIES: list[tuple[str, bool, list[str] | None]] = [
-    # Let the maintained yt-dlp default (including current tv_samsung)
-    # attempt the requested recording FIRST. The old forced web client was
-    # the first observed 429 in production and opened a global cooldown
-    # before any other strategy could try a working player.
+    # Try the public, unauthenticated session first for public catalog tracks.
+    # Production logs show first-attempt 429/403 with logged-in cookies, and
+    # yt-dlp recommends cookies only for content requiring a login.
+    # Both variants still share the same Render egress IP: if upstream 429
+    # persists, do NOT continue trying different clients/accounts.
+    ("anônimo/padrão", False, None),
+    ("anônimo/visionos", False, ["visionos", "android_vr"]),
     ("logado/padrão", True, None),
     ("logado/web", True, ["web"]),
     ("logado/tv", True, ["tv", "web_embedded", "mweb"]),
-    ("anônimo/padrão", False, None),
-    ("anônimo/visionos", False, ["visionos", "android_vr"]),
 ]
 
 # Erros em que vale tentar a próxima estratégia (os demais são definitivos: vídeo privado etc.).
