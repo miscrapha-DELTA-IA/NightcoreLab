@@ -814,6 +814,25 @@ async def prepare_next_track(request: DownloadRequest):
     if entry is not None:
         _watch_prepared_track(video_id,entry)
         return JSONResponse({"status":"already_preparing"},status_code=202)
+    # Prewarm via the same authenticated, deduplicated PC queue used by
+    # /stream and /download. Render egress is frequently 429-blocked, so
+    # background preparation must never start a redundant Render yt-dlp
+    # extraction while the Windows node is connected. R2/local cache and
+    # an existing Render in-flight task have already been checked above.
+    if pc_audio_bridge.queue.online():
+        job = pc_audio_bridge.queue.request(video_id)
+        if job is None:
+            raise HTTPException(status_code=429, detail="Fila do nó de áudio ocupada",
+                                headers={"Retry-After": "20",
+                                         "X-Download-Error": "pc_node_queue_full"})
+        if job.state == "failed":
+            raise HTTPException(status_code=503, detail="Nó local não conseguiu preparar a faixa",
+                                headers={"Retry-After": "35",
+                                         "X-Download-Error": "pc_node_unavailable"})
+        return JSONResponse({"status": "pc_preparing" if job.state in ("pending", "leased")
+                             else "cached_local", "source": "pc_node"},
+                            status_code=202 if job.state in ("pending", "leased") else 200,
+                            headers={"Cache-Control": "no-store"})
     if not audio_sources.can_recover(video_id):
         _check_youtube_cooldown()
     if _rss_bytes() >= MAX_RSS_BYTES or len(in_flight_downloads) >= MAX_PENDING_DOWNLOADS:
