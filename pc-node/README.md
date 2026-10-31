@@ -7,6 +7,25 @@ to the existing Render service over HTTPS, polls at 3-second intervals,
 receives an exact 11-character video ID, and attempts an audio-only M4A
 fetch with the same bounded yt-dlp version used by the backend.
 
+## Repair a connection error without reinstalling
+
+If the installer prints "Conexao nao aprovada pelo Render", first run
+`DIAGNOSTICAR_E_INICIAR.cmd` from the same installed folder. It reuses the
+existing Python virtual environment and reports a specific `[DIAGNOSTICO]`
+code rather than hiding the original failure. A sleeping Render free service
+may take longer than a single 20-second HTTP request to start.
+
+- HTTP 401: token does not match the current backend configuration; never
+  paste `node.env` into a public issue or chat.
+- HTTP 403: server/edge access denied; inspect access control.
+- HTTP 404: deployment does not expose `/pc-node/next`.
+- HTTP 503/timeout: backend may be waking up; bounded retries are automatic.
+- DNS: verify internet, DNS, VPN, proxy and Windows network access.
+
+During repair, extract the full ZIP into the **parent** directory of the
+existing `GNARLY_PC_Node` folder to merge files, not into the folder itself
+(which would create a duplicate nested directory).
+
 ## First run
 
 1. Install Python 3.11+ from https://python.org/downloads/windows/.

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -28,12 +29,12 @@ def load_config() -> tuple[str, str]:
     path = ROOT / "node.env"
     values = {}
     if path.is_file():
-        for line in path.read_text("utf-8").splitlines():
+        for line in path.read_text("utf-8-sig").splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 key, value = line.split("=", 1)
-                values[key.strip()] = value.strip()
-    token = os.getenv("GNARLY_PC_NODE_TOKEN") or values.get("GNARLY_PC_NODE_TOKEN", "")
-    url = os.getenv("GNARLY_BACKEND_URL") or values.get("GNARLY_BACKEND_URL", BACKEND)
+                values[key.strip()] = value.strip().strip("\"").strip("\'")
+    token = values.get("GNARLY_PC_NODE_TOKEN") or os.getenv("GNARLY_PC_NODE_TOKEN", "")
+    url = values.get("GNARLY_BACKEND_URL") or os.getenv("GNARLY_BACKEND_URL", BACKEND)
     if len(token) < 40:
         raise RuntimeError("Falta GNARLY_PC_NODE_TOKEN no node.env")
     if url.rstrip("/") != BACKEND:
@@ -83,12 +84,38 @@ def extract(video_id: str, directory: Path) -> Path | None:
         return None
 
 
+
+def _diagnose_connection(error: Exception) -> tuple[str, bool]:
+    """Give an actionable diagnostic without disclosing tokens or request headers."""
+    if isinstance(error, HTTPError):
+        if error.code == 401:
+            return "HTTP 401: Render recusou a credencial. Confira node.env e o servidor.", False
+        if error.code == 403:
+            return "HTTP 403: acesso negado pelo servidor ou protecao de borda.", False
+        if error.code == 404:
+            return "HTTP 404: endpoint PC Node ausente no deploy ativo.", False
+        if error.code in (408, 425, 429, 500, 502, 503, 504):
+            return f"HTTP {error.code}: Render indisponivel ou inicializando.", True
+        return f"HTTP {error.code}: erro nao transitorio da API.", False
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return "Timeout: Render nao respondeu no prazo.", True
+    if isinstance(error, URLError):
+        if isinstance(error.reason, socket.gaierror):
+            return "DNS: nao foi possivel resolver nightcorelab.onrender.com.", True
+        if isinstance(error.reason, (socket.timeout, TimeoutError)) or "timed out" in str(error.reason).lower():
+            return "Timeout de rede: Render pode estar acordando do modo de espera.", True
+        return "Rede indisponivel, firewall/proxy/VPN ou erro TLS.", True
+    return "Resposta inesperada do backend.", False
+
+
 def worker(*, once=False) -> int:
     _, token = load_config()
     print("GNARLY PC Audio Node • conexão de saída segura • sem portas abertas", flush=True)
+    failed_connections = 0
     while True:
         try:
-            job = api("GET", "/pc-node/next", token, timeout=20)
+            job = api("GET", "/pc-node/next", token, timeout=35)
+            failed_connections = 0
             if not job:
                 if once:
                     print("Conexão autenticada com o Render: OK (nenhum trabalho).",flush=True)
@@ -116,14 +143,17 @@ def worker(*, once=False) -> int:
             if once:
                 return 0
         except (HTTPError, URLError, TimeoutError, ValueError, OSError) as error:
-            if isinstance(error, HTTPError) and error.code in (401,403):
-                print("Token de autenticação inválido no servidor Render.",flush=True)
+            diagnosis, temporary = _diagnose_connection(error)
+            print("[DIAGNOSTICO] " + diagnosis, flush=True)
+            if not temporary:
                 return 2
-            print("Falha de conexão com o backend, nova tentativa controlada: " +
-                  type(error).__name__,flush=True)
-            if once:
+            failed_connections += 1
+            if once and failed_connections >= 5:
+                print("[FALHA] Tentativas de conexão esgotadas.", flush=True)
                 return 1
-            time.sleep(7)
+            delay = min(5 + failed_connections * 3, 20)
+            print(f"Nova tentativa em {delay}s.", flush=True)
+            time.sleep(delay)
 
 
 if __name__=="__main__":
