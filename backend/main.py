@@ -1197,6 +1197,20 @@ def _require_pc_node(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Nó de áudio não autorizado")
 
 
+@app.get("/pc-node/status/{video_id}")
+async def pc_node_status(video_id: str):
+    """Read-only browser status for one exact recording, never starts extraction.
+
+    The frontend waits for the existing PC job instead of forcing repeated
+    media element load() attempts and misreporting a temporary 503 as codec 4.
+    No worker credentials or lease tokens are returned.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(status_code=400, detail="ID inválido")
+    return JSONResponse(pc_audio_bridge.queue.status(video_id),
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.get("/pc-node/next")
 async def pc_node_next(request: Request):
     _require_pc_node(request)
