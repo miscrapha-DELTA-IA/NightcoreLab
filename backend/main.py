@@ -57,6 +57,7 @@ import fast_stream
 import ytm_client
 import upstream_health
 import alternate_extractor
+import pc_audio_bridge
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -703,6 +704,15 @@ async def progressive_audio(url: HttpUrl, request: Request, background_tasks: Ba
         path, title, thumbnail, _ = local
         background_tasks.add_task(_release_cached_reader, video_id)
         return _audio_response(path, title, thumbnail, background_tasks)
+    if pc_audio_bridge.queue.online():
+        state = await pc_audio_bridge.queue.wait(video_id, timeout=12)
+        if state == "ready":
+            hit = await asyncio.to_thread(_pin_cached_audio, video_id)
+            if hit:
+                path, title, thumbnail, _ = hit
+                background_tasks.add_task(_release_cached_reader, video_id)
+                return _audio_response(path, title, thumbnail, background_tasks)
+        raise HTTPException(status_code=503, detail="Nó local preparando áudio" if state=="pending" else "Nó local sem áudio", headers={"Retry-After":"3","X-Download-Error":"pc_node_preparing" if state=="pending" else "pc_node_unavailable"})
     if not audio_sources.can_recover(video_id):
         _check_youtube_cooldown()
     if _rss_bytes() >= MAX_RSS_BYTES:
@@ -876,12 +886,14 @@ def playback_status():
     """
     with _youtube_cooldown_lock:
         remaining = max(0, int(_youtube_cooldown_until - time.monotonic() + 0.999))
-    status = "upstream_rate_limited" if remaining else "ready"
+    pc_online = pc_audio_bridge.queue.online()
+    status = "upstream_rate_limited" if remaining and not pc_online else "ready"
     headers = {"Cache-Control": "no-store"}
-    if remaining:
+    if remaining and not pc_online:
         headers["Retry-After"] = str(remaining)
     return JSONResponse({
-        "status": status, "retry_after": remaining,
+        "status": status, "retry_after": remaining if not pc_online else 0,
+        "youtube_retry_after": remaining, "pc_node_online": pc_online,
         "cached_tracks_may_play": True
     }, headers=headers)
 
@@ -942,6 +954,7 @@ def metrics():
             "egress": upstream_health.egress_profile(),
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
             "alternate_extractor": alternate_extractor.snapshot(),
+            "pc_audio_node": pc_audio_bridge.queue.snapshot(),
             **_counters}
 
 
@@ -1172,6 +1185,80 @@ def _schedule_r2_upload(video_id: str, path: Path, title: str, thumbnail: str | 
     asyncio.create_task(_upload_r2(video_id, path, title, thumbnail))
 
 
+
+# No Windows inbound ports, public proxies, third-party URL targets or R2 secrets.
+_PC_NODE_MAX_BYTES = 25 * 1024 * 1024
+
+
+def _require_pc_node(request: Request) -> None:
+    if not pc_audio_bridge.queue.configured():
+        raise HTTPException(status_code=503, detail="Nó de áudio não configurado")
+    if not pc_audio_bridge.queue.authorized(request.headers.get("authorization")):
+        raise HTTPException(status_code=401, detail="Nó de áudio não autorizado")
+
+
+@app.get("/pc-node/next")
+async def pc_node_next(request: Request):
+    _require_pc_node(request)
+    leased = pc_audio_bridge.queue.lease_next()
+    if not leased:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"video_id": leased[0], "lease": leased[1]},
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/pc-node/fail/{video_id}")
+async def pc_node_fail(video_id: str, request: Request):
+    _require_pc_node(request)
+    if not pc_audio_bridge.queue.finish(video_id, request.headers.get("x-gnarly-lease", ""),
+                                        success=False, reason="source_unavailable"):
+        raise HTTPException(status_code=409, detail="Trabalho expirou")
+    return {"status": "recorded"}
+
+
+@app.put("/pc-node/upload/{video_id}")
+async def pc_node_upload(video_id: str, request: Request):
+    _require_pc_node(request)
+    lease = request.headers.get("x-gnarly-lease", "")
+    if not pc_audio_bridge.queue.validate_lease(video_id, lease):
+        raise HTTPException(status_code=409, detail="Trabalho desconhecido")
+    raw_size = request.headers.get("content-length")
+    if raw_size:
+        try:
+            declared = int(raw_size)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Tamanho inválido")
+        if declared > _PC_NODE_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Áudio excede o limite")
+    temp = tempfile.mkdtemp(prefix="gnarly-pc-node-")
+    source = Path(temp) / f"{video_id}.m4a"
+    total = 0
+    try:
+        with source.open("wb") as destination:
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > _PC_NODE_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Áudio excede o limite")
+                destination.write(chunk)
+        if total < 1024:
+            raise HTTPException(status_code=422, detail="Áudio vazio")
+        with source.open("rb") as file:
+            header = file.read(12)
+        if len(header)<12 or header[4:8]!=b"ftyp":
+            raise HTTPException(status_code=422, detail="Arquivo M4A inválido")
+        title = request.headers.get("x-gnarly-title", "").strip()[:150] or video_id
+        cached = await asyncio.to_thread(_cache_extracted_audio, video_id,
+                                         (source, title, None, temp))
+        path, _, _, _ = cached
+        if path.parent != CACHE_DIR:
+            raise HTTPException(status_code=503, detail="Cache indisponível")
+        _schedule_r2_upload(video_id, path, title, None)
+        pc_audio_bridge.queue.finish(video_id, lease, success=True)
+        return {"status": "cached", "video_id": video_id}
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+
 @app.post("/download")
 async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
                    redirect_cache: bool = True, delivery: str = "audio", r2_method: str = "GET",
@@ -1213,6 +1300,16 @@ async def download(request: DownloadRequest, background_tasks: BackgroundTasks,
         if hit is not None:
             _release_cached_reader(video_id)
     if entry is None:
+        if pc_audio_bridge.queue.online():
+            state = await pc_audio_bridge.queue.wait(video_id, timeout=14)
+            if state == "ready":
+                hit = await asyncio.to_thread(_pin_cached_audio, video_id)
+                if hit:
+                    path, title, thumbnail, _ = hit
+                    background_tasks.add_task(_release_cached_reader, video_id)
+                    _schedule_r2_upload(video_id, path, title, thumbnail)
+                    return _audio_response(path, title, thumbnail, background_tasks)
+            raise HTTPException(status_code=503, detail="Nó local preparando áudio" if state=="pending" else "Nó local sem áudio", headers={"Retry-After":"3","X-Download-Error":"pc_node_preparing" if state=="pending" else "pc_node_unavailable"})
         if not audio_sources.can_recover(video_id):
             _check_youtube_cooldown()
         if _rss_bytes() >= MAX_RSS_BYTES:
