@@ -56,6 +56,7 @@ import audio_sources
 import fast_stream
 import ytm_client
 import upstream_health
+import alternate_extractor
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -842,6 +843,7 @@ def health():
         # Runtime de JavaScript + componente EJS: necessários para o YouTube.
         "deno": shutil.which("deno") is not None,
         "ejs": importlib.util.find_spec("yt_dlp_ejs") is not None,
+        "alternate_extractor": importlib.util.find_spec("pytubefix") is not None,
         "cookies": bool(COOKIES_FILE) and os.path.isfile(COOKIES_FILE),
         # Diagnóstico (só nomes, nunca o conteúdo): ajuda a achar o que falta na configuração.
         "cookies_env": COOKIES_FILE or None,
@@ -939,6 +941,7 @@ def metrics():
             "upstream_health": upstream_health.snapshot(),
             "egress": upstream_health.egress_profile(),
             "player_clients": _circuit_snapshot(), "failures": dict(_failure_categories),
+            "alternate_extractor": alternate_extractor.snapshot(),
             **_counters}
 
 
@@ -1015,7 +1018,23 @@ def _run_extraction(url: str) -> tuple[Path, str, str | None, str]:
                 transient = (isinstance(error, HTTPException) and error.status_code in (429, 502, 503, 504)
                              or isinstance(error, yt_dlp.utils.DownloadError)
                              and any(marker in str(error).lower() for marker in _RETRYABLE))
-                result = audio_sources.recover(_youtube_video_id(url), work_dir) if transient else None
+                result = None
+                # Try a genuinely independent parser ONLY when yt-dlp failed
+                # on a format/player response, not after an upstream 429/403.
+                # The child is killable and uses the exact requested video ID.
+                if alternate_extractor.should_attempt(error):
+                    try:
+                        _check_youtube_cooldown()
+                    except HTTPException:
+                        pass
+                    else:
+                        result = alternate_extractor.extract(_youtube_video_id(url), work_dir)
+                        if result is not None:
+                            log.info("independent fallback delivered exact video id=%s",
+                                     _youtube_video_id(url))
+                # Keep the existing verified independent-audio recovery separate.
+                if result is None and transient:
+                    result = audio_sources.recover(_youtube_video_id(url), work_dir)
                 if result is None:
                     raise
             return (*result, work_dir)
