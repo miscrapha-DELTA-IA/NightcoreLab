@@ -30,6 +30,15 @@ class StreamingFeedbackTests(unittest.TestCase):
             self.report("pc_ready", 2200)
         self.assertEqual(self.metrics.playback_hints()["pc_poll_ms"], 2300)
 
+    def test_duration_anomalies_are_aggregated_without_song_or_listener_identifiers(self):
+        self.report("duration_reported_long", 52000)
+        self.report("duration_overrun", 52000, "render")
+        snap = self.metrics.snapshot()
+        self.assertEqual(snap["client"]["duration_reported_long/fast_edge"]["count"], 1)
+        self.assertEqual(snap["client"]["duration_overrun/render"]["p50_ms"], 52000)
+        self.assertNotIn("video_id", str(snap))
+        self.assertEqual(self.metrics.playback_hints()["pc_poll_ms"], 2300)
+
     def test_rebuffer_phase_appears_in_aggregate_only(self):
         self.report("rebuffer", 1450)
         snap = self.metrics.snapshot()
