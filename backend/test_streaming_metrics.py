@@ -55,6 +55,12 @@ class StreamingMetricsTests(unittest.TestCase):
         summary = m.snapshot()["backend_headers"]["/download/2xx"]
         self.assertEqual(summary["count"], 400)
         self.assertGreaterEqual(summary["p50_ms"], 144)
+        # A pathologically slow response, NaN or invalid input never breaks
+        # real streaming just because its metrics could not be captured.
+        m.server("/stream", 200, 9999999)
+        m.server("/stream", 200, float("nan"))
+        m.server("/stream", 200, None)
+        self.assertEqual(m.snapshot()["backend_headers"]["/stream/2xx"]["count"], 1)
 
     def test_http_receiver_and_metrics_snapshot(self):
         meter = StreamingMetrics()
