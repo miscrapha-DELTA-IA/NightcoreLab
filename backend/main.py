@@ -1000,6 +1000,17 @@ async def ingest_playback_metric(request: Request):
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
+@app.get("/v1/playback-hints")
+def playback_hints():
+    """Low-cost tuning from anonymous aggregate playback timings only.
+
+    No track ID, browser fingerprint, IP, account or source URL is used.
+    A bounded readiness poll hint cannot modify media rights or extraction.
+    """
+    return JSONResponse(streaming_metrics.playback_hints(),
+                        headers={"Cache-Control": "public, max-age=90"})
+
+
 @app.get("/metrics")
 def metrics():
     cookie = _cookies_summary()
