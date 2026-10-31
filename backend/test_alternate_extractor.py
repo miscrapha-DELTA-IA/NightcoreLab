@@ -110,11 +110,11 @@ class AlternateExtractionTests(unittest.TestCase):
 
     def test_main_integrates_only_after_recoverable_format_failure(self):
         expected = (Path(self.tmp) / f"{ID}.m4a", "Same Recording", None)
-        with patch.object(main, "_sweep_stale_work_dirs"), \\
-             patch.object(main, "_check_youtube_cooldown"), \\
+        with patch.object(main, "_sweep_stale_work_dirs"), \
+             patch.object(main, "_check_youtube_cooldown"), \
              patch.object(main, "_extract_m4a",
-                          side_effect=yt_dlp.utils.DownloadError("Requested format is not available")), \\
-             patch.object(main.alternate_extractor, "extract", return_value=expected) as secondary, \\
+                          side_effect=yt_dlp.utils.DownloadError("Requested format is not available")), \
+             patch.object(main.alternate_extractor, "extract", return_value=expected) as secondary, \
              patch.object(main.audio_sources, "recover",
                           side_effect=AssertionError("Unneeded unrelated provider")):
             result = main._run_extraction(f"https://www.youtube.com/watch?v={ID}")
@@ -123,11 +123,11 @@ class AlternateExtractionTests(unittest.TestCase):
         shutil.rmtree(result[-1], ignore_errors=True)
 
     def test_main_never_retries_alternate_parser_on_known_429(self):
-        with patch.object(main, "_sweep_stale_work_dirs"), \\
+        with patch.object(main, "_sweep_stale_work_dirs"), \
              patch.object(main, "_extract_m4a",
-                          side_effect=yt_dlp.utils.DownloadError("HTTP Error 429 Too Many Requests")), \\
+                          side_effect=yt_dlp.utils.DownloadError("HTTP Error 429 Too Many Requests")), \
              patch.object(main.alternate_extractor, "extract",
-                          side_effect=AssertionError("Must not retry provider 429")), \\
+                          side_effect=AssertionError("Must not retry provider 429")), \
              patch.object(main.audio_sources, "recover",
                           side_effect=AssertionError("Must not substitute recording")):
             with self.assertRaises(yt_dlp.utils.DownloadError):
