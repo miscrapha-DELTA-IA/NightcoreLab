@@ -144,7 +144,7 @@ class YouTubeFailureTests(unittest.TestCase):
             self.assertEqual(main._extract_m4a("url", folder), result)
         self.assertEqual(extract.call_count, 2)
 
-    def test_default_client_can_fall_back_to_legacy_web_when_no_audio(self):
+    def test_default_client_can_fall_back_to_anonymous_visionos_when_no_audio(self):
         result = (Path("song.m4a"), "song", None)
         with tempfile.TemporaryDirectory() as folder:
             cookies = Path(folder) / "cookies.txt"
@@ -156,7 +156,7 @@ class YouTubeFailureTests(unittest.TestCase):
                 self.assertEqual(main._extract_m4a("url", folder), result)
         self.assertEqual(extract.call_count, 2)
         self.assertIsNone(extract.call_args_list[0].args[-1])
-        self.assertEqual(extract.call_args_list[1].args[-1], ["web"])
+        self.assertEqual(extract.call_args_list[1].args[-1], ["visionos", "android_vr"])
 
     def test_web_shortcut_keeps_default_client_on_upstream_error(self):
         result = (Path("song.m4a"), "song", None)
