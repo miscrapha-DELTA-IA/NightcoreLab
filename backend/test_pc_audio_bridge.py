@@ -53,6 +53,10 @@ class PcNodeQueueTests(unittest.TestCase):
         for index in range(bridge.MAX_JOBS):
             self.assertIsNotNone(self.q.request(f"{index:011d}"))
         self.assertIsNone(self.q.request("ABCDEF12345"))
+        video_id, lease = self.q.lease_next()
+        self.assertTrue(self.q.finish(video_id, lease, success=True))
+        # A ready/cached recording no longer blocks another unique request.
+        self.assertIsNotNone(self.q.request("ABCDEF12345"))
 
 
 class PcNodeEndpointsTests(unittest.TestCase):
