@@ -11,7 +11,8 @@ from time import monotonic
 EVENTS = frozenset({
     "first_audio", "recovered_audio", "initial_media_error",
     "final_error", "watchdog", "play_cancelled", "first_buffer",
-    "rebuffer", "pc_ready", "pc_queued", "recovery_started"
+    "rebuffer", "pc_ready", "pc_queued", "recovery_started",
+    "duration_reported_long", "duration_overrun"
 })
 SOURCES = frozenset({"fast_edge", "render", "offline", "independent", "unknown"})
 ROUTES = frozenset({"/stream", "/download", "/prepare", "/pc-node/prepare",
