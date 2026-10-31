@@ -17,9 +17,10 @@ import time
 
 _VIDEO_ID = __import__("re").compile(r"^[A-Za-z0-9_-]{11}$")
 MAX_JOBS = 8
-LEASE_SECONDS = 100
+LEASE_SECONDS = 210  # Windows extraction (75s) + upload (90s) + network headroom
 STALE_SECONDS = 300
 ONLINE_SECONDS = 25
+FAILED_RETRY_SECONDS = 35
 
 
 @dataclass
@@ -31,6 +32,7 @@ class Job:
     leased_until: float = 0
     lease: str = ""
     reason: str = ""
+    finished: float = 0.0
 
 
 class AudioNodeQueue:
@@ -54,7 +56,16 @@ class AudioNodeQueue:
 
     def online(self) -> bool:
         with self._lock:
-            return self.configured() and self._now() - self._last_seen <= ONLINE_SECONDS
+            if not self.configured():
+                return False
+            now = self._now()
+            # A synchronous Windows worker does not poll while extracting.
+            # Its accepted, unexpired lease is proof the node is still busy.
+            # Never fall back to Render's known-blocked IP mid-job.
+            return now - self._last_seen <= ONLINE_SECONDS or any(
+                j.state == "leased" and j.leased_until > now
+                for j in self._jobs.values()
+            )
 
     def heartbeat(self) -> None:
         with self._lock:
@@ -76,7 +87,15 @@ class AudioNodeQueue:
             self._sweep()
             old = self._jobs.get(video_id)
             if old:
-                return old
+                if old.state in ("pending", "leased"):
+                    return old
+                # A failed lookup is not a five-minute permanent tombstone.
+                # Preserve a bounded retry cooldown; one new explicit request
+                # can start fresh work once the worker is available again.
+                delay = FAILED_RETRY_SECONDS if old.state == "failed" else 5
+                if self._now() - old.finished < delay:
+                    return old
+                self._jobs.pop(video_id, None)
             # Completed songs must not consume active queue capacity.
             # Otherwise the ninth distinct song in five minutes gets rejected.
             active = sum(j.state in ("pending", "leased") for j in self._jobs.values())
@@ -104,6 +123,7 @@ class AudioNodeQueue:
                 if job.state == "leased" and job.leased_until <= self._now():
                     job.state = "failed"
                     job.reason = "lease_expired"
+                    job.finished = self._now()
                     job.event.set()
                 if job.state != "pending":
                     continue
@@ -127,9 +147,25 @@ class AudioNodeQueue:
             job = self._jobs[video_id]
             job.state = "ready" if success else "failed"
             job.reason = reason[:40]
+            job.finished = self._now()
+            # A successful upload/failure report is also a recent authentic
+            # worker heartbeat. Avoid switching to Render IP in the instant
+            # before the Windows agent resumes its normal next-job polling.
+            self._last_seen = job.finished
             job.lease = ""
             job.event.set()
             return True
+
+    def status(self, video_id: str) -> dict:
+        if not _VIDEO_ID.fullmatch(video_id):
+            return {"state": "invalid", "node_online": False}
+        with self._lock:
+            self._sweep()
+            job = self._jobs.get(video_id)
+            return {
+                "state": job.state if job else "absent",
+                "node_online": self.online(),
+            }
 
     def snapshot(self) -> dict:
         with self._lock:

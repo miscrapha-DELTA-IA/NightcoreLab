@@ -48,6 +48,35 @@ class PcNodeQueueTests(unittest.TestCase):
         self.assertFalse(self.q.authorized(""))
         self.assertTrue(self.q.authorized(HEADERS["Authorization"]))
 
+    def test_long_extraction_keeps_origin_online_without_new_polls(self):
+        now = [0.]
+        q = bridge.AudioNodeQueue(now=lambda: now[0])
+        q.heartbeat()
+        q.request(ID)
+        _, lease = q.lease_next()
+        now[0] = bridge.ONLINE_SECONDS + 80
+        self.assertTrue(q.online(), "Active Windows lease keeps Render egress disabled")
+        self.assertTrue(q.validate_lease(ID, lease))
+        self.assertEqual(q.status(ID)["state"], "leased")
+        self.assertTrue(q.finish(ID, lease, success=True))
+        self.assertTrue(q.online(), "Verified upload refreshes the worker heartbeat")
+        now[0] += bridge.ONLINE_SECONDS + 1
+        self.assertFalse(q.online(), "Completed jobs do not fake permanent availability")
+
+    def test_failed_job_may_retry_after_bounded_delay(self):
+        now = [10.]
+        q = bridge.AudioNodeQueue(now=lambda: now[0])
+        q.heartbeat()
+        first = q.request(ID)
+        _, lease = q.lease_next()
+        self.assertTrue(q.finish(ID, lease, success=False))
+        self.assertIs(q.request(ID), first)
+        now[0] += bridge.FAILED_RETRY_SECONDS + 1
+        q.heartbeat()
+        later = q.request(ID)
+        self.assertIsNot(later, first)
+        self.assertEqual(later.state, "pending")
+
     def test_bounded_job_queue(self):
         self.q.heartbeat()
         for index in range(bridge.MAX_JOBS):
@@ -71,6 +100,18 @@ class PcNodeEndpointsTests(unittest.TestCase):
     def tearDown(self):
         self.patch_queue.stop()
         self.env.stop()
+
+    def test_browser_can_read_status_without_lease_or_token(self):
+        self.assertEqual(self.client.get("/pc-node/status/unsafe").status_code,400)
+        self.assertEqual(self.client.get("/pc-node/status/"+ID).json()["state"],"absent")
+        self.client.get("/pc-node/next", headers=HEADERS)
+        self.q.request(ID)
+        status=self.client.get("/pc-node/status/"+ID)
+        self.assertEqual(status.status_code,200)
+        self.assertEqual(status.json()["state"],"pending")
+        self.assertTrue(status.json()["node_online"])
+        self.assertNotIn("lease", status.text)
+        self.assertEqual(status.headers.get("cache-control"), "no-store")
 
     def test_poll_auth_and_lease(self):
         self.assertEqual(self.client.get("/pc-node/next").status_code, 401)
