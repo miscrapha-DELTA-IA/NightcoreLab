@@ -77,7 +77,7 @@ def _valid_output(path: Path, work_dir: Path, video_id: str) -> bool:
         return False
 
 
-def extract(video_id: str, work_dir: str, *, timeout: int = 36):
+def extract(video_id: str, work_dir: str, *, timeout: int = 18):
     """Return (audio Path, title, thumbnail), or None. Never raises to caller."""
     if not enabled() or not _VIDEO.fullmatch(video_id):
         _count("skipped")
@@ -138,7 +138,7 @@ def run_worker(video_id: str, destination: str, factory=None) -> int:
             return 5
         path = audio.download(output_path=str(target),
                               filename=f"{video_id}.m4a",
-                              timeout=12, max_retries=0)
+                              timeout=10, max_retries=0)
         expected = target / f"{video_id}.m4a"
         if not path or not _valid_output(expected, target, video_id):
             return 6
