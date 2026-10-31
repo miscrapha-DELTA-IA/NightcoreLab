@@ -10,7 +10,9 @@ from time import monotonic
 
 EVENTS = frozenset({
     "first_audio", "recovered_audio", "initial_media_error",
-    "final_error", "watchdog", "play_cancelled"
+    "final_error", "watchdog", "play_cancelled", "first_buffer",
+    "rebuffer", "pc_ready", "pc_queued", "recovery_started",
+    "duration_reported_long", "duration_overrun"
 })
 SOURCES = frozenset({"fast_edge", "render", "offline", "independent", "unknown"})
 ROUTES = frozenset({"/stream", "/download", "/prepare", "/pc-node/prepare",
@@ -111,6 +113,27 @@ class StreamingMetrics:
                 "client_dropped": self._dropped,
                 "latency_window": 256,
                 "scope": "process_local",
+            }
+
+    def playback_hints(self):
+        """Conservative, anonymous guidance; never replace a source or bypass limits.
+
+        The initial 2.3s polling stays unchanged until sufficient evidence of
+        slow PC preparation exists. Polling can become 1.6s at most; this only
+        detects a completed, existing job sooner, never queues extra jobs.
+        """
+        with self._lock:
+            elapsed = []
+            for source in ("fast_edge", "render"):
+                elapsed.extend(self._timings.get(("browser", "pc_ready", source), ()))
+            # Windows-node recovery commonly completes around 30s. A broad
+            # window and a minimum sample size protect against noisy browsers.
+            late = sum(1 for value in elapsed if value >= 25000)
+            faster_poll = len(elapsed) >= 20 and late >= 8 and late * 4 >= len(elapsed)
+            return {
+                "pc_poll_ms": 1600 if faster_poll else 2300,
+                "sample_size": len(elapsed),
+                "mode": "faster_ready_detection" if faster_poll else "baseline",
             }
 
 
