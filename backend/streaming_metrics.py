@@ -4,6 +4,7 @@ Histograms are process-local and reset when Render restarts. Nothing is logged
 per listener, and this module never controls audio routing or timeouts.
 """
 from collections import Counter, deque
+from math import isfinite
 from threading import RLock
 from time import monotonic
 
@@ -75,7 +76,10 @@ class StreamingMetrics:
         # Observability must never interrupt live playback on a slow request,
         # malformed upstream timing or clock anomaly.
         try:
-            ms = self._elapsed(min(_MAX_MS, max(0, float(elapsed_ms))))
+            raw = float(elapsed_ms)
+            if not isfinite(raw):
+                return
+            ms = self._elapsed(min(_MAX_MS, max(0, raw)))
         except (TypeError, ValueError, OverflowError):
             return
         status_class = f"{int(status) // 100}xx"
