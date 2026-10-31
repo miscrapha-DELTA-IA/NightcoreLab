@@ -59,7 +59,9 @@ class PcNodeQueueTests(unittest.TestCase):
         self.assertTrue(q.validate_lease(ID, lease))
         self.assertEqual(q.status(ID)["state"], "leased")
         self.assertTrue(q.finish(ID, lease, success=True))
-        self.assertFalse(q.online(), "Completed jobs do not fake an active worker")
+        self.assertTrue(q.online(), "Verified upload refreshes the worker heartbeat")
+        now[0] += bridge.ONLINE_SECONDS + 1
+        self.assertFalse(q.online(), "Completed jobs do not fake permanent availability")
 
     def test_failed_job_may_retry_after_bounded_delay(self):
         now = [10.]
