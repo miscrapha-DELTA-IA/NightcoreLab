@@ -177,6 +177,34 @@ class PcNodeEndpointsTests(unittest.TestCase):
         self.assertTrue(reply.json()["pc_node_online"])
         self.assertGreater(reply.json()["youtube_retry_after"], 0)
 
+    def test_next_song_prewarm_prefers_pc_node_and_never_uses_render_extractor(self):
+        self.client.get("/pc-node/next", headers=HEADERS)
+        url = "https://www.youtube.com/watch?v=" + ID
+        with patch.object(main, "r2_cache", None), \\
+             patch.object(main, "_pin_cached_audio", return_value=None), \\
+             patch.object(main, "_shared_extraction", side_effect=AssertionError("No Render extraction")), \\
+             patch.object(main, "_check_youtube_cooldown", side_effect=AssertionError("PC queue bypasses Render cooldown")), \\
+             patch.object(main, "in_flight_downloads", {}):
+            first = self.client.post("/prepare", json={"url": url})
+            second = self.client.post("/prepare", json={"url": url})
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(first.json(), {"status": "pc_preparing", "source": "pc_node"})
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(self.q.snapshot()["pending"], 1)
+
+    def test_pc_node_prewarm_queue_is_bounded_without_render_fallback(self):
+        self.client.get("/pc-node/next", headers=HEADERS)
+        for index in range(bridge.MAX_JOBS):
+            self.assertIsNotNone(self.q.request(f"{index:011d}"))
+        with patch.object(main, "r2_cache", None), \\
+             patch.object(main, "_pin_cached_audio", return_value=None), \\
+             patch.object(main, "_shared_extraction", side_effect=AssertionError("No Render extraction")), \\
+             patch.object(main, "in_flight_downloads", {}):
+            result = self.client.post("/prepare", json={
+                "url": "https://www.youtube.com/watch?v=" + ID})
+        self.assertEqual(result.status_code, 429)
+        self.assertEqual(result.headers.get("X-Download-Error"), "pc_node_queue_full")
+
     def test_native_stream_waits_for_worker_not_youtube(self):
         self.client.get("/pc-node/next", headers=HEADERS)
         audio = Response(content=M4A, media_type="audio/mp4")
