@@ -180,10 +180,10 @@ class PcNodeEndpointsTests(unittest.TestCase):
     def test_next_song_prewarm_prefers_pc_node_and_never_uses_render_extractor(self):
         self.client.get("/pc-node/next", headers=HEADERS)
         url = "https://www.youtube.com/watch?v=" + ID
-        with patch.object(main, "r2_cache", None), \\
-             patch.object(main, "_pin_cached_audio", return_value=None), \\
-             patch.object(main, "_shared_extraction", side_effect=AssertionError("No Render extraction")), \\
-             patch.object(main, "_check_youtube_cooldown", side_effect=AssertionError("PC queue bypasses Render cooldown")), \\
+        with patch.object(main, "r2_cache", None), \
+             patch.object(main, "_pin_cached_audio", return_value=None), \
+             patch.object(main, "_shared_extraction", side_effect=AssertionError("No Render extraction")), \
+             patch.object(main, "_check_youtube_cooldown", side_effect=AssertionError("PC queue bypasses Render cooldown")), \
              patch.object(main, "in_flight_downloads", {}):
             first = self.client.post("/prepare", json={"url": url})
             second = self.client.post("/prepare", json={"url": url})
@@ -196,9 +196,9 @@ class PcNodeEndpointsTests(unittest.TestCase):
         self.client.get("/pc-node/next", headers=HEADERS)
         for index in range(bridge.MAX_JOBS):
             self.assertIsNotNone(self.q.request(f"{index:011d}"))
-        with patch.object(main, "r2_cache", None), \\
-             patch.object(main, "_pin_cached_audio", return_value=None), \\
-             patch.object(main, "_shared_extraction", side_effect=AssertionError("No Render extraction")), \\
+        with patch.object(main, "r2_cache", None), \
+             patch.object(main, "_pin_cached_audio", return_value=None), \
+             patch.object(main, "_shared_extraction", side_effect=AssertionError("No Render extraction")), \
              patch.object(main, "in_flight_downloads", {}):
             result = self.client.post("/prepare", json={
                 "url": "https://www.youtube.com/watch?v=" + ID})
